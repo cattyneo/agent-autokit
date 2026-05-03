@@ -1,0 +1,9 @@
+{
+  "status": "completed",
+  "summary": "Plan created",
+  "data": {
+    "plan_markdown": "## Plan\n\n- Read SPEC and PLAN.\n- Confirm official docs.\n",
+    "assumptions": [],
+    "risks": ["Live runner matrix has not been executed yet."]
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "fixtures": [
+    {
+      "file": "completed-plan.json",
+      "contract": "plan",
+      "expect": "pass",
+      "reason": "completed plan data matches SPEC §9.3"
+    },
+    {
+      "file": "need-input-with-default.json",
+      "contract": "plan",
+      "expect": "pass",
+      "reason": "need_input includes question.default"
+    },
+    {
+      "file": "need-input-missing-default.json",
+      "contract": "plan",
+      "expect": "fail",
+      "code": "prompt_contract_violation",
+      "reason": "need_input without question.default must fail closed"
+    },
+    {
+      "file": "paused-recoverable.json",
+      "contract": "implement",
+      "expect": "pass",
+      "reason": "paused data only contains reason and recoverable"
+    },
+    {
+      "file": "schema-mismatch.json",
+      "contract": "plan",
+      "expect": "fail",
+      "code": "prompt_contract_violation",
+      "reason": "plan contract cannot return plan-verify data"
+    }
+  ]
+}

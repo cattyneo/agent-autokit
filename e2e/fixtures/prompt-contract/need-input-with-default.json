@@ -1,0 +1,8 @@
+{
+  "status": "need_input",
+  "summary": "Need test framework confirmation",
+  "question": {
+    "text": "Use node:test for the S0 self-test harness?",
+    "default": "Use node:test with Node's TypeScript strip support."
+  }
+}

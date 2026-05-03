@@ -131,13 +131,23 @@ agent_message: {"status":"completed","summary":"ok","data":{"ok":true}}
 usage: input_tokens=50254, cached_input_tokens=2432, output_tokens=99, reasoning_output_tokens=72
 ```
 
+Pinned latest CLI via spike entrypoint:
+
+```text
+Command: AUTOKIT_CODEX_NPX_PACKAGE=@openai/codex@0.128.0 node --experimental-strip-types e2e/runners/spike-runner-stability.ts --live-provider codex --allow-model-calls
+Result: passed
+thread_id: 019df022-8beb-7df0-a07e-b6f6a64d1e38
+agent_message: {"status":"completed","summary":"ok","data":{"ok":true}}
+usage: input_tokens=50254, cached_input_tokens=2432, output_tokens=113, reasoning_output_tokens=86
+```
+
 Unsupported / not yet proven:
 
 - PATH Codex CLI is too old for the default model path and must be upgraded or bypassed with pinned `@openai/codex@0.128.0`.
 - Full N=20 x 3 phase parse/schema/resume matrix is not run.
 - `runStreamed` / `resumeThread` live SDK smoke is not run; only CLI structured smoke is proven.
 
-Current decision: primary Codex runner can proceed only if autokit pins or verifies Codex CLI `>=0.128.0` for this environment. PATH CLI 0.122.0 is not acceptable for AK-001 full adoption.
+Current decision: PATH CLI 0.122.0 is not acceptable for AK-001 full adoption. Pinning or upgrading Codex CLI to `>=0.128.0` is a necessary precondition, but it is not sufficient by itself: `runStreamed` / `resumeThread` / sandbox behavior and the full N=20 SDK matrix still require live evidence before the Codex runner can satisfy SPEC §9.1.1 B.
 
 ## GitHub CLI Merge Findings
 
@@ -161,9 +171,9 @@ Result:
 
 ```json
 {
-  "total": 5,
-  "passedExpectations": 5,
-  "failClosedCount": 2,
+  "total": 19,
+  "passedExpectations": 19,
+  "failClosedCount": 8,
   "failures": []
 }
 ```
@@ -171,10 +181,24 @@ Result:
 Pinned fixtures:
 
 - `completed-plan.json`: pass.
+- `completed-plan-verify.json`: pass.
+- `completed-plan-fix.json`: pass.
+- `completed-implement.json`: pass.
+- `completed-review.json`: pass.
+- `completed-supervise-all-reject.json`: pass.
+- `completed-supervise-with-fix.json`: pass.
+- `completed-fix.json`: pass.
 - `need-input-with-default.json`: pass.
 - `need-input-missing-default.json`: fail closed with `prompt_contract_violation`.
 - `paused-recoverable.json`: pass.
+- `failed-recoverable.json`: pass.
 - `schema-mismatch.json`: fail closed with `prompt_contract_violation`.
+- `supervise-missing-fix-prompt.json`: fail closed with `prompt_contract_violation`.
+- `supervise-duplicate-id.json`: fail closed with `prompt_contract_violation`.
+- `supervise-repeated-accept-id.json`: fail closed with `prompt_contract_violation`.
+- `fix-duplicate-id.json`: fail closed with `prompt_contract_violation`.
+- `fix-repeated-resolved-id.json`: fail closed with `prompt_contract_violation`.
+- `failed-extra-field.json`: fail closed with `prompt_contract_violation`.
 
 ## Remaining Gate
 
@@ -182,4 +206,4 @@ AK-001 cannot be considered fully green until the user explicitly chooses one of
 
 1. Approve full live matrix execution and expected model spend.
 2. Reduce AK-001 acceptance to docs + one-shot smoke + fixture self-test, and create a follow-up Issue for full N=20 adoption evidence.
-3. Upgrade or pin Codex CLI to `@openai/codex@0.128.0` first, then run the Codex SDK/CLI matrix.
+3. Upgrade or pin Codex CLI to `@openai/codex@0.128.0` first, then run the Codex SDK live evidence for `runStreamed` / `resumeThread` / sandbox and the N=20 matrix.

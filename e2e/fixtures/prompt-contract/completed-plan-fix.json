@@ -1,0 +1,8 @@
+{
+  "status": "completed",
+  "summary": "Plan fixed",
+  "data": {
+    "plan_markdown": "## Plan\n\n- Address verifier findings.\n",
+    "addressed_findings": ["Missing verification command"]
+  }
+}

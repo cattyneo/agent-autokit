@@ -1,0 +1,17 @@
+{
+  "status": "completed",
+  "summary": "Fix completed",
+  "data": {
+    "changed_files": ["src/example.ts"],
+    "tests_run": [
+      {
+        "command": "node --test",
+        "result": "passed",
+        "summary": "Regression tests passed"
+      }
+    ],
+    "resolved_accept_ids": ["F2"],
+    "unresolved_accept_ids": [],
+    "notes": "Accepted finding F2 is resolved."
+  }
+}

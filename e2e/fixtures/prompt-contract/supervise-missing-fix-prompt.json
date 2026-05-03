@@ -1,0 +1,9 @@
+{
+  "status": "completed",
+  "summary": "Fix required",
+  "data": {
+    "accept_ids": ["F2"],
+    "reject_ids": [],
+    "reject_reasons": {}
+  }
+}

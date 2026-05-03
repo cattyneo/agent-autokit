@@ -175,19 +175,28 @@ export function buildCodexSmokeCommand(schemaFile: string): {
   command: string;
   args: string[];
 } {
+  const codexArgs = [
+    "-a",
+    "never",
+    "exec",
+    "--json",
+    "--sandbox",
+    "read-only",
+    "--output-schema",
+    schemaFile,
+    smokePrompt(),
+  ];
+  const npxPackage = process.env.AUTOKIT_CODEX_NPX_PACKAGE;
+  if (npxPackage) {
+    return {
+      command: process.env.AUTOKIT_NPX_BIN ?? "npx",
+      args: ["-y", npxPackage, ...codexArgs],
+    };
+  }
+
   return {
     command: process.env.AUTOKIT_CODEX_BIN ?? "codex",
-    args: [
-      "-a",
-      "never",
-      "exec",
-      "--json",
-      "--sandbox",
-      "read-only",
-      "--output-schema",
-      schemaFile,
-      smokePrompt(),
-    ],
+    args: codexArgs,
   };
 }
 
@@ -253,16 +262,35 @@ function validateCompletedData(
       validateReviewFindings(data.findings, errors);
       return;
     case "supervise":
-      requireExactKeys(
+      rejectUnknownKeys(
         data,
-        ["accept_ids", "reject_ids", "reject_reasons", "fix_prompt"],
+        new Set(["accept_ids", "reject_ids", "reject_reasons", "fix_prompt"]),
         "data",
         errors,
       );
+      for (const key of ["accept_ids", "reject_ids", "reject_reasons"]) {
+        if (!(key in data)) {
+          errors.push(`data.${key} is required`);
+        }
+      }
       validateStringArray(data.accept_ids, "data.accept_ids", 50, errors);
       validateStringArray(data.reject_ids, "data.reject_ids", 50, errors);
+      validateNoDuplicateStrings(data.accept_ids, "data.accept_ids", errors);
+      validateNoDuplicateStrings(data.reject_ids, "data.reject_ids", errors);
+      validateDisjointStringArrays(
+        data.accept_ids,
+        "data.accept_ids",
+        data.reject_ids,
+        "data.reject_ids",
+        errors,
+      );
       validateStringMap(data.reject_reasons, "data.reject_reasons", errors);
-      requireBoundedString(data.fix_prompt, "data.fix_prompt", 32 * 1024, errors);
+      if (Array.isArray(data.accept_ids) && data.accept_ids.length > 0 && !("fix_prompt" in data)) {
+        errors.push("data.fix_prompt is required when data.accept_ids is non-empty");
+      }
+      if ("fix_prompt" in data) {
+        requireBoundedString(data.fix_prompt, "data.fix_prompt", 32 * 1024, errors);
+      }
       return;
     case "fix":
       requireExactKeys(
@@ -275,6 +303,15 @@ function validateCompletedData(
       validateTestEvidence(data.tests_run, errors);
       validateStringArray(data.resolved_accept_ids, "data.resolved_accept_ids", 50, errors);
       validateStringArray(data.unresolved_accept_ids, "data.unresolved_accept_ids", 50, errors);
+      validateNoDuplicateStrings(data.resolved_accept_ids, "data.resolved_accept_ids", errors);
+      validateNoDuplicateStrings(data.unresolved_accept_ids, "data.unresolved_accept_ids", errors);
+      validateDisjointStringArrays(
+        data.resolved_accept_ids,
+        "data.resolved_accept_ids",
+        data.unresolved_accept_ids,
+        "data.unresolved_accept_ids",
+        errors,
+      );
       requireBoundedString(data.notes, "data.notes", STRING_LIMIT, errors);
       return;
   }
@@ -443,6 +480,40 @@ function validateStringMap(value: unknown, path: string, errors: string[]): void
   for (const [key, item] of Object.entries(value)) {
     requireBoundedString(key, `${path} key`, STRING_LIMIT, errors);
     requireBoundedString(item, `${path}.${key}`, STRING_LIMIT, errors);
+  }
+}
+
+function validateNoDuplicateStrings(value: unknown, path: string, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    return;
+  }
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") {
+      continue;
+    }
+    if (seen.has(item)) {
+      errors.push(`${path} must not contain duplicate id: ${item}`);
+    }
+    seen.add(item);
+  }
+}
+
+function validateDisjointStringArrays(
+  left: unknown,
+  leftPath: string,
+  right: unknown,
+  rightPath: string,
+  errors: string[],
+): void {
+  if (!Array.isArray(left) || !Array.isArray(right)) {
+    return;
+  }
+  const rightValues = new Set(right.filter((item): item is string => typeof item === "string"));
+  for (const item of left) {
+    if (typeof item === "string" && rightValues.has(item)) {
+      errors.push(`${leftPath} and ${rightPath} must not share id: ${item}`);
+    }
   }
 }
 
@@ -632,6 +703,7 @@ function printHelp(): void {
       "  node --test --experimental-strip-types e2e/runners/spike-runner-stability.test.ts",
       "  node --experimental-strip-types e2e/runners/spike-runner-stability.ts --self-test [--json]",
       "  node --experimental-strip-types e2e/runners/spike-runner-stability.ts --live-provider claude|codex --allow-model-calls",
+      "  AUTOKIT_CODEX_NPX_PACKAGE=@openai/codex@0.128.0 node --experimental-strip-types e2e/runners/spike-runner-stability.ts --live-provider codex --allow-model-calls",
       "",
       "The live provider mode runs a single structured-output smoke only. Full N=20 adoption",
       "matrices should be run explicitly and recorded in docs/spike-results.md.",

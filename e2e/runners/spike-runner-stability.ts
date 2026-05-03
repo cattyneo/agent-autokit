@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 type PromptContract =
@@ -579,7 +579,7 @@ async function main(): Promise<number> {
   const fixtureDirIndex = args.indexOf("--fixture-dir");
   const fixtureDir =
     fixtureDirIndex >= 0
-      ? pathToFileURL(join(process.cwd(), args[fixtureDirIndex + 1] ?? "") + "/")
+      ? pathToFileURL(resolve(args[fixtureDirIndex + 1] ?? ".") + "/")
       : new URL("../fixtures/prompt-contract/", import.meta.url);
   const json = args.includes("--json");
 

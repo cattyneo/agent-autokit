@@ -234,3 +234,47 @@ AK-001 cannot be considered fully green until the user explicitly chooses one of
 1. Approve full live matrix execution and expected model spend.
 2. Reduce AK-001 acceptance to docs + one-shot smoke + fixture self-test, and create a follow-up Issue for full N=20 adoption evidence.
 3. Upgrade or pin Codex CLI to `@openai/codex@0.128.0` first, then run the Codex SDK N=20 matrix.
+
+## Full Matrix Execution Plan (Not Run)
+
+This section is a decision aid only. It is not evidence that the matrix passed.
+
+### Claude primary runner
+
+Required by SPEC §9.1.1 A:
+
+- `plan`, `plan_fix`, `review`, `supervise`: 20 structured-output attempts each = 80 live model calls.
+- Resume: one resume attempt per phase = 4 additional live calls.
+- Expected total: 84 Claude CLI calls.
+
+Cost risk:
+
+- The one-shot Claude smoke in this environment cost `0.3747575 USD`.
+- If the full matrix behaves like that one-shot, a rough linear estimate is about `31.48 USD` (`0.3747575 * 84`).
+- Actual cost may differ because prompt cache, selected model, output length, retries, and CLI defaults can change.
+
+Suggested stop criteria:
+
+- Stop on unsupported CLI option / auth mismatch / schema output failure that cannot be attributed to transient provider behavior.
+- Stop on unexpected paid spend, repeated provider 429, or a cost ceiling chosen by the operator.
+- Record phase, attempt number, session id, structured output, parse/schema result, and resume result in this file or a linked artifact.
+
+### Codex primary runner
+
+Required by SPEC §9.1.1 B:
+
+- `plan_verify`, `implement`, `fix`: 20 structured-output attempts each = 60 live SDK calls.
+- Resume: 3 phase resume attempts + 2 spare attempts = 5 additional live calls.
+- Sandbox: at least one read-only write-denial and one workspace-write success check per relevant phase before considering the sandbox evidence complete.
+- Expected minimum: 65 Codex SDK calls plus sandbox checks.
+
+Preconditions:
+
+- PATH Codex CLI `0.122.0` is not acceptable for this environment.
+- Use `@openai/codex@0.128.0` / `@openai/codex-sdk@0.128.0` or upgrade PATH CLI before the matrix.
+- Keep `approvalPolicy=never` and `networkAccessEnabled=false` unless the matrix case explicitly requires a different setting.
+
+Suggested stop criteria:
+
+- Stop on CLI / SDK version drift, unsupported model under ChatGPT auth, missing thread id, failed `resumeThread`, or sandbox write escaping the expected boundary.
+- Record thread id, final structured output, schema validation result, sandbox mode, and file-system evidence for each relevant attempt.

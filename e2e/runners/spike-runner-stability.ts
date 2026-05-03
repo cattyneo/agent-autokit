@@ -176,7 +176,7 @@ export function buildCodexSmokeCommand(schemaFile: string): {
   args: string[];
 } {
   return {
-    command: "codex",
+    command: process.env.AUTOKIT_CODEX_BIN ?? "codex",
     args: [
       "-a",
       "never",

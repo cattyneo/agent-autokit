@@ -141,13 +141,25 @@ agent_message: {"status":"completed","summary":"ok","data":{"ok":true}}
 usage: input_tokens=50254, cached_input_tokens=2432, output_tokens=113, reasoning_output_tokens=86
 ```
 
+Codex SDK one-shot smoke:
+
+```text
+Command: temp Node project with @openai/codex-sdk@0.128.0 and @openai/codex@0.128.0, workingDirectory=<this worktree>, sandboxMode=read-only, approvalPolicy=never
+runStreamed result: passed
+thread_id: 019df025-ce1a-7fd1-9cb2-832b5399d662
+runStreamed final: {"status":"completed","summary":"ok","data":{"ok":true}}
+resumeThread result: passed
+resumeThread final: {"status":"completed","summary":"resumed","data":{"ok":true}}
+usage: input_tokens=50252, cached_input_tokens=2432, output_tokens=95, reasoning_output_tokens=68
+```
+
 Unsupported / not yet proven:
 
 - PATH Codex CLI is too old for the default model path and must be upgraded or bypassed with pinned `@openai/codex@0.128.0`.
 - Full N=20 x 3 phase parse/schema/resume matrix is not run.
-- `runStreamed` / `resumeThread` live SDK smoke is not run; only CLI structured smoke is proven.
+- `runStreamed` / `resumeThread` one-shot SDK smoke passed, but the full SDK phase matrix and sandbox write/read-only behavior are not proven.
 
-Current decision: PATH CLI 0.122.0 is not acceptable for AK-001 full adoption. Pinning or upgrading Codex CLI to `>=0.128.0` is a necessary precondition, but it is not sufficient by itself: `runStreamed` / `resumeThread` / sandbox behavior and the full N=20 SDK matrix still require live evidence before the Codex runner can satisfy SPEC §9.1.1 B.
+Current decision: PATH CLI 0.122.0 is not acceptable for AK-001 full adoption. Pinning or upgrading Codex CLI to `>=0.128.0` is a necessary precondition, but it is not sufficient by itself: sandbox behavior and the full N=20 SDK matrix still require live evidence before the Codex runner can satisfy SPEC §9.1.1 B.
 
 ## GitHub CLI Merge Findings
 
@@ -206,4 +218,4 @@ AK-001 cannot be considered fully green until the user explicitly chooses one of
 
 1. Approve full live matrix execution and expected model spend.
 2. Reduce AK-001 acceptance to docs + one-shot smoke + fixture self-test, and create a follow-up Issue for full N=20 adoption evidence.
-3. Upgrade or pin Codex CLI to `@openai/codex@0.128.0` first, then run the Codex SDK live evidence for `runStreamed` / `resumeThread` / sandbox and the N=20 matrix.
+3. Upgrade or pin Codex CLI to `@openai/codex@0.128.0` first, then run the Codex SDK sandbox evidence and the N=20 matrix.

@@ -183,4 +183,3 @@ AK-001 cannot be considered fully green until the user explicitly chooses one of
 1. Approve full live matrix execution and expected model spend.
 2. Reduce AK-001 acceptance to docs + one-shot smoke + fixture self-test, and create a follow-up Issue for full N=20 adoption evidence.
 3. Upgrade or pin Codex CLI to `@openai/codex@0.128.0` first, then run the Codex SDK/CLI matrix.
-

@@ -1,0 +1,26 @@
+# Agent runtime logs
+.agent/logs/
+.agent/state/
+node_modules/
+dist/
+.DS_Store
+**/.DS_Store
+.claude/scheduled_tasks.lock
+
+# Local env/secrets
+.env
+.env.*
+!.env.example
+.vercel/.env*
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql
+
+# Vercel local metadata can contain machine-specific state
+.vercel/cache/

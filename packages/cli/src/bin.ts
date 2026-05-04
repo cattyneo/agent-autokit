@@ -1,6 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 import { getAutokitVersion } from "./index.js";
 
-if (import.meta.main) {
-  console.log(`autokit ${getAutokitVersion()}`);
-}
+console.log(`autokit ${getAutokitVersion()}`);

@@ -22,6 +22,9 @@ export type AgentRunInput = {
     claudeSessionId?: string;
     codexSessionId?: string;
   };
+  questionResponse?: PromptContractQuestion & {
+    answer: string;
+  };
   permissions: {
     mode: "auto" | "readonly" | "workspace-write";
     allowNetwork: boolean;
@@ -30,6 +33,8 @@ export type AgentRunInput = {
   };
   timeoutMs: number;
 };
+
+export const QUESTION_RESPONSE_STRING_LIMIT = 16 * 1024;
 
 export type PromptContractQuestion = {
   text: string;
@@ -173,6 +178,49 @@ export function promptContractJsonSchema(contract: PromptContractId): Record<str
     required: ["status", "summary"],
     additionalProperties: false,
   };
+}
+
+export function formatQuestionResponsePrompt(input: AgentRunInput): string {
+  if (input.questionResponse === undefined) {
+    return input.prompt;
+  }
+  assertBoundedQuestionResponse(input.questionResponse);
+  const envelope = {
+    autokit_need_input_response: {
+      question: {
+        text: input.questionResponse.text,
+        default: input.questionResponse.default,
+      },
+      answer: input.questionResponse.answer,
+    },
+  };
+  return [
+    input.prompt,
+    "",
+    "Use the following JSON as the answer to the pending autokit need_input question.",
+    JSON.stringify(envelope),
+    "Continue the resumed turn and return structured output only.",
+  ].join("\n");
+}
+
+function assertBoundedQuestionResponse(
+  response: NonNullable<AgentRunInput["questionResponse"]>,
+): void {
+  requireBoundedQuestionResponseString(response.text, "questionResponse.text");
+  requireBoundedQuestionResponseString(response.default, "questionResponse.default");
+  requireBoundedQuestionResponseString(response.answer, "questionResponse.answer");
+}
+
+function requireBoundedQuestionResponseString(value: string, field: string): void {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > QUESTION_RESPONSE_STRING_LIMIT
+  ) {
+    throw new Error(
+      `${field} must be a non-empty string up to ${QUESTION_RESPONSE_STRING_LIMIT} chars`,
+    );
+  }
 }
 
 function dataJsonSchemaFor(contract: PromptContractId): Record<string, unknown> {

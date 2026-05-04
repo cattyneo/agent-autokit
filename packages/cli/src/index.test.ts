@@ -136,6 +136,57 @@ describe("cli task commands", () => {
     assert.deepEqual(JSON.parse(statusHarness.stdout()).issue, 10);
   });
 
+  it("renders the run TUI frame and exits 75 for need_input prompts", async () => {
+    const root = makeTempDir();
+    writeTasks(root, [
+      {
+        ...task({ issue: 16, state: "paused", runtimePhase: "implement" }),
+        failure: makeFailure({
+          phase: "implement",
+          code: "need_input_pending",
+          message: "Use vitest?",
+          ts: NOW,
+        }),
+      },
+    ]);
+    const harness = makeCliHarness(root);
+
+    assert.equal(await runCli(["-y", "run"], harness.deps), TEMPFAIL_EXIT_CODE);
+    assert.match(harness.stdout(), /Progress/);
+    assert.match(
+      harness.stdout(),
+      /#16 paused implement PR - AK-016 need_input_pending: Use vitest\?/,
+    );
+    assert.match(harness.stdout(), /-y cannot answer without an active runner question payload/);
+  });
+
+  it("passes -y default answers to the active workflow question hook", async () => {
+    const paused = {
+      ...task({ issue: 16, state: "paused", runtimePhase: "implement" }),
+      title: "[AK-015] tui-question-monitoring",
+    };
+    const answered: string[] = [];
+    const harness = makeCliHarness(undefined, {
+      runWorkflow: async ({ yes, answerQuestion }) => {
+        assert.equal(yes, true);
+        answered.push(
+          await answerQuestion({
+            task: paused,
+            phase: "implement",
+            question: { text: "Use vitest?", default: "vitest" },
+            turn: 0,
+          }),
+        );
+        return [{ ...paused, state: "merged", runtime_phase: null }];
+      },
+    });
+
+    assert.equal(await runCli(["-y", "run"], harness.deps), 0);
+    assert.deepEqual(answered, ["vitest"]);
+    assert.match(harness.stdout(), /auto-answered need_input with default for #16/);
+    assert.match(harness.stdout(), /#16 merged - PR - \[AK-015\] tui-question-monitoring/);
+  });
+
   it("rejects resume of retry_cleanup_failed paused tasks with tempfail", async () => {
     const root = makeTempDir();
     writeTasks(root, [

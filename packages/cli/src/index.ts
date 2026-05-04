@@ -11,13 +11,21 @@ import {
   type GhPrView,
   loadTasksFile,
   makeFailure,
+  type PromptContractQuestion,
   parseConfigYaml,
   parseGhPrView,
+  type RuntimePhase,
   retryCleanupTask,
   type TaskEntry,
   type TasksFile,
   writeTasksFileAtomic,
 } from "@cattyneo/autokit-core";
+import {
+  createNeedInputAutoAnswer,
+  formatRunFrame,
+  promptQuestion,
+  type TuiTaskSummary,
+} from "@cattyneo/autokit-tui";
 import { Command, CommanderError } from "commander";
 
 export const AUTOKIT_VERSION = "0.1.0";
@@ -44,6 +52,18 @@ export type CliDeps = {
   fetchIssue?: (issue: number) => IssueMetadata | null;
   fetchOpenIssues?: () => IssueMetadata[];
   confirm?: (message: string) => boolean;
+  runWorkflow?: (input: {
+    yes: boolean;
+    answerQuestion: (input: CliQuestionInput) => Promise<string> | string;
+  }) => Promise<TaskEntry[]> | TaskEntry[];
+  askQuestion?: (input: CliQuestionInput) => Promise<string> | string;
+};
+
+export type CliQuestionInput = {
+  task: TaskEntry;
+  phase: RuntimePhase;
+  question: PromptContractQuestion;
+  turn: number;
 };
 
 export function getAutokitVersion(): string {
@@ -209,8 +229,10 @@ function createProgram(deps: CliDeps, setExitCode: (code: number) => void): Comm
   program
     .command("run")
     .description("dispatch run entrypoint without workflow internals")
-    .action(() => {
-      setExitCode(commandWorkflowStatus(deps));
+    .action(async () => {
+      setExitCode(
+        await commandWorkflowStatus(deps, program.opts<{ yes?: boolean }>().yes === true),
+      );
     });
 
   program
@@ -315,13 +337,56 @@ function commandAdd(
   return hadActiveConflict ? 1 : 0;
 }
 
-function commandWorkflowStatus(deps: CliDeps): number {
+async function commandWorkflowStatus(deps: CliDeps, yes = false): Promise<number> {
   try {
-    return getWorkflowExitCode(loadTasksFile(tasksPath(deps)).tasks);
+    if (deps.runWorkflow !== undefined) {
+      const tasks = await deps.runWorkflow({
+        yes,
+        answerQuestion: (input) => answerCliQuestion(input, deps, yes),
+      });
+      deps.stdout.write(formatRunFrame({ tasks: tasks.map(toTuiTaskSummary) }));
+      return getWorkflowExitCode(tasks);
+    }
+    const tasks = loadTasksFile(tasksPath(deps)).tasks;
+    deps.stdout.write(
+      formatRunFrame({
+        tasks: tasks.map(toTuiTaskSummary),
+        logs: buildRunLogs(tasks, yes),
+      }),
+    );
+    return getWorkflowExitCode(tasks);
   } catch (error) {
     deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
+}
+
+async function answerCliQuestion(
+  input: CliQuestionInput,
+  deps: CliDeps,
+  yes: boolean,
+): Promise<string> {
+  if (yes) {
+    const autoAnswer = createNeedInputAutoAnswer({
+      text: input.question.text,
+      defaultAnswer: input.question.default,
+      issue: input.task.issue,
+      phase: input.phase,
+    });
+    deps.stdout.write(`${autoAnswer.logLine.message}\n`);
+    return autoAnswer.answer;
+  }
+  if (deps.askQuestion !== undefined) {
+    return deps.askQuestion(input);
+  }
+  const result = await promptQuestion({
+    text: input.question.text,
+    defaultAnswer: input.question.default,
+    issue: input.task.issue,
+    phase: input.phase,
+  });
+  deps.stdout.write(`${result.logLine.message}\n`);
+  return result.answer;
 }
 
 function commandResume(issue: string | undefined, deps: CliDeps): number {
@@ -592,6 +657,38 @@ function toStatusJson(task: TaskEntry): Record<string, unknown> {
     resolved_model: task.runtime.resolved_model,
     failure: task.failure,
   };
+}
+
+function toTuiTaskSummary(task: TaskEntry): TuiTaskSummary {
+  return {
+    issue: task.issue,
+    title: task.title,
+    state: task.state,
+    runtimePhase: task.runtime_phase,
+    prNumber: task.pr.number,
+    failureCode: task.failure?.code ?? null,
+    failureMessage: task.failure?.message ?? null,
+    updatedAt: updatedAt(task),
+  };
+}
+
+function buildRunLogs(
+  tasks: TaskEntry[],
+  yes: boolean,
+): Array<{ id: string; message: string; level: "info" | "warn" }> {
+  const logs: Array<{ id: string; message: string; level: "info" | "warn" }> = [];
+  for (const task of tasks) {
+    if (task.state === "paused" && task.failure?.code === "need_input_pending") {
+      logs.push({
+        id: `need-input:${task.issue}`,
+        level: yes ? "info" : "warn",
+        message: yes
+          ? `issue #${task.issue} is waiting for need_input; -y cannot answer without an active runner question payload`
+          : `issue #${task.issue} is waiting for need_input; answer in TUI then run autokit resume`,
+      });
+    }
+  }
+  return logs;
 }
 
 function renderTaskTable(tasks: TaskEntry[]): string {

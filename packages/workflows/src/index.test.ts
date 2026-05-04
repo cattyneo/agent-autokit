@@ -102,6 +102,7 @@ describe("planning workflow", () => {
     });
     assert.equal(needInput.task.state, "paused");
     assert.equal(needInput.task.failure?.code, "need_input_pending");
+    assert.match(needInput.task.failure?.message ?? "", /default: yes/);
 
     const rateLimited = await runPlanningWorkflow(baseTask(), {
       runner: queueRunner([], [{ status: "rate_limited", summary: "429" }]),
@@ -118,6 +119,61 @@ describe("planning workflow", () => {
     });
     assert.equal(missingData.task.state, "failed");
     assert.equal(missingData.task.failure?.code, "prompt_contract_violation");
+  });
+
+  it("answers need_input with default and resumes the same runner phase", async () => {
+    const calls: AgentRunInput[] = [];
+    const result = await runPlanningWorkflow(baseTask(), {
+      runner: queueRunner(calls, [
+        {
+          status: "need_input",
+          summary: "question",
+          question: { text: "Use vitest?", default: "vitest" },
+          session: { claudeSessionId: "plan-session" },
+        },
+        completed("claude", { plan_markdown: "## Plan", assumptions: [], risks: [] }),
+        completed("codex", { result: "ok", findings: [] }),
+      ]),
+      answerQuestion: ({ question }) => question.default,
+      repoRoot: "/repo",
+      now: () => "2026-05-05T10:00:00+09:00",
+    });
+
+    assert.equal(result.task.state, "planned");
+    assert.equal(calls[1].phase, "plan");
+    assert.equal(calls[1].resume?.claudeSessionId, "plan-session");
+    assert.deepEqual(calls[1].questionResponse, {
+      text: "Use vitest?",
+      default: "vitest",
+      answer: "vitest",
+    });
+    assert.doesNotMatch(calls[1].prompt, /Autokit need_input response:/);
+    assert.doesNotMatch(calls[1].prompt, /answer: vitest/);
+  });
+
+  it("records interrupted_at and previous state when a need_input prompt is interrupted", async () => {
+    const result = await runPlanningWorkflow(baseTask(), {
+      runner: queueRunner(
+        [],
+        [
+          {
+            status: "need_input",
+            summary: "question",
+            question: { text: "Use vitest?", default: "vitest" },
+          },
+        ],
+      ),
+      answerQuestion: () => {
+        throw Object.assign(new Error("ctrl-c"), { code: "interrupted" });
+      },
+      repoRoot: "/repo",
+      now: () => "2026-05-05T10:00:00+09:00",
+    });
+
+    assert.equal(result.task.state, "paused");
+    assert.equal(result.task.failure?.code, "interrupted");
+    assert.equal(result.task.runtime.previous_state, "planning");
+    assert.equal(result.task.runtime.interrupted_at, "2026-05-05T10:00:00+09:00");
   });
 
   it("converts runner FailureCode exceptions into task state", async () => {

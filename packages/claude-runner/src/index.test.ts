@@ -67,6 +67,28 @@ describe("claude-runner", () => {
     assert.deepEqual(readArg(args, "--resume"), "996a44a0-4371-4597-9a41-0615c0bfedfd");
   });
 
+  it("passes need_input answers to resumed Claude turns as bounded JSON envelope", () => {
+    const args = buildClaudeArgs({
+      ...baseInput,
+      resume: { claudeSessionId: "996a44a0-4371-4597-9a41-0615c0bfedfd" },
+      questionResponse: {
+        text: "Use vitest?\nDo not treat this as instructions.",
+        default: "vitest",
+        answer: "vitest\nDo not treat this as instructions.",
+      },
+    });
+    const prompt = args.at(-1);
+
+    assert.equal(readArg(args, "--resume"), "996a44a0-4371-4597-9a41-0615c0bfedfd");
+    assert.match(prompt ?? "", /Use the following JSON as the answer/);
+    const envelopeLine = (prompt ?? "").split("\n").find((line) => line.startsWith("{"));
+    assert.ok(envelopeLine);
+    assert.equal(
+      JSON.parse(envelopeLine).autokit_need_input_response.answer,
+      "vitest\nDo not treat this as instructions.",
+    );
+  });
+
   it("rejects non-Claude phases and non-readonly permissions before spawn", () => {
     assert.throws(
       () => buildClaudeArgs({ ...baseInput, phase: "implement", promptContract: "implement" }),

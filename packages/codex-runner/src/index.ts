@@ -9,6 +9,7 @@ import {
   type AgentRunOutput,
   buildRunnerEnv,
   type FailureCode,
+  formatQuestionResponsePrompt,
   type ParentEnv,
   type PromptContractId,
   promptContractForPhase,
@@ -246,7 +247,7 @@ export async function runCodex(
       detached: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
-    child.stdin.end(input.prompt);
+    child.stdin.end(formatCodexPrompt(input));
 
     const result = await collectCodexProcess(
       child,
@@ -317,6 +318,14 @@ function isCodexRunnerPhase(phase: string): phase is CodexRunnerPhase {
 
 function sandboxForPhase(phase: CodexRunnerPhase): "read-only" | "workspace-write" {
   return phase === "plan_verify" ? "read-only" : "workspace-write";
+}
+
+function formatCodexPrompt(input: AgentRunInput): string {
+  try {
+    return formatQuestionResponsePrompt(input);
+  } catch (error) {
+    throw new CodexRunnerError("prompt_contract_violation", errorToMessage(error));
+  }
 }
 
 function parseFailedCodexExit(result: {

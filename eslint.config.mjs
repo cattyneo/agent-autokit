@@ -7,7 +7,7 @@ export default [
     ignores: ["**/dist/**", "node_modules/**"],
   },
   {
-    files: ["**/*.{ts,mts,cts,js,mjs,cjs}"],
+    files: ["**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",

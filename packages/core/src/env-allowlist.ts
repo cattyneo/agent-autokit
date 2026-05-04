@@ -7,7 +7,7 @@ export type RunnerEnvOptions = {
   xdgCacheHome?: string;
 };
 
-const COMMON_EXACT_KEYS = new Set(["PATH", "HOME", "LANG", "TERM", "TZ"]);
+const COMMON_EXACT_KEYS = new Set(["PATH", "HOME", "USER", "LOGNAME", "LANG", "TERM", "TZ"]);
 const XDG_KEYS = new Set(["XDG_CONFIG_HOME", "XDG_CACHE_HOME"]);
 const GH_TOKEN_KEYS = new Set(["GH_TOKEN", "GITHUB_TOKEN"]);
 

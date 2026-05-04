@@ -1,0 +1,26 @@
+{
+  "generatedAt": "2026-05-05T04:14:20+09:00",
+  "apiKeysUnset": true,
+  "codexVersion": "codex-cli 0.128.0",
+  "checks": [
+    {
+      "name": "read-only write-denial",
+      "threadId": "019df469-8845-7a43-993e-f57cb03b2f92",
+      "sandbox": "read-only",
+      "exitCode": 0,
+      "attempted": true,
+      "observed": "denied",
+      "fileExistsAfterRun": false
+    },
+    {
+      "name": "workspace-write success",
+      "threadId": "019df469-2c74-77a2-8430-97ce4e7362cc",
+      "sandbox": "workspace-write",
+      "exitCode": 0,
+      "attempted": true,
+      "observed": "created",
+      "fileExistsAfterRun": true,
+      "fileContent": "workspace-write-check"
+    }
+  ]
+}

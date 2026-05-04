@@ -367,11 +367,24 @@ AK-001 close gate is limited to low-cost evidence:
 - `prompt_contract` pass / fail-closed fixture self-test.
 - Full matrix execution plan with preconditions and stop criteria.
 
-Full N=20 adoption evidence for primary runners is rewritten follow-up #23 and remains required before AK-009 / AK-010 can treat the primary runners as adopted. #23 is split into Claude CLI and `codex exec` gates. Codex uses `codex exec` primary; SDK full matrix is deferred to #44 and is not a v0.1.0 blocker.
+Full N=20 adoption evidence for primary runners is rewritten follow-up #23. #23 is split into Claude CLI and `codex exec` gates. Codex uses `codex exec` primary; SDK full matrix is deferred to #44 and is not a v0.1.0 blocker.
 
-## Full Matrix Execution Plan (Not Run)
+Issue #23 live adoption execution (2026-05-05 Asia/Tokyo, operator-approved):
 
-This section is a decision aid only. It is not evidence that the matrix passed.
+- API key guard: `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CODEX_API_KEY` were unset before live execution.
+- Harness: `e2e/runners/runner-adoption-matrix.ts --allow-model-calls`, using `buildRunnerEnv(process.env)` and §9.3 prompt_contract validation.
+- Claude CLI: `claude --version` = `2.1.126 (Claude Code)`, first-party `claude.ai` subscription auth. A runner-env preflight initially failed because the runner allowlist omitted `USER` / `LOGNAME`; `packages/core/src/env-allowlist.ts` now preserves those non-secret macOS identity keys while still excluding API keys, GitHub tokens, `AUTOKIT_*`, and arbitrary user env.
+- #23 A result: `plan` / `plan_fix` / `review` / `supervise` each passed 20/20 structured-output attempts and 1/1 resume attempt. Prompt_contract validation success rate: 100% for each phase. Detailed artifact: `docs/artifacts/issue-23-claude-adoption-matrix-2026-05-05.json`.
+- Claude CLI cost telemetry total recorded by the harness: `6.7962919999999905` USD. This is CLI telemetry only and is not proof of actual subscription billing.
+- Codex CLI: `codex --version` = `codex-cli 0.128.0`, ChatGPT-managed auth. B matrix used `codex -a never exec --json --sandbox <mode> --output-schema <schema-file> -o <output-file>` and stored JSONL `thread_id` for resume.
+- #23 B result: `plan_verify` / `implement` / `fix` each passed 20/20 final JSON + schema validation attempts. Resume passed 5/5 total (`plan_verify` 3/3 including the two spare attempts, `implement` 1/1, `fix` 1/1). Detailed artifact: `docs/artifacts/issue-23-codex-adoption-matrix-2026-05-05.json`.
+- Codex sandbox evidence: isolated `read-only` write-denial passed with no file created; isolated `workspace-write` success passed with `sandbox-check.txt` created and verified. Detailed artifact: `docs/artifacts/issue-23-codex-sandbox-check-2026-05-05.json`.
+- Harness correction note: two pre-run Codex `plan_verify` attempts failed before the recorded B matrix because the new harness emitted an invalid strict JSON schema for an empty `findings` array. Those attempts were stopped, the schema was fixed, and they are not counted as provider adoption failures.
+- Current adoption decision: #23 A and #23 B primary runner adoption gates pass. AK-009 may treat Claude CLI `claude -p` as adopted after this PR merges. AK-010 may treat `codex exec` as adopted after this PR merges, while still implementing fail-closed handling for version drift, unknown auth mode strings, JSONL shape mismatch, approval prompts, and sandbox violations.
+
+## Full Matrix Execution Plan
+
+This section records the execution shape, preconditions, and stop criteria used for #23.
 
 ### Claude primary runner
 

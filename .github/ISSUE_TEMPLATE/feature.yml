@@ -1,0 +1,140 @@
+name: Feature request
+description: 新機能・改善提案を登録する
+title: "[Feature] "
+labels: ["enhancement", "triage"]
+type: feature
+body:
+  - type: markdown
+    attributes:
+      value: 実装案より先に、解決したい問題と受け入れ条件を明確にしてください。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 解決したい問題
+      description: 誰が、何に困っているか。現状の痛みを具体的に
+      placeholder: 例: 管理画面の検索条件が多く、毎回入力に時間がかかる
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 期待する成果
+      description: この改善で何ができるようになるか
+      placeholder: 例: 保存済み検索条件を1クリックで再利用できる
+    validations:
+      required: true
+
+  - type: dropdown
+    id: request-type
+    attributes:
+      label: 種別
+      options:
+        - 新機能
+        - 既存機能の改善
+        - UX改善
+        - パフォーマンス改善
+        - 開発者体験改善
+        - 運用改善
+    validations:
+      required: true
+
+  - type: textarea
+    id: source-of-truth
+    attributes:
+      label: Source of Truth
+      description: 要件の根拠。仕様書、議事録、Issue、ADR、顧客要望、公式ドキュメントなど
+      placeholder: |
+        - Spec:
+        - Issue:
+        - ADR:
+        - Meeting notes:
+        - Official docs:
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: 受け入れ条件
+      description: 箇条書きで。テスト可能な条件にしてください
+      placeholder: |
+        - [ ] 保存済み検索条件を作成できる
+        - [ ] 一覧から再適用できる
+        - [ ] 権限に応じて共有可否が制御される
+    validations:
+      required: true
+
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Out of Scope
+      description: 今回やらないこと
+      placeholder: |
+        - 保存条件の他ユーザー共有
+        - 並び順の保存
+        - モバイルUI最適化
+    validations:
+      required: false
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: 制約・考慮事項
+      description: 技術制約、運用制約、法務、セキュリティ、互換性など
+      placeholder: |
+        - 既存URLパラメータ仕様は維持
+        - DBマイグレーションは後方互換を保つ
+        - 既存の権限制御を壊さない
+    validations:
+      required: false
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 提案アプローチ
+      description: 実装案やUI案があれば。複数案歓迎
+      placeholder: |
+        案A:
+        案B:
+        トレードオフ:
+    validations:
+      required: false
+
+  - type: textarea
+    id: risks
+    attributes:
+      label: リスク
+      description: 既存機能への影響、複雑性、移行コストなど
+      placeholder: |
+        - 検索条件仕様の肥大化
+        - キャッシュ整合性
+        - 権限バグ
+    validations:
+      required: false
+
+  - type: textarea
+    id: ai-context
+    attributes:
+      label: AI利用メモ
+      description: AIで要件整理や実装案を作った場合のみ記入
+      placeholder: |
+        - 使用AI/Agent:
+        - AIが出した案:
+        - 人間が採用した判断:
+        - 未確定事項:
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 確認事項
+      options:
+        - label: 既存Issue/PR/Discussionを検索し、重複がないことを確認した
+          required: true
+        - label: 問題、成果、受け入れ条件を区別して記載した
+          required: true
+        - label: AIを使った場合でも、要件と制約は人間が確認した
+          required: true

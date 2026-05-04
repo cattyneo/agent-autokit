@@ -1,0 +1,35 @@
+- name: bug
+  color: "d73a4a"
+  description: Unexpected problem or unintended behavior
+
+- name: enhancement
+  color: "a2eeef"
+  description: New feature or improvement request
+
+- name: triage
+  color: "fbca04"
+  description: Needs initial review and routing
+
+- name: needs-repro
+  color: "f9d0c4"
+  description: Missing or unclear reproduction steps
+
+- name: needs-evidence
+  color: "fef2c0"
+  description: Missing logs, screenshots, or other evidence
+
+- name: needs-sot
+  color: "f9d0c4"
+  description: Missing source of truth such as spec, issue, ADR, or official docs
+
+- name: blocked
+  color: "b60205"
+  description: Waiting on external dependency or decision
+
+- name: duplicate
+  color: "cfd3d7"
+  description: Similar issue or request already exists
+
+- name: wontfix
+  color: "ffffff"
+  description: Will not be worked on

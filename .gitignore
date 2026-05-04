@@ -22,5 +22,13 @@ dist/
 *.dump
 *.sql
 
+# Build/test output
+coverage/
+*.tsbuildinfo
+
+.agents/worktrees/
+.autokit/
+*.log
+
 # Vercel local metadata can contain machine-specific state
 .vercel/cache/

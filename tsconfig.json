@@ -1,0 +1,23 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/workflows"
+    },
+    {
+      "path": "./packages/claude-runner"
+    },
+    {
+      "path": "./packages/codex-runner"
+    },
+    {
+      "path": "./packages/tui"
+    },
+    {
+      "path": "./packages/cli"
+    }
+  ]
+}

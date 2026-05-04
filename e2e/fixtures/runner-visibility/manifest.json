@@ -11,13 +11,6 @@
     "fix"
   ],
   "skills": ["autokit-implement", "autokit-review", "autokit-question"],
-  "agents": [
-    "planner",
-    "plan-verifier",
-    "implementer",
-    "reviewer",
-    "supervisor",
-    "doc-updater"
-  ],
+  "agents": ["planner", "plan-verifier", "implementer", "reviewer", "supervisor", "doc-updater"],
   "live_model_calls": false
 }

@@ -53,6 +53,9 @@
     "packages/workflows": {
       "name": "@cattyneo/autokit-workflows",
       "version": "0.1.0",
+      "dependencies": {
+        "@cattyneo/autokit-core": "workspace:*",
+      },
     },
   },
   "packages": {

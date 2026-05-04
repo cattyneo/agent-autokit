@@ -242,6 +242,9 @@ function validateCompletedData(contract: PromptContractId, data: unknown, errors
         errors.push("data.result must be ok or ng");
       }
       validatePlanVerifyFindings(data.findings, errors);
+      if (data.result === "ok" && Array.isArray(data.findings) && data.findings.length > 0) {
+        errors.push("data.findings must be empty when data.result is ok");
+      }
       return;
     case "plan-fix":
       validateRecordWithKeys(data, ["plan_markdown", "addressed_findings"], "data", errors);
@@ -284,8 +287,22 @@ function validateCompletedData(contract: PromptContractId, data: unknown, errors
       }
       requireStringArray(data.accept_ids, "data.accept_ids", 50, errors);
       requireStringArray(data.reject_ids, "data.reject_ids", 50, errors);
+      requireNoDuplicateStrings(data.accept_ids, "data.accept_ids", errors);
+      requireNoDuplicateStrings(data.reject_ids, "data.reject_ids", errors);
+      requireDisjointStringArrays(
+        data.accept_ids,
+        "data.accept_ids",
+        data.reject_ids,
+        "data.reject_ids",
+        errors,
+      );
       if (!isRecord(data.reject_reasons)) {
         errors.push("data.reject_reasons must be an object");
+      } else {
+        for (const [key, value] of Object.entries(data.reject_reasons)) {
+          requireBoundedString(key, "data.reject_reasons key", STRING_LIMIT, errors);
+          requireBoundedString(value, `data.reject_reasons.${key}`, STRING_LIMIT, errors);
+        }
       }
       if (Array.isArray(data.accept_ids) && data.accept_ids.length > 0 && !("fix_prompt" in data)) {
         errors.push("data.fix_prompt is required when data.accept_ids is non-empty");
@@ -308,6 +325,15 @@ function validateCompletedData(contract: PromptContractId, data: unknown, errors
       requireTestEvidenceArray(data.tests_run, errors);
       requireStringArray(data.resolved_accept_ids, "data.resolved_accept_ids", 50, errors);
       requireStringArray(data.unresolved_accept_ids, "data.unresolved_accept_ids", 50, errors);
+      requireNoDuplicateStrings(data.resolved_accept_ids, "data.resolved_accept_ids", errors);
+      requireNoDuplicateStrings(data.unresolved_accept_ids, "data.unresolved_accept_ids", errors);
+      requireDisjointStringArrays(
+        data.resolved_accept_ids,
+        "data.resolved_accept_ids",
+        data.unresolved_accept_ids,
+        "data.unresolved_accept_ids",
+        errors,
+      );
       requireBoundedString(data.notes, "data.notes", STRING_LIMIT, errors);
       return;
   }
@@ -457,6 +483,42 @@ function requireStringArray(
   }
   for (const [index, item] of items.entries()) {
     requireBoundedString(item, `${path}[${index}]`, STRING_LIMIT, errors);
+  }
+}
+
+function requireNoDuplicateStrings(value: unknown, path: string, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    return;
+  }
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== "string") {
+      continue;
+    }
+    if (seen.has(item)) {
+      errors.push(`${path} must not contain duplicate values`);
+      return;
+    }
+    seen.add(item);
+  }
+}
+
+function requireDisjointStringArrays(
+  left: unknown,
+  leftPath: string,
+  right: unknown,
+  rightPath: string,
+  errors: string[],
+): void {
+  if (!Array.isArray(left) || !Array.isArray(right)) {
+    return;
+  }
+  const rightValues = new Set(right.filter((item): item is string => typeof item === "string"));
+  for (const item of left) {
+    if (typeof item === "string" && rightValues.has(item)) {
+      errors.push(`${leftPath} and ${rightPath} must be disjoint`);
+      return;
+    }
   }
 }
 

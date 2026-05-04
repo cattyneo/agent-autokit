@@ -1,4 +1,9 @@
 #!/usr/bin/env node
-import { getAutokitVersion } from "./index.js";
+import { runCli } from "./index.js";
 
-console.log(`autokit ${getAutokitVersion()}`);
+process.exitCode = await runCli(process.argv.slice(2), {
+  cwd: process.cwd(),
+  env: process.env,
+  stdout: process.stdout,
+  stderr: process.stderr,
+});

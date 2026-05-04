@@ -1,0 +1,23 @@
+{
+  "issue_key": "AK-002",
+  "providers": ["claude", "codex"],
+  "prompt_contracts": [
+    "plan",
+    "plan-verify",
+    "plan-fix",
+    "implement",
+    "review",
+    "supervise",
+    "fix"
+  ],
+  "skills": ["autokit-implement", "autokit-review", "autokit-question"],
+  "agents": [
+    "planner",
+    "plan-verifier",
+    "implementer",
+    "reviewer",
+    "supervisor",
+    "doc-updater"
+  ],
+  "live_model_calls": false
+}

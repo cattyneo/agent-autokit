@@ -1,4 +1,4 @@
-# AK-001 Runner / SDK Contract Spike Results
+# S0 Runner / SDK Spike Results
 
 確認日: 2026-05-04 (Asia/Tokyo)
 
@@ -7,6 +7,50 @@
 AK-001 は S0 の不確実性を S1 前に潰すための spike。ここでは公式 docs / CLI help / npm package metadata / package type definitions / one-shot live smoke / prompt_contract fixture / full matrix 実行計画の結果を固定する。
 
 Full N=20 adoption matrix は未実行で、follow-up #23 に分離する。`claude -p` は subscription auth (`claude.ai`, subscription type `max`) で実行できるが、CLI JSON の `cost_usd` / `total_cost_usd` は実課金証跡とは断定しない。plan / plan_fix / review / supervise の N=20 matrix は、operator が subscription / billing 扱いを確認するか、明示的な実行承認を出すまで走らせない。
+
+AK-002 は S0 の仮設 visibility fixture を固定し、`.claude` / `.codex` provider-facing path が `.agents` SoT に解決されること、全 prompt_contract が `autokit-question` を参照することを local self-test で検証する。AK-002 では provider live model call を実行しない。
+
+## AK-002 Runner Visibility Fixture Evidence
+
+確認日: 2026-05-04 (Asia/Tokyo)
+
+Fixture:
+
+- `e2e/fixtures/runner-visibility/manifest.json`
+- `e2e/fixtures/runner-visibility/issue.md`
+- `e2e/fixtures/runner-visibility/.agents/skills/{autokit-implement,autokit-review,autokit-question}/SKILL.md`
+- `e2e/fixtures/runner-visibility/.agents/agents/{planner,plan-verifier,implementer,reviewer,supervisor,doc-updater}.md`
+- `e2e/fixtures/runner-visibility/.agents/prompts/{plan,plan-verify,plan-fix,implement,review,supervise,fix}.md`
+- `e2e/fixtures/runner-visibility/.claude/{skills,agents}` symlink to `.agents`
+- `e2e/fixtures/runner-visibility/.codex/{skills,agents}` symlink to `.agents`
+
+Verification:
+
+```text
+Command: node --test --experimental-strip-types e2e/runners/runner-visibility.test.ts
+Result: passed
+tests: 1
+```
+
+```text
+Command: node --experimental-strip-types e2e/runners/runner-visibility.ts --self-test --json
+Result: passed
+total: 29
+passed: 29
+failures: []
+providers: ["claude","codex"]
+promptContracts: ["plan","plan-verify","plan-fix","implement","review","supervise","fix"]
+```
+
+Coverage:
+
+- `.claude/skills`, `.claude/agents`, `.codex/skills`, `.codex/agents` are symlinks resolving to real `.agents/skills` / `.agents/agents` directories inside the fixture root.
+- `.claude/prompts` and `.codex/prompts` are absent, including broken symlink cases, matching SPEC §9.4.5: prompt templates are injected by autokit, not provider prompt directories.
+- All 7 prompt_contract files end with exactly one `autokit-question` resolver reference line.
+- `implement` / `fix` reference `autokit-implement`; `review` references `autokit-review`; those phase-specific references are exact resolver lines immediately before `autokit-question`.
+- Fixed issue input declares the `status=need_input` / `autokit-question` scenario and required default answer. It does not execute provider runtime interception or resume.
+
+Current decision: AK-002 local visibility fixture gate passed without provider live model calls. Provider runtime ingestion beyond filesystem visibility remains part of later runner adoption / implementation evidence (#23, AK-009, AK-010).
 
 ## Evidence Sources
 

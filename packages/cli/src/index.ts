@@ -374,7 +374,7 @@ function commandRetry(
     return 2;
   }
   for (const target of targets) {
-    let lastPersistedTaskJson: string | null = null;
+    let lastPersistedTask: TaskEntry | null = null;
     const result = retryCleanupTask(target, {
       closePr: (task) => {
         if (task.pr.number !== null) {
@@ -392,11 +392,11 @@ function commandRetry(
         }
       },
       persistTask: (task) => {
-        lastPersistedTaskJson = JSON.stringify(task);
+        lastPersistedTask = task;
         replaceTaskAndWrite(tasksFile, task, deps);
       },
     });
-    if (lastPersistedTaskJson !== JSON.stringify(result)) {
+    if (lastPersistedTask !== result) {
       replaceTaskAndWrite(tasksFile, result, deps);
     }
   }
@@ -459,13 +459,13 @@ function commandCleanup(options: { forceDetach: string; dryRun?: boolean }, deps
     return 1;
   }
   if (view.state !== "MERGED" || !view.merged || view.headRefOid !== task.pr.head_sha) {
-    task.state = "paused";
-    task.failure = makeFailure({
-      phase: "cleanup",
-      code: "merge_sha_mismatch",
-      message: "force-detach precondition failed",
-    });
     if (options.dryRun !== true) {
+      task.state = "paused";
+      task.failure = makeFailure({
+        phase: "cleanup",
+        code: "merge_sha_mismatch",
+        message: "force-detach precondition failed",
+      });
       replaceTaskAndWrite(tasksFile, task, deps);
     }
     deps.stderr.write(`issue #${issue} failed force-detach precondition\n`);

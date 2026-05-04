@@ -260,6 +260,25 @@ describe("cli doctor/retry/cleanup gates", () => {
     assert.equal(loadTasksFile(tasksPath(root)).tasks[0].state, "cleaning");
   });
 
+  it("does not persist force-detach precondition failures during dry-run", async () => {
+    const root = makeTempDir();
+    writeTasks(root, [forceDetachTask({ issue: 9, state: "cleaning" })]);
+    const harness = makeCliHarness(root, {
+      execFile: () =>
+        JSON.stringify({
+          state: "OPEN",
+          mergedAt: null,
+          headRefOid: "head-9",
+          mergeable: "MERGEABLE",
+        }),
+    });
+
+    assert.equal(await runCli(["cleanup", "--force-detach", "9", "--dry-run"], harness.deps), 1);
+    const loaded = loadTasksFile(tasksPath(root)).tasks[0];
+    assert.equal(loaded.state, "cleaning");
+    assert.equal(loaded.failure, null);
+  });
+
   it("pauses cleanup --force-detach on OPEN PR or head mismatch instead of forcing merged", async () => {
     const root = makeTempDir();
     writeTasks(root, [forceDetachTask({ issue: 9, state: "cleaning" })]);

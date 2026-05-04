@@ -17,8 +17,13 @@
     "dist/**/*.d.ts",
     "dist/**/*.js.map",
     "dist/**/*.d.ts.map",
+    "!dist/**/*.test.*",
     "assets/**"
   ],
+  "dependencies": {
+    "@cattyneo/autokit-core": "workspace:*",
+    "commander": "14.0.3"
+  },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b"

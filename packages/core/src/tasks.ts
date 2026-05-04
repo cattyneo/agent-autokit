@@ -113,12 +113,12 @@ export type TaskEntry = {
   };
   provider_sessions: {
     plan: { claude_session_id: string | null };
-    plan_verify: { codex_thread_id: string | null };
+    plan_verify: { codex_session_id: string | null };
     plan_fix: { claude_session_id: string | null };
-    implement: { codex_thread_id: string | null };
+    implement: { codex_session_id: string | null };
     review: { claude_session_id: string | null };
     supervise: { claude_session_id: string | null };
-    fix: { codex_thread_id: string | null };
+    fix: { codex_session_id: string | null };
   };
   fix: {
     origin: FixOrigin | null;
@@ -222,12 +222,12 @@ export function createTaskEntry(input: CreateTaskEntryInput): TaskEntry {
     },
     provider_sessions: {
       plan: { claude_session_id: null },
-      plan_verify: { codex_thread_id: null },
+      plan_verify: { codex_session_id: null },
       plan_fix: { claude_session_id: null },
-      implement: { codex_thread_id: null },
+      implement: { codex_session_id: null },
       review: { claude_session_id: null },
       supervise: { claude_session_id: null },
-      fix: { codex_thread_id: null },
+      fix: { codex_session_id: null },
     },
     fix: { origin: null, started_at: null },
     retry: { cleanup_progress: null, started_at: null },
@@ -428,12 +428,12 @@ const taskEntrySchema = z
     provider_sessions: z
       .object({
         plan: z.object({ claude_session_id: nullableStringSchema }).strict(),
-        plan_verify: z.object({ codex_thread_id: nullableStringSchema }).strict(),
+        plan_verify: z.object({ codex_session_id: nullableStringSchema }).strict(),
         plan_fix: z.object({ claude_session_id: nullableStringSchema }).strict(),
-        implement: z.object({ codex_thread_id: nullableStringSchema }).strict(),
+        implement: z.object({ codex_session_id: nullableStringSchema }).strict(),
         review: z.object({ claude_session_id: nullableStringSchema }).strict(),
         supervise: z.object({ claude_session_id: nullableStringSchema }).strict(),
-        fix: z.object({ codex_thread_id: nullableStringSchema }).strict(),
+        fix: z.object({ codex_session_id: nullableStringSchema }).strict(),
       })
       .strict(),
     fix: z

@@ -365,7 +365,7 @@ AK-001 close gate is limited to low-cost evidence:
 - `prompt_contract` pass / fail-closed fixture self-test.
 - Full matrix execution plan with preconditions and stop criteria.
 
-Full N=20 adoption evidence is follow-up #23 and remains required before AK-009 / AK-010 can treat the primary runners as adopted. Codex uses `codex exec` primary; SDK full matrix is not a v0.1.0 blocker.
+Full N=20 adoption evidence for primary runners is rewritten follow-up #23 and remains required before AK-009 / AK-010 can treat the primary runners as adopted. #23 is split into Claude CLI and `codex exec` gates. Codex uses `codex exec` primary; SDK full matrix is deferred to #44 and is not a v0.1.0 blocker.
 
 ## Full Matrix Execution Plan (Not Run)
 
@@ -407,7 +407,7 @@ Preconditions:
 - `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CODEX_API_KEY` must be unset immediately before execution.
 - High-count live matrix requires subscription / billing扱い確認または operator 明示承認.
 - Use `codex -a never exec --json --sandbox <mode> --output-schema <schema-file> ...` unless a later pinned evidence update changes the invocation.
-- Use `codex exec resume [SESSION_ID]` / `codex exec resume --last` only after a live resume smoke pins the exact behavior.
+- Use stored `codex exec resume [SESSION_ID]` as the primary resume path. `codex exec resume --last` is allowed only in isolated cwd/debug contexts where cwd/session selection has been verified.
 
 Suggested stop criteria:
 

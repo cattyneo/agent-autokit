@@ -4,9 +4,9 @@
 
 ## Summary
 
-AK-001 は S0 の不確実性を S1 前に潰すための spike。ここでは公式 docs / CLI help / npm package metadata / package type definitions / one-shot live smoke の結果を固定する。
+AK-001 は S0 の不確実性を S1 前に潰すための spike。ここでは公式 docs / CLI help / npm package metadata / package type definitions / one-shot live smoke / prompt_contract fixture / full matrix 実行計画の結果を固定する。
 
-Full N=20 adoption matrix は未実行。Claude Code の 1 回 smoke が約 0.37 USD だったため、plan / plan_fix / review / supervise の N=20 matrix は明示的な実行承認または budget 指定なしに走らせない。
+Full N=20 adoption matrix は未実行で、follow-up #23 に分離する。`claude -p` は subscription auth (`claude.ai`, subscription type `max`) で実行できるが、CLI JSON の `cost_usd` / `total_cost_usd` は実課金証跡とは断定しない。plan / plan_fix / review / supervise の N=20 matrix は、operator が subscription / billing 扱いを確認するか、明示的な実行承認を出すまで走らせない。
 
 ## Evidence Sources
 
@@ -66,7 +66,7 @@ Unsupported / not yet proven:
 - `auto_mode` availability has not been validated.
 - Runtime resolver visibility for `.claude/skills/` is AK-002 scope and not validated here.
 
-Current decision: docs + local smoke pass, but full adoption gate remains pending explicit live matrix approval.
+Current decision: docs + one-shot smoke pass for AK-001 close gate. Full adoption gate remains follow-up #23.
 
 ## Claude Agent SDK TS Findings
 
@@ -227,13 +227,16 @@ Pinned fixtures:
 - `fix-repeated-resolved-id.json`: fail closed with `prompt_contract_violation`.
 - `failed-extra-field.json`: fail closed with `prompt_contract_violation`.
 
-## Remaining Gate
+## AK-001 Close Gate / Follow-up Gate
 
-AK-001 cannot be considered fully green until the user explicitly chooses one of the following:
+AK-001 close gate is limited to low-cost evidence:
 
-1. Approve full live matrix execution and expected model spend.
-2. Reduce AK-001 acceptance to docs + one-shot smoke + fixture self-test, and create a follow-up Issue for full N=20 adoption evidence.
-3. Upgrade or pin Codex CLI to `@openai/codex@0.128.0` first, then run the Codex SDK N=20 matrix.
+- Official docs / CLI help / package metadata / package type definitions evidence.
+- One-shot live smoke for Claude CLI and Codex CLI / SDK paths.
+- `prompt_contract` pass / fail-closed fixture self-test.
+- Full matrix execution plan with preconditions and stop criteria.
+
+Full N=20 adoption evidence is follow-up #23 and remains required before AK-009 / AK-010 can treat the primary runners as adopted. Codex still requires `@openai/codex@0.128.0` / `@openai/codex-sdk@0.128.0` or a newer PATH CLI before its full matrix.
 
 ## Full Matrix Execution Plan (Not Run)
 
@@ -247,16 +250,17 @@ Required by SPEC §9.1.1 A:
 - Resume: one resume attempt per phase = 4 additional live calls.
 - Expected total: 84 Claude CLI calls.
 
-Cost risk:
+Cost / billing risk:
 
-- The one-shot Claude smoke in this environment cost `0.3747575 USD`.
-- If the full matrix behaves like that one-shot, a rough linear estimate is about `31.48 USD` (`0.3747575 * 84`).
-- Actual cost may differ because prompt cache, selected model, output length, retries, and CLI defaults can change.
+- The one-shot Claude smoke JSON reported `cost_usd=0.3747575`.
+- This is telemetry from the CLI output, not proof of actual account billing under a Claude subscription.
+- If the full matrix were billed like that one-shot, a rough linear estimate would be about `31.48 USD` (`0.3747575 * 84`).
+- Actual billing / cost may differ because subscription entitlements, prompt cache, selected model, output length, retries, and CLI defaults can change.
 
 Suggested stop criteria:
 
 - Stop on unsupported CLI option / auth mismatch / schema output failure that cannot be attributed to transient provider behavior.
-- Stop on unexpected paid spend, repeated provider 429, or a cost ceiling chosen by the operator.
+- Stop on unexpected paid spend, unresolved billing uncertainty, repeated provider 429, or a cost ceiling chosen by the operator.
 - Record phase, attempt number, session id, structured output, parse/schema result, and resume result in this file or a linked artifact.
 
 ### Codex primary runner

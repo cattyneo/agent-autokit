@@ -49,6 +49,21 @@ Observed state:
 | AK-010 (#11) | open | Has a migration gate comment; intended post-migration scope is `codex exec` primary. |
 | CI on latest main | success | Latest `main` runs for CI and Assets Hygiene on AK-008 merge were successful. |
 
+Evidence references:
+
+| Item | Observed reference |
+| --- | --- |
+| Repository | `cattyneo/agent-autokit` |
+| Base head at inventory start | `a013d0fcb9e8bb640dd92091e97f09f271106b8a` |
+| MIG-001 PR head | `88b860d8f0c5eb2e18714a5face4ea1e03c5a0ce` |
+| Parent issue | https://github.com/cattyneo/agent-autokit/issues/31 |
+| MIG-001 issue | https://github.com/cattyneo/agent-autokit/issues/32 |
+| #23 stop-gate comment | https://github.com/cattyneo/agent-autokit/issues/23#issuecomment-4372671853 |
+| AK-009 migration-gate comment | https://github.com/cattyneo/agent-autokit/issues/10#issuecomment-4372672018 |
+| AK-010 migration-gate comment | https://github.com/cattyneo/agent-autokit/issues/11#issuecomment-4372672153 |
+| Latest main CI run observed | https://github.com/cattyneo/agent-autokit/actions/runs/25315315070 |
+| Latest main Assets Hygiene run observed | https://github.com/cattyneo/agent-autokit/actions/runs/25315315092 |
+
 ## Stop Gate Evidence
 
 Issue #23 already has the required GitHub stop record:
@@ -200,7 +215,9 @@ The following were not run:
 After #32 closes:
 
 1. #33 may rewrite SPEC against this inventory and `docs/spec_plan_codex_exec_revision_instructions.md`.
+   If #35 is still open, exact `codex exec` flags, session ID field, resume form, and final output retrieval must remain placeholder / stop-condition text.
 2. #35 may run pinned `codex exec` evidence collection after confirming API keys are unset and operator-approved live smoke scope.
+   API key present rejection must use dummy / sentinel env or mock / probe evidence before runner spawn, not real API-key-backed provider calls.
 3. #34 must wait for #33, then update PLAN / AK dependency mapping.
 4. #36 must wait for #34 and #35, then rewrite or replace #23 and split runner gates.
 5. #37 and #38 must remain blocked until their declared dependencies close.

@@ -5,13 +5,14 @@
 - v0.1.0 の Codex runner は `codex exec` CLI primary に切り替える。
 - `@openai/codex-sdk` / Codex SDK runner は v0.1.0 では採用しない。
 - Codex SDK は `deferred` / `experimental` / `paid-risk-gated` として扱う。
-- OpenAI Platform API 課金を避けるため、Codex は ChatGPT-managed CLI auth のみ許可する。
+- OpenAI Platform API key / usage-based API billing を避けるため、Codex は ChatGPT-managed CLI auth のみ許可する。
 - `OPENAI_API_KEY` / `CODEX_API_KEY` が存在する実行経路は fail-closed にする。
+- ChatGPT-managed auth でも usage limit / quota / paid entitlement は消費し得るため、高回数実行は operator approval scope に含める。
 - GitHub / git 操作は引き続き core 単独所有。Codex は worktree 内編集と検証のみ担当する。
 
 ## 意図
 
-- 「Codex を使うが API 費用は発生させない」という運用方針に SPEC / PLAN / Issue train を整合させる。
+- 「OpenAI Platform API key / usage-based API billing を使わずに Codex を使う」という運用方針に SPEC / PLAN / Issue train を整合させる。
 - `Codex SDK primary` と `subscription auth only` の矛盾を解消する。
 - Issue #23 の full matrix evidence が paid/API execution を含む曖昧さを取り除く。
 - AK-009 / AK-010 以降を、Codex SDK 採用済み前提ではなく `codex exec` runner 採用前提で再開できる状態にする。
@@ -191,6 +192,7 @@ codex exec JSONL stream
 - plan / implement / fix の provider assignment は維持する。
 - Codex phase の実行方式のみ `codex exec` に変更する。
 - Codex `need_input` は final output → TUI → resume turn として扱う。
+- exact resume invocation は MIG-004 の pinned evidence に従い、未確認なら AK-010 実装前に停止する。
 - checkpoint / git / gh 所有は変更しない。
 
 ### 6. テスト戦略
@@ -201,6 +203,8 @@ codex exec JSONL stream
 - resume session fixture を追加する。
 - API key env rejection に `CODEX_API_KEY` を追加する。
 - `codex exec` auth mode が API key の場合 fail する fixture を追加する。
+- API key present rejection は dummy / sentinel env または mock / probe で runner spawn 前に fail する証跡を取る。
+- real API key を設定した live provider call は v0.1.0 migration gate の完了条件に含めない。
 
 ### 7. リスク表
 
@@ -208,7 +212,7 @@ codex exec JSONL stream
 - 追加リスク:
   - `codex exec` は SDK より制御粒度が低い
   - ChatGPT-managed auth は CI では advanced / trusted runner 前提
-  - subscription usage limit は消費する
+  - subscription usage limit / quota / paid entitlement は消費し得る
   - auth.json の取り扱いが機密になる
   - non-interactive 実行では途中 approval / 質問 callback が制限される
 

@@ -93,6 +93,38 @@ export type ImplementFixWorkflowResult = WorkflowResult & {
   testsRun: TestEvidence[];
 };
 
+export type CiCheckObservation =
+  | { status: "success" }
+  | { status: "failure"; failedLog: string }
+  | { status: "pending" };
+
+export type CiWaitPrObservation = {
+  headSha: string | null;
+  mergeable: "MERGEABLE" | "BLOCKED" | "UNKNOWN";
+  autoMergeRequest?: unknown | null;
+};
+
+export type CiWaitDeps = {
+  getChecks: (prNumber: number) => Promise<CiCheckObservation> | CiCheckObservation;
+  getPr: (
+    prNumber: number,
+    site: "pre_reservation_check" | "post_reservation_recheck" | "auto_merge_disabled_barrier",
+  ) => Promise<CiWaitPrObservation> | CiWaitPrObservation;
+  reserveAutoMerge: (input: { prNumber: number; headSha: string }) => Promise<void> | void;
+  disableAutoMerge: (prNumber: number) => Promise<void> | void;
+  sleep?: (ms: number) => Promise<void> | void;
+};
+
+export type CiWaitWorkflowOptions = WorkflowOptions & {
+  github: CiWaitDeps;
+  startedAtMs?: number;
+  nowMs?: () => number;
+};
+
+export type CiWaitWorkflowResult = WorkflowResult & {
+  ciFailureLog?: string;
+};
+
 export type PlanVerifyFinding = {
   severity: "blocker" | "major" | "minor";
   title: string;
@@ -609,6 +641,76 @@ export async function runFixWorkflow(
   return { task, changedFiles, testsRun };
 }
 
+export async function runCiWaitWorkflow(
+  inputTask: TaskEntry,
+  options: CiWaitWorkflowOptions,
+): Promise<CiWaitWorkflowResult> {
+  const config = options.config ?? DEFAULT_CONFIG;
+  let task = cloneTask(inputTask);
+  if (task.state !== "ci_waiting" || task.runtime_phase !== "ci_wait") {
+    return {
+      task: failWorkflow(
+        task,
+        task.runtime_phase ?? "ci_wait",
+        "other",
+        "ci-wait workflow requires state=ci_waiting and runtime_phase=ci_wait",
+        options,
+      ).task,
+    };
+  }
+  const prNumber = requirePrNumber(task);
+  const expectedHead = requirePrHead(task);
+  const startedAt = options.startedAtMs ?? currentMs(options);
+
+  for (;;) {
+    if (currentMs(options) - startedAt >= config.ci.timeout_ms) {
+      if (config.ci.timeout_action === "failed") {
+        await options.github.disableAutoMerge(prNumber);
+      }
+      return { task: transitionTask(task, { type: "ci_timeout" }, config) };
+    }
+
+    const checks = await options.github.getChecks(prNumber);
+    if (checks.status === "pending") {
+      await sleepFor(config.ci.poll_interval_ms, options);
+      continue;
+    }
+    if (checks.status === "failure") {
+      return {
+        task: transitionTask(task, { type: "ci_failed" }, config),
+        ciFailureLog: checks.failedLog,
+      };
+    }
+
+    const preReservation = await options.github.getPr(prNumber, "pre_reservation_check");
+    if (preReservation.headSha !== expectedHead) {
+      return { task: transitionTask(task, { type: "ci_head_mismatch" }, config) };
+    }
+    if (preReservation.mergeable === "BLOCKED") {
+      return { task: transitionTask(task, { type: "ci_branch_protection" }, config) };
+    }
+    if (preReservation.mergeable === "UNKNOWN") {
+      await sleepFor(config.merge.poll_interval_ms, options);
+      continue;
+    }
+
+    if (!config.auto_merge) {
+      return { task: transitionTask(task, { type: "ci_passed_manual_merge" }, config) };
+    }
+
+    await options.github.reserveAutoMerge({ prNumber, headSha: expectedHead });
+    const postReservation = await options.github.getPr(prNumber, "post_reservation_recheck");
+    if (postReservation.headSha !== expectedHead) {
+      await options.github.disableAutoMerge(prNumber);
+      await waitForAutoMergeDisabled(prNumber, options);
+      task = invalidateLatestAcceptedFindings(task);
+      return { task: transitionTask(task, { type: "ci_head_mismatch" }, config) };
+    }
+
+    return { task: transitionTask(task, { type: "auto_merge_reserved" }, config) };
+  }
+}
+
 export function assignFindingIds(findings: ReviewFinding[]): ReviewFindingWithId[] {
   return findings.map((finding) => ({
     ...finding,
@@ -943,6 +1045,39 @@ function normalizeFindingTitle(title: string): string {
 
 async function persistTask(task: TaskEntry, options: WorkflowOptions): Promise<void> {
   await options.persistTask?.(cloneTask(task));
+}
+
+function currentMs(options: CiWaitWorkflowOptions): number {
+  return options.nowMs?.() ?? Date.now();
+}
+
+async function sleepFor(ms: number, options: CiWaitWorkflowOptions): Promise<void> {
+  if (options.github.sleep !== undefined) {
+    await options.github.sleep(ms);
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForAutoMergeDisabled(
+  prNumber: number,
+  options: CiWaitWorkflowOptions,
+): Promise<void> {
+  let consecutiveNull = 0;
+  while (consecutiveNull < 2) {
+    await sleepFor((options.config ?? DEFAULT_CONFIG).merge.poll_interval_ms, options);
+    const observed = await options.github.getPr(prNumber, "auto_merge_disabled_barrier");
+    consecutiveNull = observed.autoMergeRequest == null ? consecutiveNull + 1 : 0;
+  }
+}
+
+function invalidateLatestAcceptedFindings(task: TaskEntry): TaskEntry {
+  const next = cloneTask(task);
+  const latest = next.review_findings.at(-1);
+  if (latest !== undefined) {
+    latest.accept_ids = [];
+  }
+  return next;
 }
 
 async function restoreOrCreatePrAfterPush(

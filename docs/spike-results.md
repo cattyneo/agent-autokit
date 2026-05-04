@@ -44,11 +44,11 @@ promptContracts: ["plan","plan-verify","plan-fix","implement","review","supervis
 
 Coverage:
 
-- `.claude/skills`, `.claude/agents`, `.codex/skills`, `.codex/agents` are symlinks resolving to `.agents/skills` / `.agents/agents`.
-- `.claude/prompts` and `.codex/prompts` are absent, matching SPEC §9.4.5: prompt templates are injected by autokit, not provider prompt directories.
-- All 7 prompt_contract files contain exactly one `autokit-question` reference.
-- `implement` / `fix` reference `autokit-implement`; `review` references `autokit-review`; planner / verifier / supervisor prompts do not reference implementation or review skills.
-- Fixed issue input exercises the `status=need_input` / `autokit-question` resolver path.
+- `.claude/skills`, `.claude/agents`, `.codex/skills`, `.codex/agents` are symlinks resolving to real `.agents/skills` / `.agents/agents` directories inside the fixture root.
+- `.claude/prompts` and `.codex/prompts` are absent, including broken symlink cases, matching SPEC §9.4.5: prompt templates are injected by autokit, not provider prompt directories.
+- All 7 prompt_contract files end with exactly one `autokit-question` resolver reference line.
+- `implement` / `fix` reference `autokit-implement`; `review` references `autokit-review`; those phase-specific references are exact resolver lines immediately before `autokit-question`.
+- Fixed issue input declares the `status=need_input` / `autokit-question` scenario and required default answer. It does not execute provider runtime interception or resume.
 
 Current decision: AK-002 local visibility fixture gate passed without provider live model calls. Provider runtime ingestion beyond filesystem visibility remains part of later runner adoption / implementation evidence (#23, AK-009, AK-010).
 

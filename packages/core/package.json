@@ -13,5 +13,9 @@
     "build": "tsc -b",
     "typecheck": "tsc -b"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "yaml": "^2.8.4",
+    "zod": "^4.4.3"
+  }
 }

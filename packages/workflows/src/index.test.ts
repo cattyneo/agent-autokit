@@ -5,13 +5,18 @@ import {
   type AgentRunInput,
   createTaskEntry,
   parseConfig,
+  type TaskEntry,
   transitionTask,
 } from "@cattyneo/autokit-core";
 
 import {
   assignFindingIds,
+  type BranchPrLookup,
   computeFindingId,
+  type ImplementFixGitDeps,
   type ReviewFinding,
+  runFixWorkflow,
+  runImplementWorkflow,
   runPlanningWorkflow,
   runReviewSuperviseWorkflow,
   type WorkflowRunner,
@@ -128,6 +133,431 @@ describe("planning workflow", () => {
 
     assert.equal(sandboxFailure.task.state, "paused");
     assert.equal(sandboxFailure.task.failure?.code, "sandbox_violation");
+  });
+});
+
+describe("implement and fix workflow", () => {
+  it("runs implement through ordered checkpoints and opens a ready PR", async () => {
+    const calls: AgentRunInput[] = [];
+    const persisted: string[] = [];
+    const git = mockGitDeps(["base-sha", "agent-sha"], ["commit-sha"], {
+      prNumber: 51,
+      prHeadSha: "remote-head",
+      baseSha: "base-sha",
+    });
+    const task = {
+      ...baseTask(),
+      state: "planned" as const,
+      runtime_phase: null,
+      branch: "autokit/issue-13",
+      worktree_path: ".autokit/worktrees/issue-13",
+      plan: { ...baseTask().plan, state: "verified" as const },
+    };
+
+    const result = await runImplementWorkflow(task, {
+      runner: queueRunner(calls, [
+        completed(
+          "codex",
+          {
+            changed_files: ["packages/workflows/src/index.ts"],
+            tests_run: [{ command: "bun test", result: "passed", summary: "ok" }],
+            docs_updated: false,
+            notes: "implemented",
+          },
+          "codex-implement-session",
+        ),
+      ]),
+      git,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+      persistTask: (next) => {
+        persisted.push(implementCheckpointState(next));
+      },
+      now: () => "2026-05-05T10:00:00+09:00",
+    });
+
+    assert.equal(result.task.state, "reviewing");
+    assert.equal(result.task.runtime_phase, "review");
+    assert.equal(result.task.pr.number, 51);
+    assert.equal(result.task.pr.head_sha, "remote-head");
+    assert.equal(result.task.git.checkpoints.implement.before_sha, "base-sha");
+    assert.equal(result.task.git.checkpoints.implement.agent_done, "agent-sha");
+    assert.equal(result.task.git.checkpoints.implement.commit_done, "commit-sha");
+    assert.equal(result.task.git.checkpoints.implement.push_done, "commit-sha");
+    assert.equal(result.task.git.checkpoints.implement.pr_created, 51);
+    assert.equal(result.task.git.checkpoints.implement.head_sha_persisted, "remote-head");
+    assert.equal(result.task.git.checkpoints.implement.after_sha, "remote-head");
+    assert.equal(
+      result.task.provider_sessions.implement.codex_session_id,
+      "codex-implement-session",
+    );
+    assert.deepEqual(
+      calls.map((call) => [
+        call.provider,
+        call.phase,
+        call.permissions.mode,
+        call.permissions.workspaceScope,
+      ]),
+      [["codex", "implement", "workspace-write", "worktree"]],
+    );
+    assert.deepEqual(git.calls, [
+      "getHeadSha",
+      "getHeadSha",
+      "stageAll",
+      "commit:Implement issue #13",
+      "push:autokit/issue-13",
+      "createDraftPr:commit-sha",
+      "getPrHead:51",
+      "markPrReady:51",
+    ]);
+    assert.deepEqual(persisted, [
+      "before=base-sha agent=null commit=null push=null pr=null head=null after=null",
+      "before=base-sha agent=agent-sha commit=null push=null pr=null head=null after=null",
+      "before=base-sha agent=agent-sha commit=commit-sha push=null pr=null head=null after=null",
+      "before=base-sha agent=agent-sha commit=commit-sha push=commit-sha pr=null head=null after=null",
+      "before=base-sha agent=agent-sha commit=commit-sha push=commit-sha pr=51 head=null after=null",
+      "before=base-sha agent=agent-sha commit=commit-sha push=commit-sha pr=51 head=remote-head after=null",
+      "before=base-sha agent=agent-sha commit=commit-sha push=commit-sha pr=51 head=remote-head after=remote-head",
+    ]);
+  });
+
+  it("resumes Codex sessions for crashed implement phases", async () => {
+    const calls: AgentRunInput[] = [];
+    const git = mockGitDeps(["agent-sha"], ["commit-sha"], {
+      prNumber: 51,
+      prHeadSha: "remote-head",
+      baseSha: "base-sha",
+    });
+    const task = {
+      ...baseTask(),
+      state: "implementing" as const,
+      runtime_phase: "implement" as const,
+      branch: "autokit/issue-13",
+      worktree_path: ".autokit/worktrees/issue-13",
+      git: {
+        ...baseTask().git,
+        base_sha: "base-sha",
+        checkpoints: {
+          ...baseTask().git.checkpoints,
+          implement: { ...baseTask().git.checkpoints.implement, before_sha: "base-sha" },
+        },
+      },
+      provider_sessions: {
+        ...baseTask().provider_sessions,
+        implement: { codex_session_id: "codex-implement-session" },
+      },
+    };
+
+    await runImplementWorkflow(task, {
+      runner: queueRunner(calls, [
+        completed("codex", {
+          changed_files: ["packages/workflows/src/index.ts"],
+          tests_run: [{ command: "bun test", result: "passed", summary: "ok" }],
+          docs_updated: false,
+          notes: "implemented",
+        }),
+      ]),
+      git,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.deepEqual(calls[0].resume, { codexSessionId: "codex-implement-session" });
+  });
+
+  it("continues implement from commit_done without rerunning the agent", async () => {
+    const calls: AgentRunInput[] = [];
+    const git = mockGitDeps([], [], {
+      prNumber: 51,
+      prHeadSha: "remote-head",
+      baseSha: "base-sha",
+    });
+    const task = {
+      ...baseTask(),
+      state: "implementing" as const,
+      runtime_phase: "implement" as const,
+      branch: "autokit/issue-13",
+      worktree_path: ".autokit/worktrees/issue-13",
+      git: {
+        ...baseTask().git,
+        base_sha: "base-sha",
+        checkpoints: {
+          ...baseTask().git.checkpoints,
+          implement: {
+            ...baseTask().git.checkpoints.implement,
+            before_sha: "base-sha",
+            agent_done: "agent-sha",
+            commit_done: "commit-sha",
+          },
+        },
+      },
+    };
+
+    const result = await runImplementWorkflow(task, {
+      runner: queueRunner(calls, []),
+      git,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(result.task.state, "reviewing");
+    assert.equal(calls.length, 0);
+    assert.deepEqual(git.calls, [
+      "push:autokit/issue-13",
+      "createDraftPr:commit-sha",
+      "getPrHead:51",
+      "markPrReady:51",
+    ]);
+  });
+
+  it("restores an existing branch PR after implement push_done", async () => {
+    const calls: AgentRunInput[] = [];
+    const git = mockGitDeps([], [], {
+      prHeadSha: "remote-head",
+      baseSha: "base-sha",
+      branchPr: { state: "OPEN", number: 88, headSha: "remote-head", baseSha: "base-sha" },
+    });
+    const task = {
+      ...baseTask(),
+      state: "implementing" as const,
+      runtime_phase: "implement" as const,
+      branch: "autokit/issue-13",
+      worktree_path: ".autokit/worktrees/issue-13",
+      git: {
+        ...baseTask().git,
+        base_sha: "base-sha",
+        checkpoints: {
+          ...baseTask().git.checkpoints,
+          implement: {
+            ...baseTask().git.checkpoints.implement,
+            before_sha: "base-sha",
+            agent_done: "agent-sha",
+            commit_done: "commit-sha",
+            push_done: "commit-sha",
+          },
+        },
+      },
+    };
+
+    const result = await runImplementWorkflow(task, {
+      runner: queueRunner(calls, []),
+      git,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(result.task.pr.number, 88);
+    assert.equal(result.task.state, "reviewing");
+    assert.equal(calls.length, 0);
+    assert.deepEqual(git.calls, [
+      "findPrForBranch:autokit/issue-13",
+      "getPrHead:88",
+      "markPrReady:88",
+    ]);
+  });
+
+  it("runs review-origin fix through rebase and returns to review", async () => {
+    const calls: AgentRunInput[] = [];
+    const git = mockGitDeps(["before-fix", "rebase-sha", "agent-fix-sha"], ["fix-commit"], {
+      prHeadSha: "fix-head",
+      baseSha: "base-sha",
+    });
+
+    const result = await runFixWorkflow(fixingTask("review"), {
+      runner: queueRunner(calls, [
+        completed(
+          "codex",
+          {
+            changed_files: ["packages/workflows/src/index.ts"],
+            tests_run: [{ command: "bun test", result: "passed", summary: "ok" }],
+            resolved_accept_ids: ["finding-1"],
+            unresolved_accept_ids: [],
+            notes: "fixed",
+          },
+          "codex-fix-session",
+        ),
+      ]),
+      git,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(result.task.state, "reviewing");
+    assert.equal(result.task.runtime_phase, "review");
+    assert.equal(result.task.fix.origin, null);
+    assert.equal(result.task.ci_fix_round, 0);
+    assert.equal(result.task.git.checkpoints.fix.before_sha, "before-fix");
+    assert.equal(result.task.git.checkpoints.fix.rebase_done, "rebase-sha");
+    assert.equal(result.task.git.checkpoints.fix.agent_done, "agent-fix-sha");
+    assert.equal(result.task.git.checkpoints.fix.commit_done, "fix-commit");
+    assert.equal(result.task.git.checkpoints.fix.push_done, "fix-commit");
+    assert.equal(result.task.git.checkpoints.fix.head_sha_persisted, "fix-head");
+    assert.equal(result.task.git.checkpoints.fix.after_sha, "fix-head");
+    assert.equal(result.task.provider_sessions.fix.codex_session_id, "codex-fix-session");
+    assert.deepEqual(
+      calls.map((call) => [
+        call.provider,
+        call.phase,
+        call.permissions.mode,
+        call.permissions.workspaceScope,
+      ]),
+      [["codex", "fix", "workspace-write", "worktree"]],
+    );
+    assert.deepEqual(git.calls, [
+      "getHeadSha",
+      "rebase",
+      "getHeadSha",
+      "getHeadSha",
+      "stageAll",
+      "commit:Fix issue #13",
+      "push:autokit/issue-13",
+      "getPrHead:51",
+    ]);
+  });
+
+  it("resumes Codex sessions for crashed fix phases after rebase", async () => {
+    const calls: AgentRunInput[] = [];
+    const git = mockGitDeps(["agent-fix-sha"], ["fix-commit"], {
+      prHeadSha: "fix-head",
+      baseSha: "base-sha",
+    });
+    const task = {
+      ...fixingTask("review"),
+      git: {
+        ...baseTask().git,
+        checkpoints: {
+          ...baseTask().git.checkpoints,
+          fix: {
+            ...baseTask().git.checkpoints.fix,
+            before_sha: "before-fix",
+            rebase_done: "rebase-sha",
+          },
+        },
+      },
+      provider_sessions: {
+        ...baseTask().provider_sessions,
+        fix: { codex_session_id: "codex-fix-session" },
+      },
+    };
+
+    await runFixWorkflow(task, {
+      runner: queueRunner(calls, [
+        completed("codex", {
+          changed_files: ["packages/workflows/src/index.ts"],
+          tests_run: [{ command: "bun test", result: "passed", summary: "ok" }],
+          resolved_accept_ids: ["finding-1"],
+          unresolved_accept_ids: [],
+          notes: "fixed",
+        }),
+      ]),
+      git,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.deepEqual(calls[0].resume, { codexSessionId: "codex-fix-session" });
+    assert.deepEqual(git.calls, [
+      "getHeadSha",
+      "stageAll",
+      "commit:Fix issue #13",
+      "push:autokit/issue-13",
+      "getPrHead:51",
+    ]);
+  });
+
+  it("continues fix from push_done without rerunning rebase or agent", async () => {
+    const calls: AgentRunInput[] = [];
+    const git = mockGitDeps([], [], {
+      prHeadSha: "fix-head",
+      baseSha: "base-sha",
+    });
+    const task = {
+      ...fixingTask("review"),
+      git: {
+        ...baseTask().git,
+        checkpoints: {
+          ...baseTask().git.checkpoints,
+          fix: {
+            ...baseTask().git.checkpoints.fix,
+            before_sha: "before-fix",
+            rebase_done: "rebase-sha",
+            agent_done: "agent-fix-sha",
+            commit_done: "fix-commit",
+            push_done: "fix-commit",
+          },
+        },
+      },
+    };
+
+    const result = await runFixWorkflow(task, {
+      runner: queueRunner(calls, []),
+      git,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(result.task.state, "reviewing");
+    assert.equal(calls.length, 0);
+    assert.deepEqual(git.calls, ["getPrHead:51"]);
+  });
+
+  it("keeps CI fix counter independent when CI-origin fix returns through review", async () => {
+    const ciFailed = transitionTask(
+      { ...reviewingTask(), state: "ci_waiting", runtime_phase: "ci_wait", ci_fix_round: 0 },
+      { type: "ci_failed" },
+    );
+    const git = mockGitDeps(["before-fix", "rebase-sha", "agent-fix-sha"], ["fix-commit"], {
+      prHeadSha: "fix-head",
+      baseSha: "base-sha",
+    });
+
+    const fixed = await runFixWorkflow(ciFailed, {
+      runner: queueRunner(
+        [],
+        [
+          completed("codex", {
+            changed_files: ["packages/workflows/src/index.ts"],
+            tests_run: [{ command: "bun test", result: "passed", summary: "ok" }],
+            resolved_accept_ids: [],
+            unresolved_accept_ids: [],
+            notes: "ci fixed",
+          }),
+        ],
+      ),
+      git,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+    const reviewed = await runReviewSuperviseWorkflow(fixed.task, {
+      runner: queueRunner([], [completed("claude", { findings: [] })]),
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(fixed.task.review_round, 0);
+    assert.equal(fixed.task.ci_fix_round, 1);
+    assert.equal(reviewed.task.state, "ci_waiting");
+    assert.equal(reviewed.task.ci_fix_round, 1);
+    assert.equal(reviewed.task.review_round, 0);
+  });
+
+  it("pauses fix on rebase conflict before running the agent", async () => {
+    const calls: AgentRunInput[] = [];
+    const git = mockGitDeps(["before-fix"], [], {
+      rebase: { ok: false, message: "conflict" },
+    });
+
+    const result = await runFixWorkflow(fixingTask("review"), {
+      runner: queueRunner(calls, []),
+      git,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(result.task.state, "paused");
+    assert.equal(result.task.failure?.code, "rebase_conflict");
+    assert.deepEqual(calls, []);
+    assert.deepEqual(git.calls, ["getHeadSha", "rebase"]);
   });
 });
 
@@ -354,9 +784,9 @@ describe("review and supervise workflow", () => {
 
 function baseTask() {
   return createTaskEntry({
-    issue: 12,
-    slug: "ak-011",
-    title: "AK-011",
+    issue: 13,
+    slug: "ak-012",
+    title: "AK-012",
     labels: ["agent-ready"],
     now: "2026-05-05T09:00:00+09:00",
   });
@@ -369,8 +799,18 @@ function reviewingTask() {
       state: "implementing",
       runtime_phase: "implement",
     },
-    { type: "pr_ready", headSha: "head-sha", prNumber: 12, baseSha: "base-sha" },
+    { type: "pr_ready", headSha: "head-sha", prNumber: 51, baseSha: "base-sha" },
   );
+}
+
+function fixingTask(origin: "review" | "ci") {
+  return {
+    ...reviewingTask(),
+    state: "fixing" as const,
+    runtime_phase: "fix" as const,
+    fix: { origin, started_at: "2026-05-05T10:00:00+09:00" },
+    branch: "autokit/issue-13",
+  };
 }
 
 function reviewFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
@@ -410,4 +850,74 @@ function queueRunner(
     }
     return output;
   };
+}
+
+function mockGitDeps(
+  headShas: string[],
+  commitShas: string[],
+  options: {
+    prNumber?: number;
+    prHeadSha?: string;
+    baseSha?: string | null;
+    branchPr?: BranchPrLookup;
+    rebase?: { ok: true } | { ok: false; message: string };
+  } = {},
+): ImplementFixGitDeps & { calls: string[] } {
+  const calls: string[] = [];
+  const deps: ImplementFixGitDeps & { calls: string[] } = {
+    calls,
+    getHeadSha: () => {
+      calls.push("getHeadSha");
+      const sha = headShas.shift();
+      assert.ok(sha, "expected a queued head sha");
+      return sha;
+    },
+    stageAll: () => {
+      calls.push("stageAll");
+    },
+    commit: ({ message }) => {
+      calls.push(`commit:${message}`);
+      const sha = commitShas.shift();
+      assert.ok(sha, "expected a queued commit sha");
+      return sha;
+    },
+    pushBranch: (branch) => {
+      calls.push(`push:${branch}`);
+    },
+    createDraftPr: ({ headSha }) => {
+      calls.push(`createDraftPr:${headSha}`);
+      return options.prNumber ?? 51;
+    },
+    getPrHead: (prNumber) => {
+      calls.push(`getPrHead:${prNumber}`);
+      return { headSha: options.prHeadSha ?? "remote-head", baseSha: options.baseSha ?? null };
+    },
+    markPrReady: (prNumber) => {
+      calls.push(`markPrReady:${prNumber}`);
+    },
+    rebaseOntoBase: () => {
+      calls.push("rebase");
+      return options.rebase ?? { ok: true };
+    },
+  };
+  if (options.branchPr !== undefined) {
+    deps.findPrForBranch = (branch) => {
+      calls.push(`findPrForBranch:${branch}`);
+      return options.branchPr ?? { state: "NONE" };
+    };
+  }
+  return deps;
+}
+
+function implementCheckpointState(task: TaskEntry): string {
+  const checkpoint = task.git.checkpoints.implement;
+  return [
+    `before=${checkpoint.before_sha}`,
+    `agent=${checkpoint.agent_done}`,
+    `commit=${checkpoint.commit_done}`,
+    `push=${checkpoint.push_done}`,
+    `pr=${checkpoint.pr_created}`,
+    `head=${checkpoint.head_sha_persisted}`,
+    `after=${checkpoint.after_sha}`,
+  ].join(" ");
 }

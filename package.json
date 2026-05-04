@@ -9,13 +9,15 @@
   "scripts": {
     "build": "bun run --filter '*' build",
     "test": "bun test",
-    "lint": "biome check .",
+    "lint": "biome check . && eslint .",
     "format": "biome format --write .",
     "typecheck": "tsc -b"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
     "@types/node": "^25.6.0",
-    "typescript": "^6.0.3"
+    "eslint": "^10.3.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.1"
   }
 }

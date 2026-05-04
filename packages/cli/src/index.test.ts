@@ -29,6 +29,7 @@ const NOW = "2026-05-04T19:50:00+09:00";
 
 describe("cli exit code contract", () => {
   it("prioritizes failed over paused/cleaning and returns tempfail for resumable states", () => {
+    assert.equal(getWorkflowExitCode([]), 0);
     assert.equal(getWorkflowExitCode([task({ issue: 1, state: "merged" })]), 0);
     assert.equal(getWorkflowExitCode([task({ issue: 1, state: "queued" })]), TEMPFAIL_EXIT_CODE);
     assert.equal(getWorkflowExitCode([task({ issue: 1, state: "paused" })]), TEMPFAIL_EXIT_CODE);
@@ -62,6 +63,8 @@ describe("cli task commands", () => {
     assert.deepEqual(parseIssueRange("12,10-11,10"), [10, 11, 12]);
     assert.equal(parseIssueRange("all"), "all");
     assert.throws(() => parseIssueRange("12-10"), /invalid issue range/);
+    assert.throws(() => parseIssueRange("0"), /invalid positive integer/);
+    assert.throws(() => parseIssueRange("1-"), /invalid positive integer/);
   });
 
   it("adds labeled open issues with -y and writes tasks.yaml atomically", async () => {
@@ -85,6 +88,29 @@ describe("cli task commands", () => {
     assert.equal(loaded.tasks[0].issue, 9);
     assert.equal(loaded.tasks[0].cached.title_at_add, issue.title);
     assert.equal(existsSync(`${tasksPath(root)}.tmp`), false);
+  });
+
+  it("continues add batch after active duplicates while preserving a non-zero exit", async () => {
+    const root = makeTempDir();
+    writeTasks(root, [task({ issue: 9, state: "queued" })]);
+    const issues = new Map<number, IssueMetadata>([
+      [9, { number: 9, title: "AK-009", state: "OPEN", labels: ["agent-ready"] }],
+      [10, { number: 10, title: "AK-010", state: "OPEN", labels: ["agent-ready"] }],
+    ]);
+    const harness = makeCliHarness(root, {
+      fetchIssue: (number) => issues.get(number) ?? null,
+      confirm: () => false,
+    });
+
+    const code = await runCli(["add", "9-10", "-y"], harness.deps);
+
+    assert.equal(code, 1);
+    assert.match(harness.stderr(), /skip #9: task already active/);
+    const loaded = loadTasksFile(tasksPath(root));
+    assert.deepEqual(
+      loaded.tasks.map((entry) => entry.issue),
+      [9, 10],
+    );
   });
 
   it("renders list --json and status without exposing issue body or PR diffs", async () => {
@@ -128,6 +154,19 @@ describe("cli task commands", () => {
     assert.equal(await runCli(["resume", "9"], harness.deps), TEMPFAIL_EXIT_CODE);
     assert.match(harness.stderr(), /autokit retry/);
   });
+
+  it("rejects resume of an explicit issue that is missing or not paused", async () => {
+    const root = makeTempDir();
+    writeTasks(root, [task({ issue: 9, state: "queued" })]);
+    const notPausedHarness = makeCliHarness(root);
+
+    assert.equal(await runCli(["resume", "9"], notPausedHarness.deps), 1);
+    assert.match(notPausedHarness.stderr(), /issue #9 is not paused/);
+
+    const missingHarness = makeCliHarness(root);
+    assert.equal(await runCli(["resume", "99"], missingHarness.deps), 1);
+    assert.match(missingHarness.stderr(), /issue #99 not found/);
+  });
 });
 
 describe("cli doctor/retry/cleanup gates", () => {
@@ -161,6 +200,28 @@ describe("cli doctor/retry/cleanup gates", () => {
     assert.equal(loadTasksFile(tasksPath(root)).tasks[0].issue, 9);
   });
 
+  it("retries retry_cleanup_failed paused tasks when retry has no explicit range", async () => {
+    const root = makeTempDir();
+    writeTasks(root, [retryCleanupPausedTask(9)]);
+    const calls: string[] = [];
+    const harness = makeCliHarness(root, {
+      execFile: (command, args) => {
+        calls.push(`${command} ${args.join(" ")}`);
+        return "";
+      },
+    });
+
+    assert.equal(await runCli(["retry"], harness.deps), 0);
+    const loaded = loadTasksFile(tasksPath(root)).tasks[0];
+    assert.equal(loaded.state, "queued");
+    assert.equal(loaded.pr.number, null);
+    assert.deepEqual(calls, [
+      "gh pr close 29 --delete-branch --comment autokit retry: superseded",
+      "git worktree remove --force .autokit/worktrees/issue-9",
+      "git branch -D autokit/issue-9",
+    ]);
+  });
+
   it("verifies merged PR head before cleanup --force-detach can mark a task merged", async () => {
     const root = makeTempDir();
     writeTasks(root, [forceDetachTask({ issue: 9, state: "cleaning" })]);
@@ -179,6 +240,24 @@ describe("cli doctor/retry/cleanup gates", () => {
     const loaded = loadTasksFile(tasksPath(root)).tasks[0];
     assert.equal(loaded.state, "merged");
     assert.equal(loaded.cleaning_progress.worktree_remove_attempts, 0);
+  });
+
+  it("supports cleanup --force-detach --dry-run without mutating state", async () => {
+    const root = makeTempDir();
+    writeTasks(root, [forceDetachTask({ issue: 9, state: "cleaning" })]);
+    const harness = makeCliHarness(root, {
+      execFile: () =>
+        JSON.stringify({
+          state: "MERGED",
+          mergedAt: "2026-05-04T10:00:00Z",
+          headRefOid: "head-9",
+          mergeable: "UNKNOWN",
+        }),
+      confirm: () => false,
+    });
+
+    assert.equal(await runCli(["cleanup", "--force-detach", "9", "--dry-run"], harness.deps), 0);
+    assert.equal(loadTasksFile(tasksPath(root)).tasks[0].state, "cleaning");
   });
 
   it("pauses cleanup --force-detach on OPEN PR or head mismatch instead of forcing merged", async () => {
@@ -250,6 +329,18 @@ function forceDetachTask(options: { issue: number; state: "cleaning" | "paused" 
             ts: NOW,
           })
         : null,
+  };
+}
+
+function retryCleanupPausedTask(issue: number): TaskEntry {
+  return {
+    ...forceDetachTask({ issue, state: "paused" }),
+    failure: makeFailure({
+      phase: "retry",
+      code: "retry_cleanup_failed",
+      message: "busy",
+      ts: NOW,
+    }),
   };
 }
 

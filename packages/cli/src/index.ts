@@ -262,6 +262,7 @@ function commandAdd(
   const requiredLabels = options.label ?? [];
   const tasksFile = loadTasksOrEmpty(deps);
   const additions: TaskEntry[] = [];
+  let hadActiveConflict = false;
   for (const issue of targets) {
     if (issue.state !== "OPEN") {
       deps.stderr.write(`skip #${issue.number}: issue is closed\n`);
@@ -274,7 +275,8 @@ function commandAdd(
     const existing = tasksFile.tasks.filter((task) => task.issue === issue.number);
     if (existing.some((task) => task.state !== "merged")) {
       deps.stderr.write(`skip #${issue.number}: task already active\n`);
-      return 1;
+      hadActiveConflict = true;
+      continue;
     }
     if (existing.length > 0 && options.force !== true) {
       deps.stderr.write(`skip #${issue.number}: merged task requires --force\n`);
@@ -310,7 +312,7 @@ function commandAdd(
   tasksFile.tasks.push(...additions);
   tasksFile.generated_at = now(deps);
   writeTasksFileAtomic(tasksPath(deps), tasksFile);
-  return 0;
+  return hadActiveConflict ? 1 : 0;
 }
 
 function commandWorkflowStatus(deps: CliDeps): number {
@@ -330,6 +332,17 @@ function commandResume(issue: string | undefined, deps: CliDeps): number {
   } catch (error) {
     deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 2;
+  }
+  if (targetIssue !== undefined) {
+    const explicitTarget = tasks.find((task) => task.issue === targetIssue);
+    if (explicitTarget === undefined) {
+      deps.stderr.write(`issue #${targetIssue} not found\n`);
+      return 1;
+    }
+    if (explicitTarget.state !== "paused") {
+      deps.stderr.write(`issue #${targetIssue} is not paused\n`);
+      return 1;
+    }
   }
   const target = [...tasks]
     .reverse()
@@ -361,6 +374,7 @@ function commandRetry(
     return 2;
   }
   for (const target of targets) {
+    let lastPersistedTaskJson: string | null = null;
     const result = retryCleanupTask(target, {
       closePr: (task) => {
         if (task.pr.number !== null) {
@@ -377,9 +391,14 @@ function commandRetry(
           exec(deps, "git", buildGitBranchDeleteArgs(task.branch));
         }
       },
-      persistTask: (task) => replaceTaskAndWrite(tasksFile, task, deps),
+      persistTask: (task) => {
+        lastPersistedTaskJson = JSON.stringify(task);
+        replaceTaskAndWrite(tasksFile, task, deps);
+      },
     });
-    replaceTaskAndWrite(tasksFile, result, deps);
+    if (lastPersistedTaskJson !== JSON.stringify(result)) {
+      replaceTaskAndWrite(tasksFile, result, deps);
+    }
   }
   return getRetryExitCode(
     targets.map((target) => tasksFile.tasks.find((task) => task.issue === target.issue) ?? target),
@@ -588,7 +607,9 @@ function renderTaskTable(tasks: TaskEntry[]): string {
 
 function selectRetryTargets(tasks: TaskEntry[], range: string | undefined): TaskEntry[] {
   if (range === undefined) {
-    return tasks.filter((task) => task.state === "failed");
+    return tasks.filter(
+      (task) => task.state === "failed" || task.failure?.code === "retry_cleanup_failed",
+    );
   }
   const parsed = parseIssueRange(range);
   if (parsed === "all") {

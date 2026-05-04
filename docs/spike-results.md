@@ -268,6 +268,8 @@ Current decision: `codex exec` is the v0.1.0 primary Codex runner path. PATH Cod
 
 Adoption target: none for v0.1.0. This section is retained only as paid-risk-gated reference evidence.
 
+Do not use this section as AK-009 / AK-010 adoption evidence. The active v0.1.0 runner gates are #23 A (`claude -p`) and #23 B (`codex exec`) only.
+
 Confirmed package/type surface from AK-001:
 
 - Package: `@openai/codex-sdk@0.128.0`.

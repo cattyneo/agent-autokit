@@ -1582,7 +1582,7 @@ AK-001 の Issue / PR close gate と runner 採用 gate は分離する。AK-001
 - subscription 認証を使う場合、API key / keychain / helper / bare mode のどれが公式に許容されるか。公式 docs と実機が食い違う場合は S0 未達として止める
 - CLI / SDK が出力する cost telemetry は実行証跡として記録するが、subscription 利用時の実課金証跡とは断定しない。full matrix 実行前に operator の明示承認、または subscription / billing 扱いの確認を記録する。
 
-##### A. primary runner: `claude -p` (Claude phase 全 4 種: plan / plan_fix / review / supervise、§2.2 役割分担表と 1:1)
+##### A. primary runner: `claude -p` (#23 A adoption gate; Claude phase 全 4 種: plan / plan_fix / review / supervise、§2.2 役割分担表と 1:1)
 
 `autokit` v0.1.0 が依拠する **唯一の Claude runner**。MVP に含めるため必達。
 
@@ -1594,9 +1594,9 @@ AK-001 の Issue / PR close gate と runner 採用 gate は分離する。AK-001
 
 未達: v0.1.0 を出荷せず仕様再検討。
 
-##### B. primary runner: Codex CLI exec (Codex phase 全 3 種: plan_verify / implement / fix、§2.2 役割分担表と 1:1)
+##### B. primary runner: Codex CLI exec (#23 B adoption gate; Codex phase 全 3 種: plan_verify / implement / fix、§2.2 役割分担表と 1:1)
 
-`autokit` v0.1.0 が依拠する **唯一の Codex runner**。MVP に含めるため必達。MIG-004 (`docs/spike-results.md`) で pinned CLI evidence が確認できるまでは、exact flag / JSONL event 名 / session id field / resume invocation / final output file を SPEC の必須 contract として固定しない。未確認項目が残る場合、AK-010 実装前に停止して contract を確定する。
+`autokit` v0.1.0 が依拠する **唯一の Codex runner**。MVP に含めるため必達。MIG-004 (`docs/spike-results.md`, Codex CLI 0.128.0 pinned evidence) で pinned CLI evidence が確認できるまでは、exact flag / JSONL event 名 / session id field / resume invocation / final output file を SPEC の必須 contract として固定しない。未確認項目が残る場合、AK-010 実装前に停止して contract を確定する。
 
 - N=20 試行で `plan_verify` / `implement` / `fix` の final JSON + §9.3 schema validation 成功率 **>= 95%**。`--output-schema` 等の exact validation mechanism は MIG-004 pinned evidence に従う
 - CLI session resume 成功率 **100%** (3 phase × 1 試行 + 予備 2 = 5 試行で全成功)。`codex exec resume <session_id>` 形式を採用する場合は pinned evidence で確認済みであること
@@ -1605,7 +1605,7 @@ AK-001 の Issue / PR close gate と runner 採用 gate は分離する。AK-001
   - `plan_verify`: read-only (`workspace-read` 相当、書込検出で `sandbox_violation`)
 - `.codex/skills/` または `.agents/skills/` 配下が prompt 内 skill 明示で参照可能
 - ChatGPT-managed CLI auth (`codex login`) で動作 (`OPENAI_API_KEY` / `CODEX_API_KEY` unset でも実行可)
-- `codex exec --json` event parse、session id 保存、`--output-schema` による final output validation、final JSON 取得、resume、sandbox flag、approval policy、auth mode 判別が pinned CLI version の help / docs / 実機で一致
+- `codex exec --json` event parse、session id 保存、`--output-schema` による final output validation、final JSON 取得、resume、sandbox flag、approval policy、auth mode 判別が pinned CLI version (Codex CLI 0.128.0, `docs/spike-results.md`) の help / docs / 実機で一致
 - API key auth、auth mode 判別不能、approval prompt 発生、未確認 required flag は fail-closed とし、`prompt_contract_violation` / `network_required` / `sandbox_violation` / `other` の既存 `failure.code` で表現する。現時点では新 `failure.code` を追加しない
 
 未達: v0.1.0 を出荷せず仕様再検討。

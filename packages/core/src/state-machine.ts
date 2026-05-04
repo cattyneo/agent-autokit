@@ -90,6 +90,7 @@ export function transitionTask(
     case "pr_ready":
       task.state = "reviewing";
       task.runtime_phase = "review";
+      resetReviewPhase(task);
       task.pr.number = event.prNumber ?? task.pr.number;
       task.pr.head_sha = event.headSha;
       task.pr.base_sha = event.baseSha ?? task.pr.base_sha;
@@ -97,6 +98,7 @@ export function transitionTask(
       return task;
     case "review_completed":
       task.runtime_phase = "supervise";
+      resetSupervisePhase(task);
       return task;
     case "supervise_accept":
       if (task.review_round + 1 > config.review.max_rounds) {
@@ -106,6 +108,7 @@ export function transitionTask(
       task.state = "fixing";
       task.runtime_phase = "fix";
       task.fix.origin = event.origin;
+      resetFixPhase(task);
       return task;
     case "supervise_no_findings":
     case "supervise_reject_all":
@@ -116,6 +119,7 @@ export function transitionTask(
       task.state = "reviewing";
       task.runtime_phase = "review";
       task.fix.origin = null;
+      resetReviewPhase(task);
       return task;
     case "ci_failed":
       if (task.ci_fix_round + 1 > config.ci.fix_max_rounds) {
@@ -125,6 +129,7 @@ export function transitionTask(
       task.state = "fixing";
       task.runtime_phase = "fix";
       task.fix.origin = "ci";
+      resetFixPhase(task);
       return task;
     case "ci_passed_auto_merge":
     case "auto_merge_reserved":
@@ -250,4 +255,28 @@ function pushFailureHistory(task: TaskEntry, failure: NonNullable<TaskEntry["fai
 
 function resetPhaseAttempt(task: TaskEntry): void {
   task.runtime.phase_attempt = 0;
+}
+
+function resetReviewPhase(task: TaskEntry): void {
+  task.git.checkpoints.review = { before_sha: null, after_sha: null };
+  task.provider_sessions.review.claude_session_id = null;
+}
+
+function resetSupervisePhase(task: TaskEntry): void {
+  task.git.checkpoints.supervise = { before_sha: null, after_sha: null };
+  task.provider_sessions.supervise.claude_session_id = null;
+}
+
+function resetFixPhase(task: TaskEntry): void {
+  task.git.checkpoints.fix = {
+    before_sha: null,
+    rebase_done: null,
+    agent_done: null,
+    commit_done: null,
+    push_done: null,
+    pr_created: null,
+    head_sha_persisted: null,
+    after_sha: null,
+  };
+  task.provider_sessions.fix.codex_session_id = null;
 }

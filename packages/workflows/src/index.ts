@@ -35,6 +35,7 @@ export type WorkflowOptions = {
   config?: AutokitConfig;
   resolvedModels?: Record<string, string>;
   buildPrompt?: (input: WorkflowPromptInput) => string;
+  persistTask?: (task: TaskEntry) => Promise<void> | void;
   now?: () => string;
 };
 
@@ -52,6 +53,44 @@ export type ReviewWorkflowResult = WorkflowResult & {
   acceptedIds: string[];
   rejectedIds: string[];
   fixPrompt?: string;
+};
+
+export type BranchPrLookup =
+  | {
+      state: "OPEN" | "MERGED" | "CLOSED";
+      number: number;
+      headSha: string | null;
+      baseSha?: string | null;
+    }
+  | { state: "NONE" };
+
+export type ImplementFixGitDeps = {
+  getHeadSha: () => Promise<string> | string;
+  stageAll: () => Promise<void> | void;
+  commit: (input: { message: string }) => Promise<string> | string;
+  pushBranch: (branch: string) => Promise<void> | void;
+  findPrForBranch?: (branch: string) => Promise<BranchPrLookup> | BranchPrLookup;
+  createDraftPr: (input: { task: TaskEntry; headSha: string }) => Promise<number> | number;
+  getPrHead: (
+    prNumber: number,
+  ) =>
+    | Promise<{ headSha: string; baseSha?: string | null }>
+    | { headSha: string; baseSha?: string | null };
+  markPrReady: (prNumber: number) => Promise<void> | void;
+  rebaseOntoBase: () =>
+    | Promise<{ ok: true } | { ok: false; message: string }>
+    | { ok: true }
+    | { ok: false; message: string };
+};
+
+export type ImplementFixWorkflowOptions = WorkflowOptions & {
+  git: ImplementFixGitDeps;
+  commitMessage?: (input: { task: TaskEntry; phase: "implement" | "fix" }) => string;
+};
+
+export type ImplementFixWorkflowResult = WorkflowResult & {
+  changedFiles: string[];
+  testsRun: TestEvidence[];
 };
 
 export type PlanVerifyFinding = {
@@ -101,9 +140,30 @@ type SuperviseData = {
   fix_prompt?: string;
 };
 
+type TestEvidence = {
+  command: string;
+  result: "passed" | "failed" | "skipped";
+  summary: string;
+};
+
+type ImplementData = {
+  changed_files: string[];
+  tests_run: TestEvidence[];
+  docs_updated: boolean;
+  notes: string;
+};
+
+type FixData = {
+  changed_files: string[];
+  tests_run: TestEvidence[];
+  resolved_accept_ids: string[];
+  unresolved_accept_ids: string[];
+  notes: string;
+};
+
 const DEFAULT_TIMEOUT_MS = 60_000;
 const CLAUDE_PHASES = new Set<RuntimePhase>(["plan", "plan_fix", "review", "supervise"]);
-const CODEX_PHASES = new Set<RuntimePhase>(["plan_verify"]);
+const CODEX_PHASES = new Set<RuntimePhase>(["plan_verify", "implement", "fix"]);
 
 export async function runPlanningWorkflow(
   inputTask: TaskEntry,
@@ -315,6 +375,240 @@ export async function runReviewSuperviseWorkflow(
   };
 }
 
+export async function runImplementWorkflow(
+  inputTask: TaskEntry,
+  options: ImplementFixWorkflowOptions,
+): Promise<ImplementFixWorkflowResult> {
+  let task = cloneTask(inputTask);
+
+  if (task.state === "planned" && task.runtime_phase === null && task.plan.state === "verified") {
+    const beforeSha = await options.git.getHeadSha();
+    task.git.base_sha ??= beforeSha;
+    task = transitionTask(task, { type: "implement_started", beforeSha: beforeSha });
+    await persistTask(task, options);
+  }
+
+  if (task.state !== "implementing" || task.runtime_phase !== "implement") {
+    return {
+      task: failWorkflow(
+        task,
+        task.runtime_phase ?? "implement",
+        "other",
+        "implement workflow requires state=implementing and runtime_phase=implement",
+        options,
+      ).task,
+      changedFiles: [],
+      testsRun: [],
+    };
+  }
+
+  if (task.git.checkpoints.implement.before_sha === null) {
+    task.git.checkpoints.implement.before_sha = await options.git.getHeadSha();
+    task.git.base_sha ??= task.git.checkpoints.implement.before_sha;
+    await persistTask(task, options);
+  }
+
+  let changedFiles: string[] = [];
+  let testsRun: TestEvidence[] = [];
+
+  if (task.git.checkpoints.implement.agent_done === null) {
+    const runnerResult = await runPhase(task, "implement", options);
+    if (!runnerResult.ok) {
+      return { task: runnerResult.task, changedFiles: [], testsRun: [] };
+    }
+    task = runnerResult.task;
+    const handled = handleNonCompletedOutput(task, "implement", runnerResult.output, options);
+    if (handled !== null) {
+      return { task: handled, changedFiles: [], testsRun: [] };
+    }
+    const data = requireStructuredData<ImplementData>(runnerResult.output, "implement");
+    if (!data.ok) {
+      return {
+        task: failPromptContract(task, "implement", data.message, options),
+        changedFiles: [],
+        testsRun: [],
+      };
+    }
+    changedFiles = data.value.changed_files;
+    testsRun = data.value.tests_run;
+    task.git.checkpoints.implement.agent_done = await options.git.getHeadSha();
+    await persistTask(task, options);
+  }
+
+  if (task.git.checkpoints.implement.commit_done === null) {
+    await options.git.stageAll();
+    task.git.checkpoints.implement.commit_done = await options.git.commit({
+      message:
+        options.commitMessage?.({ task, phase: "implement" }) ??
+        defaultCommitMessage(task, "implement"),
+    });
+    await persistTask(task, options);
+  }
+  const commitSha = task.git.checkpoints.implement.commit_done;
+
+  if (task.git.checkpoints.implement.push_done === null) {
+    await options.git.pushBranch(requireBranch(task));
+    task.git.checkpoints.implement.push_done = commitSha;
+    await persistTask(task, options);
+  }
+
+  if (task.git.checkpoints.implement.pr_created === null) {
+    const restored = await restoreOrCreatePrAfterPush(task, commitSha, options);
+    if (!restored.ok) {
+      return { task: restored.task, changedFiles, testsRun };
+    }
+    task = restored.task;
+  }
+
+  if (task.git.checkpoints.implement.head_sha_persisted === null) {
+    const prNumber = requirePrNumber(task);
+    const prHead = await options.git.getPrHead(prNumber);
+    task.pr.head_sha = prHead.headSha;
+    task.pr.base_sha = prHead.baseSha ?? task.pr.base_sha;
+    task.git.checkpoints.implement.head_sha_persisted = prHead.headSha;
+    await persistTask(task, options);
+  }
+
+  if (task.git.checkpoints.implement.after_sha === null) {
+    const prNumber = requirePrNumber(task);
+    const headSha = requirePrHead(task);
+    await options.git.markPrReady(prNumber);
+    task = transitionTask(task, {
+      type: "pr_ready",
+      headSha,
+      prNumber,
+      baseSha: task.pr.base_sha ?? undefined,
+    });
+    await persistTask(task, options);
+  } else if (task.state === "implementing") {
+    task = transitionTask(task, {
+      type: "pr_ready",
+      headSha: task.git.checkpoints.implement.after_sha,
+      prNumber: task.pr.number ?? undefined,
+      baseSha: task.pr.base_sha ?? undefined,
+    });
+    await persistTask(task, options);
+  }
+
+  return { task, changedFiles, testsRun };
+}
+
+export async function runFixWorkflow(
+  inputTask: TaskEntry,
+  options: ImplementFixWorkflowOptions,
+): Promise<ImplementFixWorkflowResult> {
+  let task = cloneTask(inputTask);
+
+  if (task.state !== "fixing" || task.runtime_phase !== "fix") {
+    return {
+      task: failWorkflow(
+        task,
+        task.runtime_phase ?? "fix",
+        "other",
+        "fix workflow requires state=fixing and runtime_phase=fix",
+        options,
+      ).task,
+      changedFiles: [],
+      testsRun: [],
+    };
+  }
+  if (task.pr.number === null) {
+    return {
+      task: failWorkflow(
+        task,
+        "fix",
+        "pre_pr_active_orphan",
+        "fix workflow requires an existing PR",
+        options,
+      ).task,
+      changedFiles: [],
+      testsRun: [],
+    };
+  }
+  const prNumber = task.pr.number;
+
+  if (task.git.checkpoints.fix.before_sha === null) {
+    task.git.checkpoints.fix.before_sha = await options.git.getHeadSha();
+    await persistTask(task, options);
+  }
+
+  if (task.git.checkpoints.fix.rebase_done === null) {
+    const rebase = await options.git.rebaseOntoBase();
+    if (!rebase.ok) {
+      return {
+        task: pauseWorkflow(task, "fix", "rebase_conflict", rebase.message, options),
+        changedFiles: [],
+        testsRun: [],
+      };
+    }
+    task.git.checkpoints.fix.rebase_done = await options.git.getHeadSha();
+    await persistTask(task, options);
+  }
+
+  let changedFiles: string[] = [];
+  let testsRun: TestEvidence[] = [];
+
+  if (task.git.checkpoints.fix.agent_done === null) {
+    const runnerResult = await runPhase(task, "fix", options);
+    if (!runnerResult.ok) {
+      return { task: runnerResult.task, changedFiles: [], testsRun: [] };
+    }
+    task = runnerResult.task;
+    const handled = handleNonCompletedOutput(task, "fix", runnerResult.output, options);
+    if (handled !== null) {
+      return { task: handled, changedFiles: [], testsRun: [] };
+    }
+    const data = requireStructuredData<FixData>(runnerResult.output, "fix");
+    if (!data.ok) {
+      return {
+        task: failPromptContract(task, "fix", data.message, options),
+        changedFiles: [],
+        testsRun: [],
+      };
+    }
+    changedFiles = data.value.changed_files;
+    testsRun = data.value.tests_run;
+    task.git.checkpoints.fix.agent_done = await options.git.getHeadSha();
+    await persistTask(task, options);
+  }
+
+  if (task.git.checkpoints.fix.commit_done === null) {
+    await options.git.stageAll();
+    task.git.checkpoints.fix.commit_done = await options.git.commit({
+      message: options.commitMessage?.({ task, phase: "fix" }) ?? defaultCommitMessage(task, "fix"),
+    });
+    await persistTask(task, options);
+  }
+  const commitSha = task.git.checkpoints.fix.commit_done;
+
+  if (task.git.checkpoints.fix.push_done === null) {
+    await options.git.pushBranch(requireBranch(task));
+    task.git.checkpoints.fix.push_done = commitSha;
+    await persistTask(task, options);
+  }
+
+  if (task.git.checkpoints.fix.head_sha_persisted === null) {
+    const prHead = await options.git.getPrHead(prNumber);
+    task.pr.head_sha = prHead.headSha;
+    task.pr.base_sha = prHead.baseSha ?? task.pr.base_sha;
+    task.git.checkpoints.fix.head_sha_persisted = prHead.headSha;
+    await persistTask(task, options);
+  }
+
+  if (task.git.checkpoints.fix.after_sha === null) {
+    task.git.checkpoints.fix.after_sha = requirePrHead(task);
+    task = transitionTask(task, { type: "fix_pushed" });
+    task.git.checkpoints.fix.after_sha = requirePrHead(task);
+    await persistTask(task, options);
+  } else if (task.state === "fixing") {
+    task = transitionTask(task, { type: "fix_pushed" });
+    task.git.checkpoints.fix.after_sha = requirePrHead(task);
+    await persistTask(task, options);
+  }
+
+  return { task, changedFiles, testsRun };
+}
+
 export function assignFindingIds(findings: ReviewFinding[]): ReviewFindingWithId[] {
   return findings.map((finding) => ({
     ...finding,
@@ -344,9 +638,14 @@ function buildAgentRunInput(
     throw new Error(`unsupported workflow runner phase: ${phase}`);
   }
   const provider = phase === "plan_verify" ? "codex" : "claude";
-  const workspaceScope = phase === "review" || phase === "supervise" ? "worktree" : "repo";
+  const providerForPhase = CODEX_PHASES.has(phase) ? "codex" : provider;
+  const workspaceScope =
+    phase === "review" || phase === "supervise" || phase === "implement" || phase === "fix"
+      ? "worktree"
+      : "repo";
+  const mode = phase === "implement" || phase === "fix" ? "workspace-write" : "readonly";
   return {
-    provider,
+    provider: providerForPhase,
     phase,
     cwd:
       workspaceScope === "worktree" ? (options.worktreeRoot ?? options.repoRoot) : options.repoRoot,
@@ -355,7 +654,7 @@ function buildAgentRunInput(
     model: task.runtime.resolved_model[phase] ?? "auto",
     resume: resumeForPhase(task, phase),
     permissions: {
-      mode: "readonly",
+      mode,
       allowNetwork: false,
       workspaceScope,
       workspaceRoot:
@@ -397,6 +696,14 @@ function resumeForPhase(task: TaskEntry, phase: RuntimePhase): AgentRunInput["re
       return task.provider_sessions.supervise.claude_session_id
         ? { claudeSessionId: task.provider_sessions.supervise.claude_session_id }
         : undefined;
+    case "implement":
+      return task.provider_sessions.implement.codex_session_id
+        ? { codexSessionId: task.provider_sessions.implement.codex_session_id }
+        : undefined;
+    case "fix":
+      return task.provider_sessions.fix.codex_session_id
+        ? { codexSessionId: task.provider_sessions.fix.codex_session_id }
+        : undefined;
     default:
       return undefined;
   }
@@ -423,6 +730,12 @@ function applyRunnerMetadata(
   }
   if (output.session?.codexSessionId !== undefined && phase === "plan_verify") {
     next.provider_sessions.plan_verify.codex_session_id = output.session.codexSessionId;
+  }
+  if (output.session?.codexSessionId !== undefined && phase === "implement") {
+    next.provider_sessions.implement.codex_session_id = output.session.codexSessionId;
+  }
+  if (output.session?.codexSessionId !== undefined && phase === "fix") {
+    next.provider_sessions.fix.codex_session_id = output.session.codexSessionId;
   }
   return next;
 }
@@ -626,6 +939,74 @@ function normalizeFindingFile(file: string): string {
 
 function normalizeFindingTitle(title: string): string {
   return title.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+async function persistTask(task: TaskEntry, options: WorkflowOptions): Promise<void> {
+  await options.persistTask?.(cloneTask(task));
+}
+
+async function restoreOrCreatePrAfterPush(
+  task: TaskEntry,
+  headSha: string,
+  options: ImplementFixWorkflowOptions,
+): Promise<{ ok: true; task: TaskEntry } | { ok: false; task: TaskEntry }> {
+  const branch = requireBranch(task);
+  const existing = await options.git.findPrForBranch?.(branch);
+  if (existing !== undefined && existing.state !== "NONE") {
+    if (existing.state !== "OPEN") {
+      return {
+        ok: false,
+        task: pauseWorkflow(
+          task,
+          "implement",
+          "pre_pr_active_orphan",
+          `branch PR is ${existing.state.toLowerCase()}`,
+          options,
+        ),
+      };
+    }
+    const next = cloneTask(task);
+    next.pr.number = existing.number;
+    next.pr.head_sha = existing.headSha;
+    next.pr.base_sha = existing.baseSha ?? next.pr.base_sha;
+    next.git.checkpoints.implement.pr_created = existing.number;
+    await persistTask(next, options);
+    return { ok: true, task: next };
+  }
+
+  const next = cloneTask(task);
+  const prNumber = await options.git.createDraftPr({ task: next, headSha });
+  next.pr.number = prNumber;
+  next.pr.created_at = options.now?.() ?? new Date().toISOString();
+  next.git.checkpoints.implement.pr_created = prNumber;
+  await persistTask(next, options);
+  return { ok: true, task: next };
+}
+
+function defaultCommitMessage(task: TaskEntry, phase: "implement" | "fix"): string {
+  const prefix = phase === "implement" ? "Implement" : "Fix";
+  return `${prefix} issue #${task.issue}`;
+}
+
+function requireBranch(task: TaskEntry): string {
+  if (task.branch === null) {
+    throw new Error("task branch is required");
+  }
+  return task.branch;
+}
+
+function requirePrNumber(task: TaskEntry): number {
+  if (task.pr.number === null) {
+    throw new Error("task PR number is required");
+  }
+  return task.pr.number;
+}
+
+function requirePrHead(task: TaskEntry): string {
+  if (task.pr.head_sha === null) {
+    throw new Error("task PR head SHA is required");
+  }
+  return task.pr.head_sha;
 }
 
 function isRecord(value: unknown): value is PromptContractData {

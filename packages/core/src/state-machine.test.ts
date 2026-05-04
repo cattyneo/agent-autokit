@@ -234,6 +234,60 @@ describe("core state machine", () => {
     assert.equal(reviewing.fix.origin, null);
     assert.equal(reviewing.ci_fix_round, 0);
   });
+
+  it("clears per-phase checkpoints and sessions when starting new review/fix phases", () => {
+    const stale = {
+      ...baseTask("ci_waiting", "ci_wait"),
+      git: {
+        ...baseTask().git,
+        checkpoints: {
+          ...baseTask().git.checkpoints,
+          review: { before_sha: "old-review", after_sha: "old-review-done" },
+          supervise: { before_sha: "old-supervise", after_sha: "old-supervise-done" },
+          fix: {
+            before_sha: "old-before",
+            rebase_done: "old-rebase",
+            agent_done: "old-agent",
+            commit_done: "old-commit",
+            push_done: "old-push",
+            pr_created: 51,
+            head_sha_persisted: "old-head",
+            after_sha: "old-after",
+          },
+        },
+      },
+      provider_sessions: {
+        ...baseTask().provider_sessions,
+        review: { claude_session_id: "old-review-session" },
+        supervise: { claude_session_id: "old-supervise-session" },
+        fix: { codex_session_id: "old-fix-session" },
+      },
+    };
+
+    const fixing = transitionTask(stale, { type: "ci_failed" }, DEFAULT_CONFIG);
+    assert.deepEqual(fixing.git.checkpoints.fix, {
+      before_sha: null,
+      rebase_done: null,
+      agent_done: null,
+      commit_done: null,
+      push_done: null,
+      pr_created: null,
+      head_sha_persisted: null,
+      after_sha: null,
+    });
+    assert.equal(fixing.provider_sessions.fix.codex_session_id, null);
+
+    const reviewing = transitionTask(fixing, { type: "fix_pushed" }, DEFAULT_CONFIG);
+    assert.deepEqual(reviewing.git.checkpoints.review, { before_sha: null, after_sha: null });
+    assert.equal(reviewing.provider_sessions.review.claude_session_id, null);
+
+    const supervising = transitionTask(reviewing, { type: "review_completed" }, DEFAULT_CONFIG);
+    assert.deepEqual(supervising.git.checkpoints.supervise, {
+      before_sha: null,
+      after_sha: null,
+    });
+    assert.equal(supervising.provider_sessions.supervise.claude_session_id, null);
+  });
 });
 
 function baseTask(

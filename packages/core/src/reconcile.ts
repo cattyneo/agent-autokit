@@ -10,6 +10,7 @@ export type PullRequestObservation = {
 
 export type ReconcileObservation = {
   pr?: PullRequestObservation;
+  prForBranch?: (PullRequestObservation & { number: number }) | { state: "NONE" };
   branchExists?: boolean;
   worktreeExists?: boolean;
   branchDeleteFailed?: boolean;
@@ -21,7 +22,15 @@ export type ReconcileAction =
   | "resume_phase"
   | "cleanup_remaining"
   | "advance_after_checkpoint"
-  | "resume_session";
+  | "resume_session"
+  | "restart_phase"
+  | "commit_after_agent"
+  | "push_after_commit"
+  | "restore_pr_after_push"
+  | "persist_head_after_pr"
+  | "ready_pr_after_head"
+  | "observe_fix_head_after_push"
+  | "run_fix_after_rebase";
 
 export type ReconcileResult = {
   task: TaskEntry;
@@ -41,47 +50,10 @@ export function reconcileTask(task: TaskEntry, observation: ReconcileObservation
     task.pr.number === null &&
     ["planning", "planned", "implementing", "reviewing"].includes(task.state)
   ) {
-    return reconcilePrePrActiveTask(task);
+    return reconcilePrePrActiveTask(task, observation);
   }
 
   return { task: cloneTask(task), action: "none" };
-}
-
-function reconcilePrBackedTask(task: TaskEntry, pr: PullRequestObservation): ReconcileResult {
-  if (pr.state === "MERGED" && pr.merged) {
-    if (task.pr.head_sha === null || pr.headRefOid === null || pr.headRefOid !== task.pr.head_sha) {
-      return {
-        task: transitionTask(task, {
-          type: "pause",
-          failure: failure("merge_sha_mismatch", "merge"),
-        }),
-        action: "none",
-      };
-    }
-    return {
-      task: transitionTask(task, { type: "pr_merged", headSha: pr.headRefOid }),
-      action: "cleanup_remaining",
-    };
-  }
-  if (pr.state === "CLOSED") {
-    return {
-      task: transitionTask(task, {
-        type: "pause",
-        failure: failure("other", task.runtime_phase ?? task.state),
-      }),
-      action: "none",
-    };
-  }
-  if (task.pr.head_sha === null || pr.headRefOid === null || pr.headRefOid !== task.pr.head_sha) {
-    return {
-      task: transitionTask(task, {
-        type: "pause",
-        failure: failure("merge_sha_mismatch", task.runtime_phase ?? task.state),
-      }),
-      action: "none",
-    };
-  }
-  return { task: cloneTask(task), action: "resume_phase" };
 }
 
 function reconcileCleaning(task: TaskEntry, observation: ReconcileObservation): ReconcileResult {
@@ -109,7 +81,10 @@ function reconcileCleaning(task: TaskEntry, observation: ReconcileObservation): 
   return { task: cloneTask(task), action: "cleanup_remaining" };
 }
 
-function reconcilePrePrActiveTask(task: TaskEntry): ReconcileResult {
+function reconcilePrePrActiveTask(
+  task: TaskEntry,
+  observation: ReconcileObservation,
+): ReconcileResult {
   if (task.state === "planned") {
     if (task.plan.state === "verified" && task.runtime_phase === null) {
       if (task.git.base_sha === null) {
@@ -140,18 +115,192 @@ function reconcilePrePrActiveTask(task: TaskEntry): ReconcileResult {
 
   const phase = task.runtime_phase;
   if (phase !== null && phase !== "ci_wait" && phase !== "merge") {
-    const checkpoint = task.git.checkpoints[phase];
-    if (checkpoint.after_sha !== null) {
-      return { task: cloneTask(task), action: "advance_after_checkpoint" };
+    if (phase === "implement" && task.pr.number === null) {
+      const result = reconcileImplementPrePrCheckpoint(task, observation);
+      if (result !== null) {
+        return result;
+      }
     }
-    if (checkpoint.before_sha !== null && hasProviderSession(task, phase)) {
-      return { task: cloneTask(task), action: "resume_session" };
-    }
+    return reconcileAgentCheckpoint(task);
   }
   return {
     task: transitionTask(task, {
       type: "pause",
       failure: failure("pre_pr_active_orphan", phase ?? task.state),
+    }),
+    action: "none",
+  };
+}
+
+function reconcilePrBackedTask(task: TaskEntry, pr: PullRequestObservation): ReconcileResult {
+  if (pr.state === "MERGED" && pr.merged) {
+    if (task.pr.head_sha === null || pr.headRefOid === null || pr.headRefOid !== task.pr.head_sha) {
+      return {
+        task: transitionTask(task, {
+          type: "pause",
+          failure: failure("merge_sha_mismatch", "merge"),
+        }),
+        action: "none",
+      };
+    }
+    return {
+      task: transitionTask(task, { type: "pr_merged", headSha: pr.headRefOid }),
+      action: "cleanup_remaining",
+    };
+  }
+  if (pr.state === "CLOSED") {
+    return {
+      task: transitionTask(task, {
+        type: "pause",
+        failure: failure("other", task.runtime_phase ?? task.state),
+      }),
+      action: "none",
+    };
+  }
+  if (task.pr.head_sha !== null && (pr.headRefOid === null || pr.headRefOid !== task.pr.head_sha)) {
+    return {
+      task: transitionTask(task, {
+        type: "pause",
+        failure: failure("merge_sha_mismatch", task.runtime_phase ?? task.state),
+      }),
+      action: "none",
+    };
+  }
+  if (task.runtime_phase === "ci_wait" || task.runtime_phase === "merge") {
+    return { task: cloneTask(task), action: "resume_phase" };
+  }
+  return reconcileAgentCheckpoint(task);
+}
+
+function reconcileAgentCheckpoint(task: TaskEntry): ReconcileResult {
+  const phase = task.runtime_phase;
+  if (phase === null || phase === "ci_wait" || phase === "merge") {
+    return { task: cloneTask(task), action: "none" };
+  }
+  if (phase === "implement") {
+    return reconcileImplementCheckpoint(task);
+  }
+  if (phase === "fix") {
+    return reconcileFixCheckpoint(task);
+  }
+
+  const checkpoint = task.git.checkpoints[phase];
+  if (checkpoint.after_sha !== null) {
+    return { task: cloneTask(task), action: "advance_after_checkpoint" };
+  }
+  if (checkpoint.before_sha !== null && hasProviderSession(task, phase)) {
+    return { task: cloneTask(task), action: "resume_session" };
+  }
+  if (checkpoint.before_sha !== null) {
+    return { task: cloneTask(task), action: "restart_phase" };
+  }
+  return {
+    task: transitionTask(task, {
+      type: "pause",
+      failure: failure("pre_pr_active_orphan", phase),
+    }),
+    action: "none",
+  };
+}
+
+function reconcileImplementCheckpoint(task: TaskEntry): ReconcileResult {
+  const checkpoint = task.git.checkpoints.implement;
+  if (checkpoint.after_sha !== null) {
+    return { task: cloneTask(task), action: "advance_after_checkpoint" };
+  }
+  if (checkpoint.head_sha_persisted !== null) {
+    return { task: cloneTask(task), action: "ready_pr_after_head" };
+  }
+  if (checkpoint.pr_created !== null) {
+    return { task: cloneTask(task), action: "persist_head_after_pr" };
+  }
+  if (checkpoint.push_done !== null) {
+    return { task: cloneTask(task), action: "restore_pr_after_push" };
+  }
+  if (checkpoint.commit_done !== null) {
+    return { task: cloneTask(task), action: "push_after_commit" };
+  }
+  if (checkpoint.agent_done !== null) {
+    return { task: cloneTask(task), action: "commit_after_agent" };
+  }
+  if (checkpoint.before_sha !== null && hasProviderSession(task, "implement")) {
+    return { task: cloneTask(task), action: "resume_session" };
+  }
+  if (checkpoint.before_sha !== null) {
+    return { task: cloneTask(task), action: "restart_phase" };
+  }
+  return {
+    task: transitionTask(task, {
+      type: "pause",
+      failure: failure("pre_pr_active_orphan", "implement"),
+    }),
+    action: "none",
+  };
+}
+
+function reconcileImplementPrePrCheckpoint(
+  task: TaskEntry,
+  observation: ReconcileObservation,
+): ReconcileResult | null {
+  const checkpoint = task.git.checkpoints.implement;
+  if (checkpoint.push_done === null || observation.prForBranch === undefined) {
+    return null;
+  }
+  if (observation.prForBranch.state === "NONE" || observation.prForBranch.state === "CLOSED") {
+    return {
+      task: transitionTask(task, {
+        type: "pause",
+        failure: failure("pre_pr_active_orphan", "implement"),
+      }),
+      action: "none",
+    };
+  }
+  if (observation.prForBranch.state === "MERGED") {
+    return {
+      task: transitionTask(task, {
+        type: "pause",
+        failure: failure("pre_pr_active_orphan", "implement"),
+      }),
+      action: "none",
+    };
+  }
+  const next = cloneTask(task);
+  next.pr.number = observation.prForBranch.number;
+  next.pr.head_sha = observation.prForBranch.headRefOid;
+  next.git.checkpoints.implement.pr_created = observation.prForBranch.number;
+  return { task: next, action: "persist_head_after_pr" };
+}
+
+function reconcileFixCheckpoint(task: TaskEntry): ReconcileResult {
+  const checkpoint = task.git.checkpoints.fix;
+  if (checkpoint.after_sha !== null) {
+    return { task: cloneTask(task), action: "advance_after_checkpoint" };
+  }
+  if (checkpoint.head_sha_persisted !== null) {
+    return { task: cloneTask(task), action: "advance_after_checkpoint" };
+  }
+  if (checkpoint.push_done !== null) {
+    return { task: cloneTask(task), action: "observe_fix_head_after_push" };
+  }
+  if (checkpoint.commit_done !== null) {
+    return { task: cloneTask(task), action: "push_after_commit" };
+  }
+  if (checkpoint.agent_done !== null) {
+    return { task: cloneTask(task), action: "commit_after_agent" };
+  }
+  if (checkpoint.rebase_done !== null) {
+    return { task: cloneTask(task), action: "run_fix_after_rebase" };
+  }
+  if (checkpoint.before_sha !== null && hasProviderSession(task, "fix")) {
+    return { task: cloneTask(task), action: "resume_session" };
+  }
+  if (checkpoint.before_sha !== null) {
+    return { task: cloneTask(task), action: "restart_phase" };
+  }
+  return {
+    task: transitionTask(task, {
+      type: "pause",
+      failure: failure("pre_pr_active_orphan", "fix"),
     }),
     action: "none",
   };

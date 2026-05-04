@@ -101,7 +101,11 @@ async function main(): Promise<number> {
 
   assertApiKeysUnset();
 
-  const provider = readOption(args, "--provider");
+  const provider = readProvider(args);
+  if (provider === undefined) {
+    process.stderr.write("--provider must be claude, codex, or all.\n");
+    return 2;
+  }
   const specs =
     provider === "claude"
       ? CLAUDE_PHASES
@@ -639,6 +643,14 @@ function formatProgress(result: AttemptResult): string {
 function readOption(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
   return index >= 0 ? args[index + 1] : undefined;
+}
+
+function readProvider(args: string[]): Provider | "all" | undefined {
+  const provider = readOption(args, "--provider") ?? "all";
+  if (provider === "claude" || provider === "codex" || provider === "all") {
+    return provider;
+  }
+  return undefined;
 }
 
 function printHelp(): void {

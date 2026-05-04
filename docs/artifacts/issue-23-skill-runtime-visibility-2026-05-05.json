@@ -1,0 +1,23 @@
+{
+  "generatedAt": "2026-05-05T04:22:00+09:00",
+  "apiKeysUnset": true,
+  "fixtureRoot": "e2e/fixtures/runner-visibility",
+  "checks": [
+    {
+      "provider": "claude",
+      "sessionId": "041c8c1a-450f-4bdc-ba8a-6bf6b6094723",
+      "commandShape": "claude -p --output-format json --tools \"\" --setting-sources project --json-schema <schema> <prompt>",
+      "skill": "autokit-question",
+      "observed": "Multiple questions must be split into separate turns.",
+      "result": "passed"
+    },
+    {
+      "provider": "codex",
+      "threadId": "019df472-91c6-7b81-9cc5-d153e2275088",
+      "commandShape": "codex -a never exec --json --sandbox read-only --output-schema <schema-file> -o <output-file> <prompt>",
+      "skill": "autokit-question",
+      "observed": "Multiple questions must be split into separate turns.",
+      "result": "passed"
+    }
+  ]
+}

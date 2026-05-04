@@ -49,7 +49,7 @@ export function reconcileTask(task: TaskEntry, observation: ReconcileObservation
 
 function reconcilePrBackedTask(task: TaskEntry, pr: PullRequestObservation): ReconcileResult {
   if (pr.state === "MERGED" && pr.merged) {
-    if (task.pr.head_sha !== null && pr.headRefOid !== task.pr.head_sha) {
+    if (task.pr.head_sha === null || pr.headRefOid === null || pr.headRefOid !== task.pr.head_sha) {
       return {
         task: transitionTask(task, {
           type: "pause",
@@ -72,7 +72,7 @@ function reconcilePrBackedTask(task: TaskEntry, pr: PullRequestObservation): Rec
       action: "none",
     };
   }
-  if (task.pr.head_sha !== null && pr.headRefOid !== task.pr.head_sha) {
+  if (task.pr.head_sha === null || pr.headRefOid === null || pr.headRefOid !== task.pr.head_sha) {
     return {
       task: transitionTask(task, {
         type: "pause",
@@ -112,10 +112,19 @@ function reconcileCleaning(task: TaskEntry, observation: ReconcileObservation): 
 function reconcilePrePrActiveTask(task: TaskEntry): ReconcileResult {
   if (task.state === "planned") {
     if (task.plan.state === "verified" && task.runtime_phase === null) {
+      if (task.git.base_sha === null) {
+        return {
+          task: transitionTask(task, {
+            type: "pause",
+            failure: failure("pre_pr_active_orphan", "planned"),
+          }),
+          action: "none",
+        };
+      }
       return {
         task: transitionTask(task, {
           type: "implement_started",
-          beforeSha: task.git.base_sha ?? "",
+          beforeSha: task.git.base_sha,
         }),
         action: "none",
       };

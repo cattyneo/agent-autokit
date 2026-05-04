@@ -99,6 +99,7 @@ describe("core state machine", () => {
       "failed",
     );
 
+    task = { ...task, pr: { ...task.pr, head_sha: "head" } };
     const merging = transitionTask(task, { type: "auto_merge_reserved" });
     assert.equal(merging.state, "merging");
     assert.equal(merging.runtime_phase, "merge");
@@ -112,6 +113,16 @@ describe("core state machine", () => {
         {
           type: "pr_merged",
           headSha: "actual",
+        },
+      ).failure?.code,
+      "merge_sha_mismatch",
+    );
+    assert.equal(
+      transitionTask(
+        { ...merging, pr: { ...merging.pr, head_sha: "expected" } },
+        {
+          type: "pr_merged",
+          headSha: null,
         },
       ).failure?.code,
       "merge_sha_mismatch",
@@ -169,6 +180,8 @@ describe("core state machine", () => {
     });
     const resumed = transitionTask(paused, { type: "resume" });
     assert.equal(resumed.state, "reviewing");
+    assert.equal(resumed.failure, null);
+    assert.equal(resumed.failure_history[0].code, "manual_merge_required");
 
     const failed = transitionTask(baseTask("planning", "plan"), {
       type: "fail",

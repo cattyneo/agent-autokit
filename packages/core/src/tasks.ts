@@ -288,13 +288,18 @@ export function loadTasksFile(path: string, options: LoadTasksFileOptions = {}):
 }
 
 export function writeTasksFileAtomic(path: string, tasksFile: TasksFile): void {
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
   if (existsSync(path)) {
-    copyFileSync(path, `${path}.bak`);
+    const backupPath = `${path}.bak`;
+    copyFileSync(path, backupPath);
+    fsyncExistingFile(backupPath);
+    fsyncDirectory(directory);
   }
   const tmpPath = `${path}.tmp`;
   writeFileContents(tmpPath, stringify(tasksFile));
   renameSync(tmpPath, path);
+  fsyncDirectory(directory);
 }
 
 export function cloneTask<T>(value: T): T {
@@ -536,6 +541,24 @@ function writeFileContents(path: string, contents: string): void {
   try {
     fchmodSync(fd, 0o600);
     writeSync(fd, contents);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function fsyncExistingFile(path: string): void {
+  const fd = openSync(path, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function fsyncDirectory(path: string): void {
+  const fd = openSync(path, "r");
+  try {
     fsyncSync(fd);
   } finally {
     closeSync(fd);

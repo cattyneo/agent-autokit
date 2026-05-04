@@ -143,8 +143,8 @@ export function transitionTask(
         : pause(task, "ci_timeout", "CI wait timed out", "ci_wait");
     case "pr_merged":
       if (
-        task.pr.head_sha !== null &&
-        event.headSha !== null &&
+        task.pr.head_sha === null ||
+        event.headSha === null ||
         event.headSha !== task.pr.head_sha
       ) {
         return pause(task, "merge_sha_mismatch", "merged PR head SHA mismatch", "merge");
@@ -174,6 +174,7 @@ export function transitionTask(
       return failWithFailure(task, event.failure);
     case "resume":
       task.state = task.runtime.previous_state ?? task.state;
+      task.failure = null;
       return task;
     case "retry_reset":
       task.state = "queued";

@@ -22,6 +22,12 @@ describe("core reconcile", () => {
     );
     assert.equal(
       reconcileTask(task, {
+        pr: { state: "MERGED", merged: true, headRefOid: null, mergeable: "UNKNOWN" },
+      }).task.failure?.code,
+      "merge_sha_mismatch",
+    );
+    assert.equal(
+      reconcileTask(task, {
         pr: { state: "CLOSED", merged: false, headRefOid: "abc", mergeable: "UNKNOWN" },
       }).task.failure?.code,
       "other",
@@ -67,8 +73,19 @@ describe("core reconcile", () => {
     const plannedVerified = {
       ...baseTask("planned", null),
       plan: { ...baseTask().plan, state: "verified" as const },
+      git: { ...baseTask().git, base_sha: "base" },
     };
     assert.equal(reconcileTask(plannedVerified, {}).task.state, "implementing");
+    assert.equal(
+      reconcileTask(
+        {
+          ...baseTask("planned", null),
+          plan: { ...baseTask().plan, state: "verified" as const },
+        },
+        {},
+      ).task.failure?.code,
+      "pre_pr_active_orphan",
+    );
 
     const plannedPending = baseTask("planned", null);
     assert.equal(reconcileTask(plannedPending, {}).task.failure?.code, "pre_pr_active_orphan");

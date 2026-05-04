@@ -172,6 +172,38 @@ describe("review and supervise workflow", () => {
     assert.equal(calls[1].phase, "supervise");
   });
 
+  it("records rejected findings even when the same supervisor round accepts other findings", async () => {
+    const accepted = reviewFinding({ title: "Must fix" });
+    const acceptedId = computeFindingId(accepted);
+    const rejected = reviewFinding({ title: "Known trade-off" });
+    const rejectedId = computeFindingId(rejected);
+
+    const result = await runReviewSuperviseWorkflow(reviewingTask(), {
+      runner: queueRunner(
+        [],
+        [
+          completed("claude", { findings: [accepted, rejected] }),
+          completed("claude", {
+            accept_ids: [acceptedId],
+            reject_ids: [rejectedId],
+            reject_reasons: { [rejectedId]: "Intentional for MVP." },
+            fix_prompt: "Fix accepted finding only.",
+          }),
+        ],
+      ),
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(result.task.state, "fixing");
+    assert.equal(result.task.review_findings[0].round, 1);
+    assert.deepEqual(result.task.review_findings[0].reject_ids, [rejectedId]);
+    assert.equal(result.task.review_findings[0].reject_reasons[rejectedId], "Intentional for MVP.");
+    assert.equal(result.task.reject_history.length, 1);
+    assert.equal(result.task.reject_history[0].finding_id, rejectedId);
+    assert.equal(result.task.reject_history[0].reason, "Intentional for MVP.");
+  });
+
   it("records new rejects once and short-circuits known rejected findings to ci_waiting", async () => {
     const finding = reviewFinding({ title: "Accepted trade-off" });
     const id = computeFindingId(finding);

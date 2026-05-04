@@ -293,6 +293,7 @@ export async function runReviewSuperviseWorkflow(
     reject_ids: [...superviseData.value.reject_ids],
     reject_reasons: { ...superviseData.value.reject_reasons },
   });
+  upsertRejectHistory(task, findings, superviseData.value, decisionRound);
 
   if (superviseData.value.accept_ids.length > 0) {
     task = transitionTask(task, { type: "supervise_accept", origin: "review" }, config);
@@ -305,7 +306,6 @@ export async function runReviewSuperviseWorkflow(
     };
   }
 
-  upsertRejectHistory(task, findings, superviseData.value, decisionRound);
   task = transitionTask(task, { type: "supervise_reject_all" }, config);
   return {
     task,

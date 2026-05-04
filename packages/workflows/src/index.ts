@@ -8,6 +8,7 @@ import {
   cloneTask,
   DEFAULT_CONFIG,
   type FailureCode,
+  failureCodes,
   makeFailure,
   type PromptContractData,
   promptContractForPhase,
@@ -135,8 +136,12 @@ export async function runPlanningWorkflow(
       };
     }
 
-    const output = await options.runner(buildAgentRunInput(task, phase, options));
-    task = applyRunnerMetadata(task, phase, output);
+    const runnerResult = await runPhase(task, phase, options);
+    if (!runnerResult.ok) {
+      return { task: runnerResult.task, planMarkdown, verifierFindings };
+    }
+    const { output } = runnerResult;
+    task = runnerResult.task;
     const handled = handleNonCompletedOutput(task, phase, output, options);
     if (handled !== null) {
       return { task: handled, planMarkdown, verifierFindings };
@@ -222,8 +227,12 @@ export async function runReviewSuperviseWorkflow(
     };
   }
 
-  const reviewOutput = await options.runner(buildAgentRunInput(task, "review", options));
-  task = applyRunnerMetadata(task, "review", reviewOutput);
+  const reviewRunnerResult = await runPhase(task, "review", options);
+  if (!reviewRunnerResult.ok) {
+    return { task: reviewRunnerResult.task, findings, acceptedIds: [], rejectedIds: [] };
+  }
+  const reviewOutput = reviewRunnerResult.output;
+  task = reviewRunnerResult.task;
   const handledReview = handleNonCompletedOutput(task, "review", reviewOutput, options);
   if (handledReview !== null) {
     return { task: handledReview, findings, acceptedIds: [], rejectedIds: [] };
@@ -246,10 +255,12 @@ export async function runReviewSuperviseWorkflow(
     return { task, findings, acceptedIds: [], rejectedIds: [] };
   }
 
-  const superviseOutput = await options.runner(
-    buildAgentRunInput(task, "supervise", options, findings),
-  );
-  task = applyRunnerMetadata(task, "supervise", superviseOutput);
+  const superviseRunnerResult = await runPhase(task, "supervise", options, findings);
+  if (!superviseRunnerResult.ok) {
+    return { task: superviseRunnerResult.task, findings, acceptedIds: [], rejectedIds: [] };
+  }
+  const superviseOutput = superviseRunnerResult.output;
+  task = superviseRunnerResult.task;
   const handledSupervise = handleNonCompletedOutput(task, "supervise", superviseOutput, options);
   if (handledSupervise !== null) {
     return { task: handledSupervise, findings, acceptedIds: [], rejectedIds: [] };
@@ -416,6 +427,20 @@ function applyRunnerMetadata(
   return next;
 }
 
+async function runPhase(
+  task: TaskEntry,
+  phase: RuntimePhase,
+  options: WorkflowOptions,
+  currentFindings?: ReviewFindingWithId[],
+): Promise<{ ok: true; task: TaskEntry; output: AgentRunOutput } | { ok: false; task: TaskEntry }> {
+  try {
+    const output = await options.runner(buildAgentRunInput(task, phase, options, currentFindings));
+    return { ok: true, task: applyRunnerMetadata(task, phase, output), output };
+  } catch (error) {
+    return { ok: false, task: applyRunnerError(task, phase, error, options) };
+  }
+}
+
 function handleNonCompletedOutput(
   task: TaskEntry,
   phase: RuntimePhase,
@@ -441,6 +466,20 @@ function handleNonCompletedOutput(
     return pauseWorkflow(task, phase, "other", output.summary, options);
   }
   return failWorkflow(task, phase, "other", output.summary, options).task;
+}
+
+function applyRunnerError(
+  task: TaskEntry,
+  phase: RuntimePhase,
+  error: unknown,
+  options: WorkflowOptions,
+): TaskEntry {
+  const code = failureCodeFromError(error) ?? "other";
+  const message = error instanceof Error ? error.message : "runner failed";
+  if (PAUSED_FAILURE_CODES.has(code)) {
+    return pauseWorkflow(task, phase, code, message, options);
+  }
+  return failWorkflow(task, phase, code, message, options).task;
 }
 
 function requireStructuredData<T>(
@@ -499,11 +538,13 @@ function validateSupervisorDecision(
   const currentIds = new Set(findings.map((finding) => finding.finding_id));
   const accepted = new Set<string>();
   const rejected = new Set<string>();
+  const knownRejected = rejectedFindingIds(task);
 
   for (const id of data.accept_ids) {
     if (accepted.has(id)) errors.push(`duplicate accept_id: ${id}`);
     accepted.add(id);
     if (!currentIds.has(id)) errors.push(`accept_id is not in current findings: ${id}`);
+    if (knownRejected.has(id)) errors.push(`known rejected finding_id cannot be accepted: ${id}`);
   }
   for (const id of data.reject_ids) {
     if (rejected.has(id)) errors.push(`duplicate reject_id: ${id}`);
@@ -515,7 +556,6 @@ function validateSupervisorDecision(
     if (rejected.has(id)) errors.push(`finding_id cannot be both accepted and rejected: ${id}`);
   }
 
-  const knownRejected = rejectedFindingIds(task);
   for (const id of currentIds) {
     if (!accepted.has(id) && !rejected.has(id) && !knownRejected.has(id)) {
       errors.push(`finding_id is not classified: ${id}`);
@@ -585,9 +625,40 @@ function normalizeFindingFile(file: string): string {
 }
 
 function normalizeFindingTitle(title: string): string {
-  return title.trim().replace(/\s+/g, " ");
+  return title.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 function isRecord(value: unknown): value is PromptContractData {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+function failureCodeFromError(error: unknown): FailureCode | undefined {
+  if (!isRecord(error) || typeof error.code !== "string") {
+    return undefined;
+  }
+  return isFailureCode(error.code) ? error.code : undefined;
+}
+
+function isFailureCode(code: string): code is FailureCode {
+  return (failureCodes as readonly string[]).includes(code);
+}
+
+const PAUSED_FAILURE_CODES = new Set<FailureCode>([
+  "rate_limited",
+  "branch_protection",
+  "need_input_pending",
+  "interrupted",
+  "branch_delete_failed",
+  "worktree_remove_failed",
+  "merge_sha_mismatch",
+  "ci_timeout",
+  "merge_timeout",
+  "rebase_conflict",
+  "retry_cleanup_failed",
+  "sanitize_violation",
+  "sandbox_violation",
+  "auto_mode_unavailable",
+  "network_required",
+  "manual_merge_required",
+  "pre_pr_active_orphan",
+]);

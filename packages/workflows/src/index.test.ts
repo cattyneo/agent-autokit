@@ -105,6 +105,30 @@ describe("planning workflow", () => {
     assert.equal(missingData.task.state, "failed");
     assert.equal(missingData.task.failure?.code, "prompt_contract_violation");
   });
+
+  it("converts runner FailureCode exceptions into task state", async () => {
+    const promptContractFailure = await runPlanningWorkflow(baseTask(), {
+      runner: async () => {
+        throw Object.assign(new Error("bad schema"), { code: "prompt_contract_violation" });
+      },
+      repoRoot: "/repo",
+      now: () => "2026-05-05T10:00:00+09:00",
+    });
+
+    assert.equal(promptContractFailure.task.state, "failed");
+    assert.equal(promptContractFailure.task.failure?.code, "prompt_contract_violation");
+
+    const sandboxFailure = await runPlanningWorkflow(baseTask(), {
+      runner: async () => {
+        throw Object.assign(new Error("outside write"), { code: "sandbox_violation" });
+      },
+      repoRoot: "/repo",
+      now: () => "2026-05-05T10:00:00+09:00",
+    });
+
+    assert.equal(sandboxFailure.task.state, "paused");
+    assert.equal(sandboxFailure.task.failure?.code, "sandbox_violation");
+  });
 });
 
 describe("review and supervise workflow", () => {
@@ -240,6 +264,44 @@ describe("review and supervise workflow", () => {
     assert.equal(maxed.task.failure?.code, "review_max");
   });
 
+  it("rejects attempts to accept a known rejected finding in mixed rounds", async () => {
+    const known = reviewFinding({ title: "Known reject" });
+    const knownId = computeFindingId(known);
+    const fresh = reviewFinding({ title: "New reject" });
+    const freshId = computeFindingId(fresh);
+    const task = {
+      ...reviewingTask(),
+      reject_history: [
+        {
+          finding_id: knownId,
+          rejected_at_round: 1,
+          reason: "Accepted trade-off.",
+        },
+      ],
+    };
+
+    const result = await runReviewSuperviseWorkflow(task, {
+      runner: queueRunner(
+        [],
+        [
+          completed("claude", { findings: [known, fresh] }),
+          completed("claude", {
+            accept_ids: [knownId],
+            reject_ids: [freshId],
+            reject_reasons: { [freshId]: "Reject fresh finding." },
+            fix_prompt: "Fix known finding.",
+          }),
+        ],
+      ),
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(result.task.state, "failed");
+    assert.equal(result.task.failure?.code, "prompt_contract_violation");
+    assert.match(result.task.failure?.message ?? "", /known rejected/);
+  });
+
   it("uses deterministic finding ids from normalized file and title", () => {
     const finding = reviewFinding({
       file: "./packages\\core/src/index.ts",
@@ -248,8 +310,12 @@ describe("review and supervise workflow", () => {
     const assigned = assignFindingIds([finding]);
 
     assert.equal(assigned[0].file, "packages/core/src/index.ts");
-    assert.equal(assigned[0].title, "Contract issue");
+    assert.equal(assigned[0].title, "contract issue");
     assert.equal(assigned[0].finding_id, computeFindingId(finding));
+    assert.equal(
+      computeFindingId(reviewFinding({ title: "Contract issue" })),
+      computeFindingId(reviewFinding({ title: "contract issue" })),
+    );
     assert.equal(assigned[0].finding_id.length, 16);
   });
 });

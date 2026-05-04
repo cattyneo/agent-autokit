@@ -138,7 +138,12 @@ export type TaskEntry = {
       string | null
     >;
   };
-  review_findings: Array<{ round: number; accept_ids: string[]; reject_ids: string[] }>;
+  review_findings: Array<{
+    round: number;
+    accept_ids: string[];
+    reject_ids: string[];
+    reject_reasons: Record<string, string>;
+  }>;
   reject_history: Array<Record<string, unknown>>;
   cached: {
     title_at_add: string;
@@ -473,6 +478,7 @@ const taskEntrySchema = z
           round: z.number().int().positive(),
           accept_ids: z.array(z.string()),
           reject_ids: z.array(z.string()),
+          reject_reasons: z.record(z.string(), z.string()),
         })
         .strict(),
     ),

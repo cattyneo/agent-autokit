@@ -28,8 +28,41 @@ describe("core tasks file", () => {
     assert.equal(task.git.checkpoints.implement.pr_created, null);
     assert.equal(task.provider_sessions.fix.codex_session_id, null);
     assert.equal(task.runtime.resolved_model.review, null);
+    assert.deepEqual(task.review_findings, []);
     assert.equal(task.cleaning_progress.worktree_remove_attempts, 0);
     assert.deepEqual(task.cached.labels_at_add, ["agent-ready"]);
+  });
+
+  it("round-trips supervisor reject reasons in review findings", () => {
+    const root = makeTempDir();
+    const path = join(root, "tasks.yaml");
+    const task = createTaskEntry({
+      issue: 12,
+      slug: "ak-011",
+      title: "AK-011",
+      labels: [],
+      now: "2026-05-04T10:00:00+09:00",
+    });
+    task.review_findings.push({
+      round: 1,
+      accept_ids: ["finding-a"],
+      reject_ids: ["finding-b"],
+      reject_reasons: { "finding-b": "Known acceptable trade-off." },
+    });
+
+    writeTasksFileAtomic(path, {
+      version: 1,
+      generated_at: "2026-05-04T10:01:00+09:00",
+      tasks: [task],
+    });
+
+    const loaded = loadTasksFile(path);
+    assert.deepEqual(loaded.tasks[0].review_findings[0], {
+      round: 1,
+      accept_ids: ["finding-a"],
+      reject_ids: ["finding-b"],
+      reject_reasons: { "finding-b": "Known acceptable trade-off." },
+    });
   });
 
   it("writes tasks.yaml atomically, keeps .bak, and uses 0600 mode", () => {

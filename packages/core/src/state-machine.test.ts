@@ -219,6 +219,21 @@ describe("core state machine", () => {
     assert.equal(failed.state, "failed");
     assert.equal(failed.failure?.code, "plan_max");
   });
+
+  it("keeps review-origin fixes on the review path after push", () => {
+    const fixing = transitionTask(
+      baseTask("reviewing", "supervise"),
+      { type: "supervise_accept", origin: "review" },
+      DEFAULT_CONFIG,
+    );
+
+    const reviewing = transitionTask(fixing, { type: "fix_pushed" }, DEFAULT_CONFIG);
+
+    assert.equal(reviewing.state, "reviewing");
+    assert.equal(reviewing.runtime_phase, "review");
+    assert.equal(reviewing.fix.origin, null);
+    assert.equal(reviewing.ci_fix_round, 0);
+  });
 });
 
 function baseTask(

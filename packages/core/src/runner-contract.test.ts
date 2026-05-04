@@ -82,6 +82,40 @@ describe("runner prompt contract", () => {
     assert.match(result.errors.join("\n"), /fix_prompt is required/);
   });
 
+  it("rejects plan-verify ok with findings and duplicate supervisor ids", () => {
+    const okWithFindings = validatePromptContractPayload("plan-verify", {
+      status: "completed",
+      summary: "verify",
+      data: {
+        result: "ok",
+        findings: [
+          {
+            severity: "major",
+            title: "Unexpected issue",
+            rationale: "ok must not carry findings.",
+            required_change: "Return ng instead.",
+          },
+        ],
+      },
+    });
+    assert.equal(okWithFindings.ok, false);
+    assert.match(okWithFindings.errors.join("\n"), /findings must be empty/);
+
+    const duplicateSupervisorIds = validatePromptContractPayload("supervise", {
+      status: "completed",
+      summary: "supervise",
+      data: {
+        accept_ids: ["finding-1", "finding-1"],
+        reject_ids: ["finding-2", "finding-1"],
+        reject_reasons: { "finding-2": "Rejected." },
+        fix_prompt: "Fix finding-1.",
+      },
+    });
+    assert.equal(duplicateSupervisorIds.ok, false);
+    assert.match(duplicateSupervisorIds.errors.join("\n"), /duplicate/);
+    assert.match(duplicateSupervisorIds.errors.join("\n"), /disjoint/);
+  });
+
   it("validates review finding shape and repo-relative files", () => {
     const valid = validatePromptContractPayload("review", {
       status: "completed",

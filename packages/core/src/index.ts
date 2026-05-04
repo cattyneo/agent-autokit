@@ -60,6 +60,21 @@ export type {
 export { reconcileTask } from "./reconcile.js";
 export type { RetryCleanupDeps } from "./retry-cleanup.js";
 export { retryCleanupTask } from "./retry-cleanup.js";
+export type {
+  AgentRunInput,
+  AgentRunOutput,
+  AgentRunStatus,
+  PromptContractData,
+  PromptContractQuestion,
+  PromptContractValidationResult,
+  ValidPromptContractPayload,
+} from "./runner-contract.js";
+export {
+  parsePromptContractYaml,
+  promptContractForPhase,
+  promptContractJsonSchema,
+  validatePromptContractPayload,
+} from "./runner-contract.js";
 export type { TransitionEvent } from "./state-machine.js";
 export { isActiveState, isAgentRuntimePhase, transitionTask } from "./state-machine.js";
 export type {

@@ -5,5 +5,6 @@
     "outDir": "dist",
     "tsBuildInfoFile": "../../.tsbuildinfo/claude-runner.tsbuildinfo"
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts"],
+  "references": [{ "path": "../core" }]
 }

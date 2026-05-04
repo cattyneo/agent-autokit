@@ -12,9 +12,13 @@ import {
 import {
   assignFindingIds,
   type BranchPrLookup,
+  type CiCheckObservation,
+  type CiWaitDeps,
+  type CiWaitPrObservation,
   computeFindingId,
   type ImplementFixGitDeps,
   type ReviewFinding,
+  runCiWaitWorkflow,
   runFixWorkflow,
   runImplementWorkflow,
   runPlanningWorkflow,
@@ -561,6 +565,180 @@ describe("implement and fix workflow", () => {
   });
 });
 
+describe("ci-wait workflow", () => {
+  it("reserves auto-merge only after CI success, head match, and mergeable", async () => {
+    const github = mockCiDeps({
+      checks: [{ status: "success" }],
+      prs: [
+        { headSha: "head-sha", mergeable: "MERGEABLE" },
+        { headSha: "head-sha", mergeable: "MERGEABLE" },
+      ],
+    });
+
+    const result = await runCiWaitWorkflow(ciWaitingTask(), {
+      runner: queueRunner([], []),
+      github,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(result.task.state, "merging");
+    assert.equal(result.task.runtime_phase, "merge");
+    assert.deepEqual(github.calls, [
+      "checks:51",
+      "getPr:51:pre_reservation_check",
+      "reserve:51:head-sha",
+      "getPr:51:post_reservation_recheck",
+    ]);
+  });
+
+  it("pauses for manual merge without reserving auto-merge when disabled", async () => {
+    const github = mockCiDeps({
+      checks: [{ status: "success" }],
+      prs: [{ headSha: "head-sha", mergeable: "MERGEABLE" }],
+    });
+
+    const result = await runCiWaitWorkflow(ciWaitingTask(), {
+      runner: queueRunner([], []),
+      github,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+      config: parseConfig({ auto_merge: false }),
+    });
+
+    assert.equal(result.task.state, "paused");
+    assert.equal(result.task.failure?.code, "manual_merge_required");
+    assert.deepEqual(github.calls, ["checks:51", "getPr:51:pre_reservation_check"]);
+  });
+
+  it("detects pre-reservation head mismatch and blocked mergeability before reserving", async () => {
+    const mismatch = await runCiWaitWorkflow(ciWaitingTask(), {
+      runner: queueRunner([], []),
+      github: mockCiDeps({
+        checks: [{ status: "success" }],
+        prs: [{ headSha: "new-head", mergeable: "MERGEABLE" }],
+      }),
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+    assert.equal(mismatch.task.failure?.code, "merge_sha_mismatch");
+
+    const blocked = await runCiWaitWorkflow(ciWaitingTask(), {
+      runner: queueRunner([], []),
+      github: mockCiDeps({
+        checks: [{ status: "success" }],
+        prs: [{ headSha: "head-sha", mergeable: "BLOCKED" }],
+      }),
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+    assert.equal(blocked.task.failure?.code, "branch_protection");
+  });
+
+  it("disables auto-merge and waits for the barrier on post-reservation head race", async () => {
+    const github = mockCiDeps({
+      checks: [{ status: "success" }],
+      prs: [
+        { headSha: "head-sha", mergeable: "MERGEABLE" },
+        { headSha: "new-head", mergeable: "MERGEABLE" },
+        { headSha: "new-head", mergeable: "MERGEABLE", autoMergeRequest: null },
+        { headSha: "new-head", mergeable: "MERGEABLE", autoMergeRequest: null },
+      ],
+    });
+
+    const result = await runCiWaitWorkflow(
+      {
+        ...ciWaitingTask(),
+        review_findings: [{ round: 1, accept_ids: ["stale"], reject_ids: [], reject_reasons: {} }],
+      },
+      {
+        runner: queueRunner([], []),
+        github,
+        repoRoot: "/repo",
+        worktreeRoot: "/worktree",
+      },
+    );
+
+    assert.equal(result.task.state, "paused");
+    assert.equal(result.task.failure?.code, "merge_sha_mismatch");
+    assert.deepEqual(result.task.review_findings[0].accept_ids, []);
+    assert.deepEqual(github.calls, [
+      "checks:51",
+      "getPr:51:pre_reservation_check",
+      "reserve:51:head-sha",
+      "getPr:51:post_reservation_recheck",
+      "disable:51",
+      "sleep:5000",
+      "getPr:51:auto_merge_disabled_barrier",
+      "sleep:5000",
+      "getPr:51:auto_merge_disabled_barrier",
+    ]);
+  });
+
+  it("routes CI failure into ci-origin fix and preserves failed logs", async () => {
+    const result = await runCiWaitWorkflow(ciWaitingTask(), {
+      runner: queueRunner([], []),
+      github: mockCiDeps({ checks: [{ status: "failure", failedLog: "test failed" }], prs: [] }),
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(result.task.state, "fixing");
+    assert.equal(result.task.runtime_phase, "fix");
+    assert.equal(result.task.fix.origin, "ci");
+    assert.equal(result.task.ci_fix_round, 1);
+    assert.equal(result.ciFailureLog, "test failed");
+  });
+
+  it("fails CI failure when fix max rounds is exceeded", async () => {
+    const result = await runCiWaitWorkflow(
+      { ...ciWaitingTask(), ci_fix_round: 3 },
+      {
+        runner: queueRunner([], []),
+        github: mockCiDeps({
+          checks: [{ status: "failure", failedLog: "still failing" }],
+          prs: [],
+        }),
+        repoRoot: "/repo",
+        worktreeRoot: "/worktree",
+      },
+    );
+
+    assert.equal(result.task.state, "failed");
+    assert.equal(result.task.failure?.code, "ci_failure_max");
+  });
+
+  it("handles CI timeout paused and failed branches", async () => {
+    const paused = await runCiWaitWorkflow(ciWaitingTask(), {
+      runner: queueRunner([], []),
+      github: mockCiDeps({ checks: [{ status: "pending" }], prs: [] }),
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+      config: parseConfig({ ci: { timeout_ms: 100, poll_interval_ms: 10 } }),
+      startedAtMs: 0,
+      nowMs: queueNow([0, 101]),
+    });
+    assert.equal(paused.task.state, "paused");
+    assert.equal(paused.task.failure?.code, "ci_timeout");
+
+    const failedGithub = mockCiDeps({ checks: [{ status: "pending" }], prs: [] });
+    const failed = await runCiWaitWorkflow(ciWaitingTask(), {
+      runner: queueRunner([], []),
+      github: failedGithub,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+      config: parseConfig({
+        ci: { timeout_ms: 100, poll_interval_ms: 10, timeout_action: "failed" },
+      }),
+      startedAtMs: 0,
+      nowMs: queueNow([0, 101]),
+    });
+    assert.equal(failed.task.state, "failed");
+    assert.equal(failed.task.failure?.code, "ci_timeout");
+    assert.deepEqual(failedGithub.calls, ["checks:51", "sleep:10", "disable:51"]);
+  });
+});
+
 describe("review and supervise workflow", () => {
   it("moves accepted findings to fixing without running the fix phase", async () => {
     const calls: AgentRunInput[] = [];
@@ -813,6 +991,16 @@ function fixingTask(origin: "review" | "ci") {
   };
 }
 
+function ciWaitingTask() {
+  return {
+    ...reviewingTask(),
+    state: "ci_waiting" as const,
+    runtime_phase: "ci_wait" as const,
+    pr: { ...reviewingTask().pr, number: 51, head_sha: "head-sha", base_sha: "base-sha" },
+    review_findings: [{ round: 1, accept_ids: [], reject_ids: [], reject_reasons: {} }],
+  };
+}
+
 function reviewFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
   return {
     severity: "P1",
@@ -822,6 +1010,45 @@ function reviewFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
     rationale: "The workflow must preserve the review contract.",
     suggested_fix: "Record the finding decision.",
     ...overrides,
+  };
+}
+
+function mockCiDeps(input: {
+  checks: CiCheckObservation[];
+  prs: CiWaitPrObservation[];
+}): CiWaitDeps & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    getChecks: (prNumber) => {
+      calls.push(`checks:${prNumber}`);
+      const next = input.checks.shift();
+      assert.ok(next, "expected queued CI check observation");
+      return next;
+    },
+    getPr: (prNumber, site) => {
+      calls.push(`getPr:${prNumber}:${site}`);
+      const next = input.prs.shift();
+      assert.ok(next, "expected queued PR observation");
+      return next;
+    },
+    reserveAutoMerge: ({ prNumber, headSha }) => {
+      calls.push(`reserve:${prNumber}:${headSha}`);
+    },
+    disableAutoMerge: (prNumber) => {
+      calls.push(`disable:${prNumber}`);
+    },
+    sleep: (ms) => {
+      calls.push(`sleep:${ms}`);
+    },
+  };
+}
+
+function queueNow(values: number[]): () => number {
+  return () => {
+    const next = values.shift();
+    assert.ok(next !== undefined, "expected queued timestamp");
+    return next;
   };
 }
 

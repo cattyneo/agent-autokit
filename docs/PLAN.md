@@ -335,7 +335,7 @@ agent-autokit/
 - [ ] D3: `core/state-machine.ts` (SPEC §5.1 遷移表 driven、`previous_state` 復帰、短絡 edge 含む) + `core/git.ts` + `core/gh.ts`
 - [ ] D3: `core/pr.ts` (PR create/ready/merge `--match-head-commit` / `--disable-auto` / `gh pr view --json headRefOid` で head_sha 取得)
 - [ ] D3: `core/reconcile.ts` (起動時 PR state=MERGED/CLOSED/headRefOid 同期 + `cleaning` state 残存時の cleanup 再試行 + **PR 未作成 active state の deterministic restart / `pre_pr_active_orphan` 正規化**)
-  - **PR 既作成済 (`merging`/`ci_waiting`/`reviewing`/`fixing`):** SPEC §6.2 step 3 に従い `gh pr view --json state,merged,headRefOid,mergeable` 観測 → MERGED+oid 一致なら `cleaning` 同期 → §7.6.5 / MERGED+oid 不一致 `merge_sha_mismatch` / CLOSED `paused`+`other` / OPEN+oid 乖離 `merge_sha_mismatch` / OPEN+整合 該当 phase 先頭から再実行
+  - **PR 既作成済 (`merging`/`ci_waiting`/`reviewing`/`fixing`):** SPEC §6.2 step 3 に従い `gh pr view --json state,mergedAt,headRefOid,mergeable` 観測 (`merged` 判定は `state=MERGED` または `mergedAt != null` から導出) → MERGED+oid 一致なら `cleaning` 同期 → §7.6.5 / MERGED+oid 不一致 `merge_sha_mismatch` / CLOSED `paused`+`other` / OPEN+oid 乖離 `merge_sha_mismatch` / OPEN+整合 該当 phase 先頭から再実行
   - **`cleaning` state task:** branch / worktree 残存を `gh api repos/<owner>/<repo>/branches/<branch>` / `lstat` で再確認 → 残存なら §7.6.5 step 2-3 を再実行 → 全成功 `merged` (E26a) / branch 失敗 `paused`+`branch_delete_failed` (E26b) / worktree 失敗 `paused`+`worktree_remove_failed` (E26c) / 残存なしなら直接 `merged` 同期
   - **PR 未作成 active state (`planning`/`planned`/`implementing`/`reviewing` 空 PR) の deterministic restart 優先順 (SPEC §6.2 step 3 / AC §13.1):**
     1. `state=planned` + `plan.state=verified` + `runtime_phase=null` → E05 (`planned` → `implementing` / `runtime_phase=implement`) に進む
@@ -362,7 +362,7 @@ agent-autokit/
 - [ ] D5: `packages/cli` parser (commander) + dummy commands (`add` / `list` / `doctor` 動作 + `--force-unlock`)
 - [ ] D5: `commands/cleanup.ts` — `autokit cleanup --force-detach <issue>` (SPEC §6.2)
   - 前提 state 検査: `state=cleaning` または `state=paused`+`failure.code in ["branch_delete_failed","worktree_remove_failed"]` 以外で exit 1
-  - **precondition gate**: `gh pr view --json state,merged,headRefOid` 再観測 (site=`force_detach_precheck`) → MERGED + merged=true + headRefOid==pr.head_sha 一致で先進、不一致なら `paused`+`failure.code=merge_sha_mismatch` (誤投与防止)
+  - **precondition gate**: `gh pr view --json state,mergedAt,headRefOid` 再観測 (site=`force_detach_precheck`) → MERGED + mergedAt!=null + headRefOid==pr.head_sha 一致で先進、不一致なら `paused`+`failure.code=merge_sha_mismatch` (誤投与防止)
   - operator 確認 prompt (`-y` で skip 不可、TTY なし環境では exit 1)
   - remote branch が残存する場合は `git push origin --delete <branch>` 再実行 + `gh api repos/<owner>/<repo>/branches/<branch>` 404 確認まで閉じる。失敗時は `branch_delete_failed` のまま exit 1
   - `git worktree remove --force` → `git worktree prune` → 失敗時は手動 `rm -rf` 案内 (autokit からは外部 path 削除しない)

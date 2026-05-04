@@ -13,5 +13,14 @@
     "build": "tsc -b",
     "typecheck": "tsc -b"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "ink": "^7.0.1",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.5"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.14",
+    "ink-testing-library": "^4.0.0"
+  }
 }

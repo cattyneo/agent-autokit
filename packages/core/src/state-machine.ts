@@ -229,6 +229,9 @@ function pauseWithFailure(task: TaskEntry, failure: NonNullable<TaskEntry["failu
     : task.runtime.previous_state;
   task.state = "paused";
   task.failure = failure;
+  if (failure.code === "interrupted") {
+    task.runtime.interrupted_at = failure.ts;
+  }
   pushFailureHistory(task, failure);
   return task;
 }

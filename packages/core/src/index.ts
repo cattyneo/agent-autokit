@@ -70,9 +70,11 @@ export type {
   ValidPromptContractPayload,
 } from "./runner-contract.js";
 export {
+  formatQuestionResponsePrompt,
   parsePromptContractYaml,
   promptContractForPhase,
   promptContractJsonSchema,
+  QUESTION_RESPONSE_STRING_LIMIT,
   validatePromptContractPayload,
 } from "./runner-contract.js";
 export type { TransitionEvent } from "./state-machine.js";

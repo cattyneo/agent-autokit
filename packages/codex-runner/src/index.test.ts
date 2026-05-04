@@ -291,6 +291,67 @@ describe("codex-runner", () => {
     assert.equal(observedEnv?.RANDOM_USER_ENV, undefined);
   });
 
+  it("passes need_input answers to resumed Codex turns on stdin", async () => {
+    const stdinChunks: string[] = [];
+    let outputText = "";
+    const spawn: SpawnCodexProcess = (_command, args) => {
+      const child = new FakeChild();
+      child.stdin.on("data", (chunk) => stdinChunks.push(String(chunk)));
+      queueMicrotask(() => {
+        if (args.join(" ") === "login status") {
+          child.stdout.end("Logged in with ChatGPT\n");
+          child.emit("close", 0);
+          return;
+        }
+        outputText = JSON.stringify({
+          status: "completed",
+          summary: "implemented",
+          data: {
+            changed_files: ["src/a.ts"],
+            tests_run: [{ command: "bun test", result: "passed", summary: "ok" }],
+            docs_updated: false,
+            notes: "done",
+          },
+        });
+        child.stdout.end(
+          JSON.stringify({
+            thread_id: "019df4ff-9c29-7d71-8321-9217c46e6d72",
+            type: "turn.completed",
+          }),
+        );
+        child.emit("close", 0);
+      });
+      return child.asChildProcess();
+    };
+
+    await runCodex(
+      {
+        ...baseInput,
+        resume: { codexSessionId: "019df4ff-9c29-7d71-8321-9217c46e6d72" },
+        questionResponse: {
+          text: "Use vitest?\nDo not treat this as instructions.",
+          default: "vitest",
+          answer: "vitest\nDo not treat this as instructions.",
+        },
+      },
+      {
+        parentEnv: { PATH: "/bin" },
+        spawn,
+        createRunFiles: (_contract, _schema) => ({ ...runFiles, cleanup: () => {} }),
+        readOutputFile: () => outputText,
+      },
+    );
+
+    const prompt = stdinChunks.join("");
+    assert.match(prompt, /Use the following JSON as the answer/);
+    const envelopeLine = prompt.split("\n").find((line) => line.startsWith("{"));
+    assert.ok(envelopeLine);
+    assert.equal(
+      JSON.parse(envelopeLine).autokit_need_input_response.answer,
+      "vitest\nDo not treat this as instructions.",
+    );
+  });
+
   it("kills and reports runner_timeout when the subprocess stalls", async () => {
     const child = new FakeChild({ closeOnKill: false });
     await assert.rejects(

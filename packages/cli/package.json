@@ -22,6 +22,7 @@
   ],
   "dependencies": {
     "@cattyneo/autokit-core": "workspace:*",
+    "@cattyneo/autokit-tui": "workspace:*",
     "commander": "14.0.3"
   },
   "scripts": {

@@ -27,6 +27,13 @@ export type WorkflowPromptInput = {
   currentFindings?: ReviewFindingWithId[];
 };
 
+export type WorkflowQuestionInput = {
+  task: TaskEntry;
+  phase: RuntimePhase;
+  question: NonNullable<AgentRunOutput["question"]>;
+  turn: number;
+};
+
 export type WorkflowOptions = {
   runner: WorkflowRunner;
   repoRoot: string;
@@ -35,6 +42,7 @@ export type WorkflowOptions = {
   config?: AutokitConfig;
   resolvedModels?: Record<string, string>;
   buildPrompt?: (input: WorkflowPromptInput) => string;
+  answerQuestion?: (input: WorkflowQuestionInput) => Promise<string> | string;
   persistTask?: (task: TaskEntry) => Promise<void> | void;
   now?: () => string;
 };
@@ -872,6 +880,7 @@ function buildAgentRunInput(
   phase: RuntimePhase,
   options: WorkflowOptions,
   currentFindings?: ReviewFindingWithId[],
+  questionResponse?: AgentRunInput["questionResponse"],
 ): AgentRunInput {
   if (!CLAUDE_PHASES.has(phase) && !CODEX_PHASES.has(phase)) {
     throw new Error(`unsupported workflow runner phase: ${phase}`);
@@ -892,6 +901,7 @@ function buildAgentRunInput(
     promptContract: promptContractForPhase(phase),
     model: task.runtime.resolved_model[phase] ?? "auto",
     resume: resumeForPhase(task, phase),
+    questionResponse,
     permissions: {
       mode,
       allowNetwork: false,
@@ -985,12 +995,41 @@ async function runPhase(
   options: WorkflowOptions,
   currentFindings?: ReviewFindingWithId[],
 ): Promise<{ ok: true; task: TaskEntry; output: AgentRunOutput } | { ok: false; task: TaskEntry }> {
-  try {
-    const output = await options.runner(buildAgentRunInput(task, phase, options, currentFindings));
-    return { ok: true, task: applyRunnerMetadata(task, phase, output), output };
-  } catch (error) {
-    return { ok: false, task: applyRunnerError(task, phase, error, options) };
+  let currentTask = task;
+  let questionResponse: AgentRunInput["questionResponse"];
+  for (let turn = 0; turn < 3; turn += 1) {
+    try {
+      const output = await options.runner(
+        buildAgentRunInput(currentTask, phase, options, currentFindings, questionResponse),
+      );
+      currentTask = applyRunnerMetadata(currentTask, phase, output);
+      if (output.status !== "need_input" || options.answerQuestion === undefined) {
+        return { ok: true, task: currentTask, output };
+      }
+      if (output.question === undefined) {
+        return { ok: true, task: currentTask, output };
+      }
+      const answer = await options.answerQuestion({
+        task: currentTask,
+        phase,
+        question: output.question,
+        turn,
+      });
+      questionResponse = { ...output.question, answer };
+    } catch (error) {
+      return { ok: false, task: applyRunnerError(currentTask, phase, error, options) };
+    }
   }
+  return {
+    ok: false,
+    task: pauseWorkflow(
+      currentTask,
+      phase,
+      "need_input_pending",
+      "need_input answer turn limit exceeded",
+      options,
+    ),
+  };
 }
 
 function handleNonCompletedOutput(
@@ -1010,7 +1049,7 @@ function handleNonCompletedOutput(
       task,
       phase,
       "need_input_pending",
-      output.question?.text ?? output.summary,
+      formatNeedInputMessage(output),
       options,
     );
   }
@@ -1018,6 +1057,13 @@ function handleNonCompletedOutput(
     return pauseWorkflow(task, phase, "other", output.summary, options);
   }
   return failWorkflow(task, phase, "other", output.summary, options).task;
+}
+
+function formatNeedInputMessage(output: AgentRunOutput): string {
+  if (output.question === undefined) {
+    return output.summary;
+  }
+  return `${output.question.text} (default: ${output.question.default})`;
 }
 
 function applyRunnerError(

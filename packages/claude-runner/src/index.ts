@@ -7,6 +7,7 @@ import {
   type AgentRunOutput,
   buildRunnerEnv,
   type FailureCode,
+  formatQuestionResponsePrompt,
   type ParentEnv,
   type PromptContractId,
   parsePromptContractYaml,
@@ -159,7 +160,7 @@ export function buildClaudeArgs(input: AgentRunInput): string[] {
     args.push("--resume", input.resume.claudeSessionId);
   }
 
-  args.push(input.prompt);
+  args.push(formatClaudePrompt(input));
   return args;
 }
 
@@ -332,6 +333,14 @@ export function buildClaudePathGuardSettings(workspaceRoot: string): Record<stri
 
 function isClaudeRunnerPhase(phase: string): phase is ClaudeRunnerPhase {
   return (claudeRunnerPhases as readonly string[]).includes(phase);
+}
+
+function formatClaudePrompt(input: AgentRunInput): string {
+  try {
+    return formatQuestionResponsePrompt(input);
+  } catch (error) {
+    throw new ClaudeRunnerError("prompt_contract_violation", errorToMessage(error));
+  }
 }
 
 function parseJsonObject(stdout: string): Record<string, unknown> {

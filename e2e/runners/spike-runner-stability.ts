@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { buildRunnerEnv } from "../../packages/core/src/env-allowlist.ts";
+
 type PromptContract =
   | "plan"
   | "plan-verify"
@@ -613,6 +615,7 @@ async function runCommand(
 
   return await new Promise((resolve) => {
     const child = spawn(command, args, {
+      env: buildRunnerEnv(process.env),
       stdio: ["ignore", "pipe", "pipe"],
       signal: controller.signal,
     });

@@ -24,6 +24,7 @@ dist/
 
 # Build/test output
 coverage/
+.reports/
 *.tsbuildinfo
 
 .agents/worktrees/

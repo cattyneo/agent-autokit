@@ -8,6 +8,8 @@ describe("core env allowlist", () => {
   const parentEnv = {
     PATH: "/usr/local/bin:/usr/bin:/bin",
     HOME: "/Users/example",
+    USER: "example",
+    LOGNAME: "example",
     LANG: "ja_JP.UTF-8",
     LC_ALL: "ja_JP.UTF-8",
     LC_CTYPE: "UTF-8",
@@ -31,6 +33,8 @@ describe("core env allowlist", () => {
     assert.deepEqual(env, {
       PATH: "/usr/local/bin:/usr/bin:/bin",
       HOME: "/Users/example",
+      USER: "example",
+      LOGNAME: "example",
       LANG: "ja_JP.UTF-8",
       LC_ALL: "ja_JP.UTF-8",
       LC_CTYPE: "UTF-8",
@@ -49,6 +53,8 @@ describe("core env allowlist", () => {
     assert.deepEqual(env, {
       PATH: "/usr/local/bin:/usr/bin:/bin",
       HOME: "/Users/example",
+      USER: "example",
+      LOGNAME: "example",
       LANG: "ja_JP.UTF-8",
       LC_ALL: "ja_JP.UTF-8",
       LC_CTYPE: "UTF-8",
@@ -90,6 +96,8 @@ describe("core env allowlist", () => {
     const childEnv = JSON.parse(child.stdout) as Record<string, string>;
     assert.equal(childEnv.PATH, parentEnv.PATH);
     assert.equal(childEnv.HOME, parentEnv.HOME);
+    assert.equal(childEnv.USER, parentEnv.USER);
+    assert.equal(childEnv.LOGNAME, parentEnv.LOGNAME);
     assert.equal(childEnv.GH_TOKEN, undefined);
     assert.equal(childEnv.GITHUB_TOKEN, undefined);
     assert.equal(childEnv.ANTHROPIC_API_KEY, undefined);

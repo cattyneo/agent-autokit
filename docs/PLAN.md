@@ -274,23 +274,24 @@ agent-autokit/
 **Runner adoption gate (#23 primary runner split gate、AK-009 / AK-010 の採用済み扱い前に必須):**
 
 **A. primary `claude -p` (Claude phase 4 種: plan / plan_fix / review / supervise、必達、未達で v0.1.0 出荷不可):**
-- [ ] N=20 高回数 matrix は subscription / billing 扱い確認または operator 明示承認後のみ実行する。承認前は one-shot smoke と mock / fixture evidence までに留める
-- [ ] N=20 試行で `plan` / `plan_fix` / `review` / `supervise` の prompt_contract YAML parse + §9.3 schema validation 成功率 **>= 95%**
-- [ ] `need_input` + `question.default` あり / `question.default` なし / `paused` schema / schema mismatch の fixture が期待どおり pass/fail-closed する
-- [ ] session_id resume 成功率 **100%** (4 phase × 1 試行 = 4 試行で全成功)
-- [ ] S0 fixture の `.claude/skills/` 配下 (`autokit-implement` / `autokit-review` / `autokit-question`) が runtime resolver で visible
-- [ ] subscription 認証 (`claude login`) で `ANTHROPIC_API_KEY` unset でも動作
-- [ ] scripted / non-interactive 推奨 mode、認証 source、tool allowlist、settings 読込 source の exact option 名が公式 docs または `claude --help` と一致。未保証 option 依存なら S0 未達
+- [x] N=20 高回数 matrix は subscription / billing 扱い確認または operator 明示承認後のみ実行する。承認前は one-shot smoke と mock / fixture evidence までに留める
+- [x] N=20 試行で `plan` / `plan_fix` / `review` / `supervise` の prompt_contract YAML parse + §9.3 schema validation 成功率 **>= 95%**
+- [x] `need_input` + `question.default` あり / `question.default` なし / `paused` schema / schema mismatch の fixture が期待どおり pass/fail-closed する
+- [x] session_id resume 成功率 **100%** (4 phase × 1 試行 = 4 試行で全成功)
+- [x] S0 fixture の `.claude/skills/` 配下 (`autokit-implement` / `autokit-review` / `autokit-question`) が runtime resolver で visible
+- [x] subscription 認証 (`claude login`) で `ANTHROPIC_API_KEY` unset でも動作
+- [x] scripted / non-interactive 推奨 mode、認証 source、tool allowlist、settings 読込 source の exact option 名が公式 docs または `claude --help` と一致。未保証 option 依存なら S0 未達
 
 **B. primary `codex exec` (Codex phase 3 種: plan_verify / implement / fix、必達、未達で v0.1.0 出荷不可):**
-- [ ] N=20 高回数 matrix は subscription / billing 扱い確認または operator 明示承認後のみ実行する。承認前は one-shot smoke と mock / fixture evidence までに留める
-- [ ] N=20 試行で `plan_verify` / `implement` / `fix` の final JSON + §9.3 schema validation 成功率 **>= 95%**。`--output-schema` 等の exact validation mechanism は MIG-004 pinned evidence に従う
-- [ ] `need_input` + `question.default` あり / `question.default` なし / `paused` schema / schema mismatch の fixture が期待どおり pass/fail-closed する
-- [ ] CLI session resume 成功率 **100%** (3 phase × 1 試行 + 予備 2 = 5 試行で全成功)。`codex exec resume <session_id>` 形式を採用する場合は MIG-004 pinned evidence で確認済みであること
-- [ ] `codex exec` sandbox 動作: `implement` / `fix` は `workspace-write` + `allow_network=false`、`plan_verify` は read-only (書込検出で `sandbox_violation`)
-- [ ] S0 fixture の `.codex/skills/` または `.agents/skills/` 配下が prompt 内 skill 明示で参照可能
-- [ ] ChatGPT-managed CLI auth (`codex login`) で `OPENAI_API_KEY` / `CODEX_API_KEY` unset でも動作
-- [ ] `codex exec --json` event parse、session id 保存、`--output-schema`、final JSON 取得、resume、sandbox flag、approval fail-closed、auth mode 判別が pinned version の help / docs / 実機で一致。未確認機能が残る場合は AK-010 実装前に停止
+- [x] N=20 高回数 matrix は subscription / billing 扱い確認または operator 明示承認後のみ実行する。承認前は one-shot smoke と mock / fixture evidence までに留める
+- [x] N=20 試行で `plan_verify` / `implement` / `fix` の final JSON + §9.3 schema validation 成功率 **>= 95%**。`--output-schema` 等の exact validation mechanism は MIG-004 pinned evidence に従う
+- [x] `need_input` + `question.default` あり / `question.default` なし / `paused` schema / schema mismatch の fixture が期待どおり pass/fail-closed する
+- [x] CLI session resume 成功率 **100%** (3 phase × 1 試行 + 予備 2 = 5 試行で全成功)。`codex exec resume <session_id>` 形式を採用する場合は MIG-004 pinned evidence で確認済みであること
+- [x] `codex exec` sandbox 動作: `implement` / `fix` は `workspace-write` + `allow_network=false`、`plan_verify` は read-only (書込検出で `sandbox_violation`)
+- [x] S0 fixture の `.codex/skills/` または `.agents/skills/` 配下が prompt 内 skill 明示で参照可能
+- [x] ChatGPT-managed CLI auth (`codex login`) で `OPENAI_API_KEY` / `CODEX_API_KEY` unset でも動作
+- [x] `codex exec --json` event parse、session id 保存、`--output-schema`、final JSON 取得、resume、sandbox flag、auth mode 判別が pinned version の help / docs / 実機で一致
+- [ ] 明示 approval prompt の発生時は AK-010 実装で fail-closed validation として扱う。未確認機能が残る場合は AK-010 実装前に停止
 
 **C. experimental Claude Agent SDK (任意、未達で `sdk-experimental.ts` を v0.1.0 scaffold から削除):**
 - v0.1.0 blocker ではない。full matrix は deferred #44 に分離し、paid-risk-gated として subscription / billing 扱い確認または operator 明示承認なしに実行しない。

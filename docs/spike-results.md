@@ -6,9 +6,9 @@
 
 AK-001 は S0 の不確実性を S1 前に潰すための spike。ここでは公式 docs / CLI help / npm package metadata / package type definitions / one-shot live smoke / prompt_contract fixture / full matrix 実行計画の結果を固定する。
 
-Full N=20 adoption matrix は未実行で、follow-up #23 に分離する。`claude -p` は subscription auth (`claude.ai`, subscription type `max`) で実行できるが、CLI JSON の `cost_usd` / `total_cost_usd` は実課金証跡とは断定しない。plan / plan_fix / review / supervise の N=20 matrix は、operator が subscription / billing 扱いを確認するか、明示的な実行承認を出すまで走らせない。
+Full N=20 adoption matrix は operator 明示承認後に follow-up #23 で実行済み。`claude -p` は subscription auth (`claude.ai`, subscription type `max`) で実行でき、plan / plan_fix / review / supervise の N=20 matrix と resume は pass。CLI JSON の `cost_usd` / `total_cost_usd` は実課金証跡とは断定しない。
 
-MIG-004 以降の v0.1.0 Codex runner 方針は **Codex SDK primary ではなく `codex exec` primary**。Codex SDK `runStreamed` / `resumeThread` evidence は deferred / paid-risk-gated reference としてのみ扱い、AK-010 の adoption gate には使わない。MIG-004 live `codex exec` one-shot / explicit resume / isolated `resume --last` smoke は operator 承認後、`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CODEX_API_KEY` unset を確認してから実行済み。高回数 matrix、sandbox write-denial、明示 approval prompt の追加 live 実行は別途承認が必要。
+MIG-004 以降の v0.1.0 Codex runner 方針は **Codex SDK primary ではなく `codex exec` primary**。Codex SDK `runStreamed` / `resumeThread` evidence は deferred / paid-risk-gated reference としてのみ扱い、AK-010 の adoption gate には使わない。MIG-004 live `codex exec` one-shot / explicit resume / isolated `resume --last` smoke に加え、#23 B の高回数 matrix、stored `thread_id` resume、sandbox write-denial / workspace-write evidence は operator 承認後、`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CODEX_API_KEY` unset を確認してから実行済み。明示 approval prompt の追加 live 実行は AK-010 実装時の fail-closed validation scope に残す。
 
 AK-002 は S0 の仮設 visibility fixture を固定し、`.claude` / `.codex` provider-facing path が `.agents` SoT に解決されること、全 prompt_contract が `autokit-question` を参照することを local self-test で検証する。AK-002 では provider live model call を実行しない。
 
@@ -52,7 +52,7 @@ Coverage:
 - `implement` / `fix` reference `autokit-implement`; `review` references `autokit-review`; those phase-specific references are exact resolver lines immediately before `autokit-question`.
 - Fixed issue input declares the `status=need_input` / `autokit-question` scenario and required default answer. It does not execute provider runtime interception or resume.
 
-Current decision: AK-002 local visibility fixture gate passed without provider live model calls. Provider runtime ingestion beyond filesystem visibility remains part of later runner adoption / implementation evidence (#23, AK-009, AK-010).
+Current decision: AK-002 local visibility fixture gate passed without provider live model calls. Provider runtime ingestion beyond filesystem visibility was later confirmed by #23 skill runtime visibility evidence.
 
 ## Evidence Sources
 
@@ -367,11 +367,25 @@ AK-001 close gate is limited to low-cost evidence:
 - `prompt_contract` pass / fail-closed fixture self-test.
 - Full matrix execution plan with preconditions and stop criteria.
 
-Full N=20 adoption evidence for primary runners is rewritten follow-up #23 and remains required before AK-009 / AK-010 can treat the primary runners as adopted. #23 is split into Claude CLI and `codex exec` gates. Codex uses `codex exec` primary; SDK full matrix is deferred to #44 and is not a v0.1.0 blocker.
+Full N=20 adoption evidence for primary runners is rewritten follow-up #23. #23 is split into Claude CLI and `codex exec` gates. Codex uses `codex exec` primary; SDK full matrix is deferred to #44 and is not a v0.1.0 blocker.
 
-## Full Matrix Execution Plan (Not Run)
+Issue #23 live adoption execution (2026-05-05 Asia/Tokyo, operator-approved):
 
-This section is a decision aid only. It is not evidence that the matrix passed.
+- API key guard: `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CODEX_API_KEY` were unset before live execution.
+- Harness: `e2e/runners/runner-adoption-matrix.ts --allow-model-calls`, using `buildRunnerEnv(process.env)` and §9.3 prompt_contract validation.
+- Claude CLI: `claude --version` = `2.1.126 (Claude Code)`, first-party `claude.ai` subscription auth. A runner-env preflight initially failed because the runner allowlist omitted `USER` / `LOGNAME`; `packages/core/src/env-allowlist.ts` now preserves those non-secret macOS identity keys while still excluding API keys, GitHub tokens, `AUTOKIT_*`, and arbitrary user env.
+- #23 A result: `plan` / `plan_fix` / `review` / `supervise` each passed 20/20 structured-output attempts and 1/1 resume attempt. Prompt_contract validation success rate: 100% for each phase. Detailed artifact: `docs/artifacts/issue-23-claude-adoption-matrix-2026-05-05.json`.
+- Claude CLI cost telemetry total recorded by the harness: `6.7962919999999905` USD. This is CLI telemetry only and is not proof of actual subscription billing.
+- Codex CLI: `codex --version` = `codex-cli 0.128.0`, ChatGPT-managed auth. B matrix used `codex -a never exec --json --sandbox <mode> --output-schema <schema-file> -o <output-file>` and stored JSONL `thread_id` for resume.
+- #23 B result: `plan_verify` / `implement` / `fix` each passed 20/20 final JSON + schema validation attempts. Resume passed 5/5 total (`plan_verify` 3/3 including the two spare attempts, `implement` 1/1, `fix` 1/1). Detailed artifact: `docs/artifacts/issue-23-codex-adoption-matrix-2026-05-05.json`.
+- Codex sandbox evidence: isolated `read-only` write-denial passed with no file created; isolated `workspace-write` success passed with `sandbox-check.txt` created and verified. Detailed artifact: `docs/artifacts/issue-23-codex-sandbox-check-2026-05-05.json`.
+- Skill runtime visibility evidence: Claude `/autokit-question` project skill resolution and Codex `.codex/skills` / `.agents/skills` prompt-visible skill lookup both returned the expected `autokit-question` rule from the S0 fixture. Detailed artifact: `docs/artifacts/issue-23-skill-runtime-visibility-2026-05-05.json`.
+- Harness correction note: two pre-run Codex `plan_verify` attempts failed before the recorded B matrix because the new harness emitted an invalid strict JSON schema for an empty `findings` array. Those attempts were stopped, the schema was fixed, and they are not counted as provider adoption failures.
+- Current adoption decision: #23 A and #23 B primary runner adoption gates pass. AK-009 may treat Claude CLI `claude -p` as adopted after this PR merges. AK-010 may treat `codex exec` as adopted after this PR merges, while still implementing fail-closed handling for version drift, unknown auth mode strings, JSONL shape mismatch, approval prompts, and sandbox violations.
+
+## Full Matrix Execution Plan
+
+This section records the execution shape, preconditions, and stop criteria used for #23.
 
 ### Claude primary runner
 

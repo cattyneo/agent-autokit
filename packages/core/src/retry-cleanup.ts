@@ -147,12 +147,12 @@ function pauseQueueCorruption(task: TaskEntry, error: unknown): TaskEntry {
 function clearRetryFields(task: TaskEntry): void {
   task.provider_sessions = {
     plan: { claude_session_id: null },
-    plan_verify: { codex_thread_id: null },
+    plan_verify: { codex_session_id: null },
     plan_fix: { claude_session_id: null },
-    implement: { codex_thread_id: null },
+    implement: { codex_session_id: null },
     review: { claude_session_id: null },
     supervise: { claude_session_id: null },
-    fix: { codex_thread_id: null },
+    fix: { codex_session_id: null },
   };
   task.git.base_sha = null;
   for (const checkpoint of Object.values(task.git.checkpoints)) {

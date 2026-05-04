@@ -26,7 +26,7 @@ describe("core tasks file", () => {
     assert.equal(task.pr.number, null);
     assert.equal(task.plan.state, "pending");
     assert.equal(task.git.checkpoints.implement.pr_created, null);
-    assert.equal(task.provider_sessions.fix.codex_thread_id, null);
+    assert.equal(task.provider_sessions.fix.codex_session_id, null);
     assert.equal(task.runtime.resolved_model.review, null);
     assert.equal(task.cleaning_progress.worktree_remove_attempts, 0);
     assert.deepEqual(task.cached.labels_at_add, ["agent-ready"]);

@@ -113,7 +113,7 @@ describe("core reconcile", () => {
       },
       provider_sessions: {
         ...baseTask().provider_sessions,
-        implement: { codex_thread_id: "thread-1" },
+        implement: { codex_session_id: "thread-1" },
       },
     };
     assert.equal(reconcileTask(beforeWithSession, {}).action, "resume_session");

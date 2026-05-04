@@ -10,6 +10,7 @@
     "sourceMap": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
+    "rewriteRelativeImportExtensions": true,
     "skipLibCheck": true,
     "noEmitOnError": true,
     "types": ["node"]

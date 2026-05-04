@@ -8,7 +8,7 @@ Codex SDK primary 前提の SPEC / PLAN / Issue train を、OpenAI Platform API 
 
 - SPEC / PLAN が `claude -p primary + codex exec primary` に統一されている。
 - Codex SDK は v0.1.0 の採用対象から外れ、deferred / paid-risk-gated として扱われている。
-- Issue #23 は Claude CLI gate と Codex exec gate に分離されている、または replacement Issue に置換されている。
+- Issue #23 は Claude CLI gate と Codex exec gate に分離され、SDK full matrix は deferred / paid-risk-gated issue (#44) に移されている。
 - AK-009 は Claude CLI evidence gate のみに依存している。
 - AK-010 は `codex exec` subscription-auth evidence gate に依存し、`codex-cli-exec-runner` 前提で再開可能。
 - `OPENAI_API_KEY` / `CODEX_API_KEY` / `ANTHROPIC_API_KEY` を使う経路は fail-closed として明文化されている。

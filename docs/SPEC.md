@@ -1012,7 +1012,7 @@ tasks を順次実行。
    1. tasks.yaml パース。失敗 / 0 byte → `.bak` 復元 (確認 prompt) → 失敗で起動拒否
    2. 全 active state task について以下 reconcile を実行:
       - **PR 既作成済み** (`pr.number != null`) の `merging` / `ci_waiting` / `reviewing` / `fixing`:
-        - `gh pr view --json state,merged,headRefOid,mergeable` 観測
+        - `gh pr view --json state,mergedAt,headRefOid,mergeable` 観測 (`merged` 判定は `state=MERGED` または `mergedAt != null` から導出)
         - PR state=MERGED + headRefOid 一致 → state=`cleaning` 同期 (E22 と同義) → §7.6.5 に従い branch / worktree 削除を実行 → 全成功で `merged` (E26a) / branch 失敗で `paused` + `branch_delete_failed` (E26b) / worktree 失敗で `paused` + `worktree_remove_failed` (E26c)
         - PR state=MERGED + headRefOid 不一致 → `paused` + `failure.code=merge_sha_mismatch`
         - PR state=CLOSED (not merged) → `paused` + `failure.code=other`
@@ -1067,7 +1067,7 @@ tasks を順次実行。
       - resume 失敗: `runtime.phase_attempt++` → cold restart 実行。cold restart が失敗し、加算後 `phase_attempt >= 3` なら E33 `failure.code=phase_attempt_exceeded`
    3. checkpoint なし → 該当 phase 先頭から再実行 (`phase_attempt++`)
    4. **他 phase の checkpoint は参照しない**。implement の after_sha が review/supervise の resume 判定に混入しない
-2. **`ci_wait` / `merge`:** checkpoint / provider_sessions を持たない (§4.2 schema)。`gh pr view --json state,merged,headRefOid,mergeable` を再観測して §5.1 の対応 edge (E14-E26) を再評価
+2. **`ci_wait` / `merge`:** checkpoint / provider_sessions を持たない (§4.2 schema)。`gh pr view --json state,mergedAt,headRefOid,mergeable` を再観測して §5.1 の対応 edge (E14-E26) を再評価
 3. **`failure.code=manual_merge_required` で paused:** resume 起動時に `gh pr view` で PR state=MERGED を観測したら state=`cleaning` 同期 (E22) → §7.6.5 に従い cleanup 実行 → 全成功で `merged` (E26a) / branch 失敗で `paused` + `branch_delete_failed` (E26b) / worktree 失敗で `paused` + `worktree_remove_failed` (E26c)
 4. **`cleaning` state で paused (`failure.code=branch_delete_failed` / `worktree_remove_failed`):** §7.6.5 末尾の cleaning paused resume 規約に従う (branch / worktree 残存再確認 → 再削除試行 / 残存なしで直接 `merged`)
 
@@ -1190,9 +1190,9 @@ audit `queue_corruption_recovered` (新規操作系 kind、§10.2.2.1) を retry
 
 **precondition gate (誤投与防止):**
 
-1. `gh pr view <pr.number> --json state,merged,headRefOid` 再観測 (site=`force_detach_precheck`、§1.4 head_sha 観測 site)
-2. **state=MERGED + merged=true + headRefOid==pr.head_sha 一致** で先進
-3. 不一致 (OPEN PR / merged=false / headRefOid 乖離) → exit 1 + `state=paused`+`failure.code=merge_sha_mismatch` + audit `merge_sha_mismatch` (誤投与で unmerged PR を `merged` terminal に飛ばす経路を遮断)
+1. `gh pr view <pr.number> --json state,mergedAt,headRefOid` 再観測 (site=`force_detach_precheck`、§1.4 head_sha 観測 site)
+2. **state=MERGED + mergedAt!=null + headRefOid==pr.head_sha 一致** で先進
+3. 不一致 (OPEN PR / mergedAt=null / headRefOid 乖離) → exit 1 + `state=paused`+`failure.code=merge_sha_mismatch` + audit `merge_sha_mismatch` (誤投与で unmerged PR を `merged` terminal に飛ばす経路を遮断)
 
 **手順 (gate 通過後):**
 
@@ -1355,7 +1355,7 @@ git worktree add -b autokit/issue-12345 .autokit/worktrees/issue-12345 origin/<b
 
 #### 7.6.2 ci_waiting フェーズ
 
-1. `gh pr view --json state,merged,headRefOid,mergeable` + `gh pr checks` を `merge.poll_interval_ms` / `ci.poll_interval_ms` でポーリング
+1. `gh pr view --json state,mergedAt,headRefOid,mergeable` + `gh pr checks` を `merge.poll_interval_ms` / `ci.poll_interval_ms` でポーリング
 2. **CI 全 check OK 観測:**
    1. supervisor accept ゼロ を再確認 (race 防止)
    2. `gh pr view --json headRefOid` を再取得 → tasks.yaml `pr.head_sha` と一致確認 (site=`pre_reservation_check`)
@@ -1383,7 +1383,7 @@ git worktree add -b autokit/issue-12345 .autokit/worktrees/issue-12345 origin/<b
 
 #### 7.6.3 merging フェーズ
 
-1. `gh pr view --json state,merged,headRefOid,mergeable` を `merge.poll_interval_ms` 間隔でポーリング
+1. `gh pr view --json state,mergedAt,headRefOid,mergeable` を `merge.poll_interval_ms` 間隔でポーリング
 2. **PR state=MERGED 観測:**
    1. `headRefOid` を tasks.yaml `pr.head_sha` と再比較 (site=`merged_oid_match`)。不一致なら E23 (`gh pr merge --disable-auto` 実行 + `failure.code=merge_sha_mismatch`)
    2. 一致なら state=`cleaning` (E22) → §7.6.5 へ
@@ -1396,7 +1396,7 @@ git worktree add -b autokit/issue-12345 .autokit/worktrees/issue-12345 origin/<b
 #### 7.6.4 auto_merge=false の resume
 
 paused (`failure.code=manual_merge_required`) で `autokit resume` 起動時:
-1. `gh pr view --json state,merged,headRefOid` 観測
+1. `gh pr view --json state,mergedAt,headRefOid` 観測
 2. PR state=MERGED + headRefOid 一致 → state=`cleaning` 同期 → §7.6.5 へ (branch/worktree cleanup)
 3. PR state=OPEN → 「未マージ」通知 + paused 維持 (再 resume 待ち)
 4. PR state=MERGED + headRefOid 不一致 → `failure.code=merge_sha_mismatch` (誤 merge 検知)

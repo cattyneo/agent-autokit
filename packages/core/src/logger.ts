@@ -16,36 +16,10 @@ import { join } from "node:path";
 import pino from "pino";
 
 import type { AutokitConfig } from "./config.ts";
+import { type FailureCode, failureCodes } from "./failure-codes.ts";
 
-export const failureCodes = [
-  "rate_limited",
-  "branch_protection",
-  "need_input_pending",
-  "interrupted",
-  "branch_delete_failed",
-  "worktree_remove_failed",
-  "merge_sha_mismatch",
-  "ci_timeout",
-  "merge_timeout",
-  "ci_failure_max",
-  "review_max",
-  "plan_max",
-  "runner_timeout",
-  "phase_attempt_exceeded",
-  "prompt_contract_violation",
-  "rebase_conflict",
-  "retry_cleanup_failed",
-  "sanitize_violation",
-  "symlink_invalid",
-  "lock_host_mismatch",
-  "queue_corruption",
-  "sandbox_violation",
-  "auto_mode_unavailable",
-  "network_required",
-  "manual_merge_required",
-  "pre_pr_active_orphan",
-  "other",
-] as const;
+export type { FailureCode };
+export { failureCodes };
 
 export const failureAuditKinds = failureCodes;
 
@@ -66,7 +40,6 @@ export const operationalAuditKinds = [
   "retry_pr_closed",
 ] as const;
 
-export type FailureCode = (typeof failureCodes)[number];
 export type FailureAuditKind = (typeof failureAuditKinds)[number];
 export type OperationalAuditKind = (typeof operationalAuditKinds)[number];
 export type AuditKind = FailureAuditKind | OperationalAuditKind;

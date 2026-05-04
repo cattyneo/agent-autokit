@@ -410,6 +410,7 @@ agent-autokit/
 - [ ] D3: `codex-runner/auth.ts` + `codex-runner/runner.ts` (`codex exec` subprocess spawn + JSONL event parser + final JSON reader + AgentRunOutput 転写)
   - `codex-runner/auth.ts` は runner spawn 直前に `codex login status` または MIG-004 で確認済みの同等 probe を実行し、ChatGPT-managed auth 以外 / auth mode 判別不能 / `OPENAI_API_KEY` / `CODEX_API_KEY` present を fail-closed にする。auth file 値は password 相当として raw log / artifact に残さない
   - Codex runner は final JSON を優先し、`--output-schema` / `--output-last-message` / `-o` / JSONL session id field は MIG-004 pinned evidence で確認済みの contract のみ使う。未確認なら AK-010 実装前に停止する
+  - Codex session state は `provider_sessions.<phase>.codex_session_id` のみを使う。pre-GA draft 旧 key `codex_thread_id` は alias せず、旧 draft task state は再 add / cleanup 対象にする
   - 追加 fixture: JSONL event sample、final JSON schema pass/fail、schema mismatch → `prompt_contract_violation`、API key rejection (`OPENAI_API_KEY` / `CODEX_API_KEY` dummy env)、API key auth mode / auth mode 判別不能 fail、auth file redaction
 - [ ] D3: `codex-runner/resume.ts` (`codex exec` CLI resume + 失敗時 cold restart) + `codex-runner/sandbox.ts` (`permissions.codex.sandbox_mode` / `approval_policy` / `allow_network` / `home_isolation` の適用と検証)
   - `codex exec resume <session_id>` 形式、TUI 回答の渡し方は MIG-004 pinned evidence に従う。`resume --last` は isolated cwd / operator debug 用で、production primary path にしない

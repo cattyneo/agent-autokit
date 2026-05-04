@@ -836,7 +836,7 @@ resume / state machine が参照するフィールドは以下に固定。`runti
 | `runtime.last_event_id` | task → runtime 配下 | 中断時 event marker |
 | `runtime.resolved_model.<phase>` | task → runtime 配下 | model: auto 解決結果 (agent_phase 7種のみ) |
 | `git.checkpoints.<phase>.{before,after}_sha` | task → git 配下 | agent_phase 7種の SHA checkpoint (ci_wait / merge は対象外) |
-| `provider_sessions.<phase>.{claude_session_id,codex_session_id}` | task → provider_sessions 配下 | agent_phase 7種の session resume。`codex_thread_id` は pre-GA draft の旧 key として migration helper / alias / clean-slate breaking change のいずれかを AK-010 実装時に選ぶ |
+| `provider_sessions.<phase>.{claude_session_id,codex_session_id}` | task → provider_sessions 配下 | agent_phase 7種の session resume。Codex は stored JSONL `thread_id` を `codex_session_id` に保存する。`codex_thread_id` は pre-GA draft の旧 key として v0.1.0 では alias しない clean-slate breaking change とし、旧 draft task state は再 add / cleanup 対象にする |
 | `fix.origin` | task → fix 配下 | 直近 fix 起動の由来 (review/ci)。E12/E13 の入力種別と `ci_fix_round` 保持判定に使用 |
 | `failure_history` | task 直下 | paused 連鎖時の root 原因保存配列 |
 

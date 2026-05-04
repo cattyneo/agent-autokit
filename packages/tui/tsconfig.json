@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.build.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "../../.tsbuildinfo/tui.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -219,11 +219,7 @@ async function runLiveSmoke(provider: LiveProvider): Promise<number> {
   return result.exitCode;
 }
 
-function validateCompletedData(
-  contract: PromptContract,
-  data: unknown,
-  errors: string[],
-): void {
+function validateCompletedData(contract: PromptContract, data: unknown, errors: string[]): void {
   if (!isRecord(data)) {
     errors.push("data must be an object");
     return;
@@ -249,7 +245,12 @@ function validateCompletedData(
       validateStringArray(data.addressed_findings, "data.addressed_findings", 20, errors);
       return;
     case "implement":
-      requireExactKeys(data, ["changed_files", "tests_run", "docs_updated", "notes"], "data", errors);
+      requireExactKeys(
+        data,
+        ["changed_files", "tests_run", "docs_updated", "notes"],
+        "data",
+        errors,
+      );
       validatePathArray(data.changed_files, "data.changed_files", 200, errors);
       validateTestEvidence(data.tests_run, errors);
       if (typeof data.docs_updated !== "boolean") {
@@ -341,11 +342,7 @@ function validatePausedOrFailedData(value: unknown, errors: string[]): void {
   }
 }
 
-function validatePlanVerifyFindings(
-  value: unknown,
-  result: unknown,
-  errors: string[],
-): void {
+function validatePlanVerifyFindings(value: unknown, result: unknown, errors: string[]): void {
   if (!Array.isArray(value)) {
     errors.push("data.findings must be an array");
     return;
@@ -458,12 +455,7 @@ function validateStringArray(
   }
 }
 
-function validatePathArray(
-  value: unknown,
-  path: string,
-  maxItems: number,
-  errors: string[],
-): void {
+function validatePathArray(value: unknown, path: string, maxItems: number, errors: string[]): void {
   validateStringArray(value, path, maxItems, errors);
   if (Array.isArray(value)) {
     for (const [index, item] of value.entries()) {

@@ -1,0 +1,139 @@
+name: Bug report
+description: 再現可能な不具合を報告する
+title: "[Bug] "
+labels: ["bug", "triage"]
+type: bug
+body:
+  - type: markdown
+    attributes:
+      value: 再現可能な不具合のみ報告してください。
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: 概要
+      description: 何が起きたかを1〜3文で要約してください
+      placeholder: 例: 顧客一覧画面で検索語に日本語を含めると500エラーになる
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待される動作
+      description: 本来どうなるべきだったか
+      placeholder: 例: 該当条件で絞り込み結果が表示される
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作
+      description: 実際に起きたこと。エラー文や症状を具体的に
+      placeholder: 例: 500エラー。Sentryに "Malformed UTF-8 characters" が記録された
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 再現手順
+      description: 最小の再現手順を番号付きで書いてください
+      placeholder: |
+        1. /customers を開く
+        2. 検索欄に "山田" を入力
+        3. Enter を押す
+        4. 500エラーになる
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: 影響範囲
+      description: どの画面・API・ジョブ・環境・ユーザー種別に影響するか
+      placeholder: 例: Web管理画面のみ / 本番のみ / 管理者ロールのみ
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: 重要度
+      description: ユーザー影響ベースで選択してください
+      options:
+        - sev1 - サービス停止 / 緊急
+        - sev2 - 主要機能が使えない
+        - sev3 - 回避策あり
+        - sev4 - 軽微
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: 環境
+      description: 発生環境
+      placeholder: 例: production / staging / local
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 対象バージョン / commit / deploy
+      description: 分かる範囲で記入
+      placeholder: 例: web@1.24.3 / 8f2c1ab / deploy-2026-03-07-01
+    validations:
+      required: false
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 証拠
+      description: ログ、スクリーンショット、動画、Sentry、Datadog、SQL、レスポンスなど
+      placeholder: |
+        - Sentry URL:
+        - Log excerpt:
+        - Screenshot:
+        - API response:
+    validations:
+      required: true
+
+  - type: textarea
+    id: suspected-cause
+    attributes:
+      label: 原因仮説
+      description: 分かる場合のみ。推測なら推測と明記
+      placeholder: 例: 検索語のエンコード処理で文字列正規化が漏れている可能性
+    validations:
+      required: false
+
+  - type: textarea
+    id: source-of-truth
+    attributes:
+      label: Source of Truth
+      description: 仕様書、Issue、ADR、公式ドキュメント、既存挙動など
+      placeholder: |
+        - Spec:
+        - Issue:
+        - ADR:
+        - Official docs:
+        - Existing behavior:
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 確認事項
+      options:
+        - label: 既存Issue/PRを検索し、重複がないことを確認した
+          required: true
+        - label: 機密情報・秘密鍵・個人情報を本文や添付に含めていない
+          required: true
+        - label: 再現手順と証拠を記載した
+          required: true
+        - label: AIを使った場合でも、本文の事実関係は人間が確認した
+          required: true

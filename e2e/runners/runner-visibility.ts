@@ -1,5 +1,5 @@
 import { lstat, readFile, realpath } from "node:fs/promises";
-import { relative, join } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 type Provider = "claude" | "codex";
@@ -38,14 +38,7 @@ const PROMPT_CONTRACTS: PromptContract[] = [
   "fix",
 ];
 const SKILLS = ["autokit-implement", "autokit-review", "autokit-question"];
-const AGENTS = [
-  "planner",
-  "plan-verifier",
-  "implementer",
-  "reviewer",
-  "supervisor",
-  "doc-updater",
-];
+const AGENTS = ["planner", "plan-verifier", "implementer", "reviewer", "supervisor", "doc-updater"];
 const QUESTION_REF = "Use the bundled autokit-question skill for status=need_input responses.";
 const IMPLEMENT_REF = "Use the bundled autokit-implement skill.";
 const REVIEW_REF = "Use the bundled autokit-review skill.";

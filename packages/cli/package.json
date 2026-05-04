@@ -1,0 +1,27 @@
+{
+  "name": "@cattyneo/autokit",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "autokit": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts.map",
+    "assets/**"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b"
+  },
+  "license": "MIT"
+}

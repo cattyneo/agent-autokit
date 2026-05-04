@@ -73,7 +73,10 @@ describe("runner visibility spike fixtures", () => {
       "utf8",
     );
 
-    await assertSelfTestFailure(fixture, "phase prompts reference only their expected bundled skills");
+    await assertSelfTestFailure(
+      fixture,
+      "phase prompts reference only their expected bundled skills",
+    );
   });
 
   it("fails closed when provider prompt directories exist as broken symlinks", async () => {

@@ -17,7 +17,13 @@ const EXECA_FUNCTIONS = new Set([
   "execaSync",
 ]);
 const ALLOWED_ENV_BUILDERS = new Set(["buildGhEnv", "buildRunnerEnv"]);
-const ALLOWED_ENV_BUILDER_MODULES = new Set(["@cattyneo/autokit-core"]);
+const ALLOWED_ENV_BUILDER_MODULES = new Set([
+  "@cattyneo/autokit-core",
+  "./env-allowlist.js",
+  "./env-allowlist.ts",
+  "../../packages/core/src/env-allowlist.js",
+  "../../packages/core/src/env-allowlist.ts",
+]);
 
 export const noUnsafeChildProcessEnv = {
   meta: {
@@ -87,6 +93,14 @@ export const noUnsafeChildProcessEnv = {
       },
 
       VariableDeclarator(node) {
+        trackRequireDeclarator(node, {
+          childProcessIdentifiers,
+          childProcessNamespaces,
+          execaIdentifiers,
+          execaNamespaces,
+          envBuilderFunctionIdentifiers,
+        });
+
         if (
           node.parent?.kind === "const" &&
           node.id.type === "Identifier" &&
@@ -152,6 +166,88 @@ function getProcessRunnerKind(callee, imports) {
   }
 
   return undefined;
+}
+
+function trackRequireDeclarator(node, imports) {
+  const sourceValue = getRequireSource(node.init);
+  if (sourceValue === undefined) {
+    return;
+  }
+
+  if (CHILD_PROCESS_MODULES.has(sourceValue)) {
+    trackChildProcessBinding(node.id, imports);
+  }
+  if (EXECA_MODULES.has(sourceValue)) {
+    trackExecaBinding(node.id, imports);
+  }
+  if (isAllowedEnvBuilderModule(sourceValue)) {
+    trackEnvBuilderBinding(node.id, imports);
+  }
+}
+
+function trackChildProcessBinding(id, imports) {
+  if (id.type === "Identifier") {
+    imports.childProcessNamespaces.add(id.name);
+    return;
+  }
+  if (id.type !== "ObjectPattern") {
+    return;
+  }
+
+  for (const property of id.properties) {
+    if (property.type !== "Property" || property.computed) {
+      continue;
+    }
+    const importedName = getPropertyName(property.key);
+    if (!NAMED_CHILD_PROCESS_FUNCTIONS.has(importedName)) {
+      continue;
+    }
+    addBoundIdentifier(property.value, imports.childProcessIdentifiers);
+  }
+}
+
+function trackExecaBinding(id, imports) {
+  if (id.type === "Identifier") {
+    imports.execaNamespaces.add(id.name);
+    return;
+  }
+  if (id.type !== "ObjectPattern") {
+    return;
+  }
+
+  for (const property of id.properties) {
+    if (property.type !== "Property" || property.computed) {
+      continue;
+    }
+    const importedName = getPropertyName(property.key);
+    if (!EXECA_FUNCTIONS.has(importedName)) {
+      continue;
+    }
+    addBoundIdentifier(property.value, imports.execaIdentifiers);
+  }
+}
+
+function trackEnvBuilderBinding(id, imports) {
+  if (id.type !== "ObjectPattern") {
+    return;
+  }
+
+  for (const property of id.properties) {
+    if (property.type !== "Property" || property.computed) {
+      continue;
+    }
+    const importedName = getPropertyName(property.key);
+    if (!ALLOWED_ENV_BUILDERS.has(importedName)) {
+      continue;
+    }
+    addBoundIdentifier(property.value, imports.envBuilderFunctionIdentifiers);
+  }
+}
+
+function addBoundIdentifier(pattern, identifiers) {
+  if (pattern.type === "Identifier") {
+    identifiers.add(pattern.name);
+  }
 }
 
 function getEnvOptionNode(kind, args) {
@@ -237,13 +333,20 @@ function isAllowedEnvBuilderCall(node, imports) {
 }
 
 function isAllowedEnvBuilderModule(sourceValue) {
-  return (
-    ALLOWED_ENV_BUILDER_MODULES.has(sourceValue) ||
-    sourceValue.endsWith("/env-allowlist.js") ||
-    sourceValue.endsWith("/env-allowlist.ts") ||
-    sourceValue === "./env-allowlist.js" ||
-    sourceValue === "./env-allowlist.ts"
-  );
+  return ALLOWED_ENV_BUILDER_MODULES.has(sourceValue);
+}
+
+function getRequireSource(node) {
+  if (
+    node?.type === "CallExpression" &&
+    node.callee.type === "Identifier" &&
+    node.callee.name === "require" &&
+    node.arguments[0]?.type === "Literal" &&
+    typeof node.arguments[0].value === "string"
+  ) {
+    return node.arguments[0].value;
+  }
+  return undefined;
 }
 
 function isProcessEnv(node) {

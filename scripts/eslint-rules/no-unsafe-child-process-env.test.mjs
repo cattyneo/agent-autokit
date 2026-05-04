@@ -40,6 +40,20 @@ tester.run("no-unsafe-child-process-env", noUnsafeChildProcessEnv, {
         childProcess.execFile("gh", ["auth", "status"], { env: buildGhEnv(parentEnv) });
       `,
     },
+    {
+      code: `
+        import { spawn } from "node:child_process";
+        import { buildRunnerEnv } from "../../packages/core/src/env-allowlist.ts";
+        spawn("claude", ["--version"], { env: buildRunnerEnv(parentEnv) });
+      `,
+    },
+    {
+      code: `
+        const { spawn } = require("node:child_process");
+        const { buildRunnerEnv } = require("@cattyneo/autokit-core");
+        spawn("claude", ["--version"], { env: buildRunnerEnv(parentEnv) });
+      `,
+    },
   ],
   invalid: [
     {
@@ -99,6 +113,21 @@ tester.run("no-unsafe-child-process-env", noUnsafeChildProcessEnv, {
       code: `
         import execa from "execa";
         execa("claude", ["--version"]);
+      `,
+      errors: [{ messageId: "missingEnv" }],
+    },
+    {
+      code: `
+        import { spawn } from "node:child_process";
+        import { buildRunnerEnv } from "evil-pkg/dist/env-allowlist.js";
+        spawn("claude", ["--version"], { env: buildRunnerEnv(parentEnv) });
+      `,
+      errors: [{ messageId: "wrongEnvBuilder" }],
+    },
+    {
+      code: `
+        const { spawn } = require("node:child_process");
+        spawn("claude", ["--version"]);
       `,
       errors: [{ messageId: "missingEnv" }],
     },

@@ -1,0 +1,8 @@
+{
+  "status": "paused",
+  "summary": "Network is required",
+  "data": {
+    "reason": "Package metadata lookup requires network.",
+    "recoverable": true
+  }
+}

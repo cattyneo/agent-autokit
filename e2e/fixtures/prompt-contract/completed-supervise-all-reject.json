@@ -1,0 +1,11 @@
+{
+  "status": "completed",
+  "summary": "No fix required",
+  "data": {
+    "accept_ids": [],
+    "reject_ids": ["F1"],
+    "reject_reasons": {
+      "F1": "Finding is out of scope for this PR."
+    }
+  }
+}

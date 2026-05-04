@@ -1,0 +1,16 @@
+{
+  "status": "completed",
+  "summary": "Implementation completed",
+  "data": {
+    "changed_files": ["src/example.ts"],
+    "tests_run": [
+      {
+        "command": "node --test",
+        "result": "passed",
+        "summary": "Unit tests passed"
+      }
+    ],
+    "docs_updated": false,
+    "notes": "No documentation changes were required."
+  }
+}

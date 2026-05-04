@@ -1,0 +1,8 @@
+{
+  "status": "failed",
+  "summary": "Runner failed",
+  "data": {
+    "reason": "Provider returned invalid structured output.",
+    "recoverable": true
+  }
+}

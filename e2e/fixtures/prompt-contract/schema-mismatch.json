@@ -1,0 +1,8 @@
+{
+  "status": "completed",
+  "summary": "Plan verification completed",
+  "data": {
+    "result": "ok",
+    "findings": []
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "status": "completed",
+  "summary": "Conflicting supervision",
+  "data": {
+    "accept_ids": ["F1"],
+    "reject_ids": ["F1"],
+    "reject_reasons": {
+      "F1": "Duplicate id"
+    },
+    "fix_prompt": "Address F1."
+  }
+}

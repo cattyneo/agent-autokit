@@ -1,0 +1,126 @@
+{
+  "fixtures": [
+    {
+      "file": "completed-plan.json",
+      "contract": "plan",
+      "expect": "pass",
+      "reason": "completed plan data matches SPEC §9.3"
+    },
+    {
+      "file": "completed-plan-verify.json",
+      "contract": "plan-verify",
+      "expect": "pass",
+      "reason": "completed plan-verify data matches SPEC §9.3"
+    },
+    {
+      "file": "completed-plan-fix.json",
+      "contract": "plan-fix",
+      "expect": "pass",
+      "reason": "completed plan-fix data matches SPEC §9.3"
+    },
+    {
+      "file": "completed-implement.json",
+      "contract": "implement",
+      "expect": "pass",
+      "reason": "completed implement data matches SPEC §9.3"
+    },
+    {
+      "file": "completed-review.json",
+      "contract": "review",
+      "expect": "pass",
+      "reason": "completed review data matches SPEC §9.3"
+    },
+    {
+      "file": "completed-supervise-all-reject.json",
+      "contract": "supervise",
+      "expect": "pass",
+      "reason": "supervise does not require fix_prompt when accept_ids is empty"
+    },
+    {
+      "file": "completed-supervise-with-fix.json",
+      "contract": "supervise",
+      "expect": "pass",
+      "reason": "supervise requires fix_prompt when accept_ids is non-empty"
+    },
+    {
+      "file": "completed-fix.json",
+      "contract": "fix",
+      "expect": "pass",
+      "reason": "completed fix data matches SPEC §9.3"
+    },
+    {
+      "file": "need-input-with-default.json",
+      "contract": "plan",
+      "expect": "pass",
+      "reason": "need_input includes question.default"
+    },
+    {
+      "file": "need-input-missing-default.json",
+      "contract": "plan",
+      "expect": "fail",
+      "code": "prompt_contract_violation",
+      "reason": "need_input without question.default must fail closed"
+    },
+    {
+      "file": "paused-recoverable.json",
+      "contract": "implement",
+      "expect": "pass",
+      "reason": "paused data only contains reason and recoverable"
+    },
+    {
+      "file": "failed-recoverable.json",
+      "contract": "fix",
+      "expect": "pass",
+      "reason": "failed data only contains reason and recoverable"
+    },
+    {
+      "file": "schema-mismatch.json",
+      "contract": "plan",
+      "expect": "fail",
+      "code": "prompt_contract_violation",
+      "reason": "plan contract cannot return plan-verify data"
+    },
+    {
+      "file": "supervise-missing-fix-prompt.json",
+      "contract": "supervise",
+      "expect": "fail",
+      "code": "prompt_contract_violation",
+      "reason": "supervise with accept_ids must include fix_prompt"
+    },
+    {
+      "file": "supervise-duplicate-id.json",
+      "contract": "supervise",
+      "expect": "fail",
+      "code": "prompt_contract_violation",
+      "reason": "supervise accept/reject ids must be unique and disjoint"
+    },
+    {
+      "file": "supervise-repeated-accept-id.json",
+      "contract": "supervise",
+      "expect": "fail",
+      "code": "prompt_contract_violation",
+      "reason": "supervise accept_ids must not contain duplicates"
+    },
+    {
+      "file": "fix-duplicate-id.json",
+      "contract": "fix",
+      "expect": "fail",
+      "code": "prompt_contract_violation",
+      "reason": "fix resolved/unresolved ids must be unique and disjoint"
+    },
+    {
+      "file": "fix-repeated-resolved-id.json",
+      "contract": "fix",
+      "expect": "fail",
+      "code": "prompt_contract_violation",
+      "reason": "fix resolved_accept_ids must not contain duplicates"
+    },
+    {
+      "file": "failed-extra-field.json",
+      "contract": "fix",
+      "expect": "fail",
+      "code": "prompt_contract_violation",
+      "reason": "failed data allows only reason and recoverable"
+    }
+  ]
+}

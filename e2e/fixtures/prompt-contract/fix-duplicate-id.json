@@ -1,0 +1,11 @@
+{
+  "status": "completed",
+  "summary": "Conflicting fix result",
+  "data": {
+    "changed_files": ["src/example.ts"],
+    "tests_run": [],
+    "resolved_accept_ids": ["F1"],
+    "unresolved_accept_ids": ["F1"],
+    "notes": "F1 cannot be both resolved and unresolved."
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "status": "completed",
+  "summary": "Fix required",
+  "data": {
+    "accept_ids": ["F2"],
+    "reject_ids": ["F3"],
+    "reject_reasons": {
+      "F3": "Finding is already covered by existing tests."
+    },
+    "fix_prompt": "Address finding F2 and rerun the relevant tests."
+  }
+}

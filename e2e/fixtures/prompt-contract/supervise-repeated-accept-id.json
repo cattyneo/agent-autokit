@@ -1,0 +1,10 @@
+{
+  "status": "completed",
+  "summary": "Duplicate accepted finding",
+  "data": {
+    "accept_ids": ["F1", "F1"],
+    "reject_ids": [],
+    "reject_reasons": {},
+    "fix_prompt": "Address F1."
+  }
+}

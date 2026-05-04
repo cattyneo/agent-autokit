@@ -1,0 +1,11 @@
+{
+  "status": "completed",
+  "summary": "Duplicate resolved finding",
+  "data": {
+    "changed_files": ["src/example.ts"],
+    "tests_run": [],
+    "resolved_accept_ids": ["F1", "F1"],
+    "unresolved_accept_ids": [],
+    "notes": "F1 is duplicated."
+  }
+}

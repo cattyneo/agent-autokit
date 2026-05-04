@@ -2,7 +2,7 @@
 
 > Version: 0.1.0-draft (名称統一・構成整理 反映)
 > Status: Draft
-> Last Updated: 2026-05-03
+> Last Updated: 2026-05-04
 > 関連: [`./SPEC.md`](./SPEC.md)
 
 ---
@@ -58,7 +58,7 @@ v0.1 の GitHub Issue 化は下表を単位に行う。各 Issue 本文は `scop
 
 | Issue key | owner | scope | blocked-by | 対応 AC | 対応テスト | 非ゴール |
 |---|---|---|---|---|---|---|
-| AK-001 runner-sdk-contract-spike | runner | S0 D1-D3: Claude CLI / Claude Agent SDK / Codex SDK / gh merge の公式 docs 確認、実機 spike、`docs/spike-results.md`、prompt_contract parse/schema fail-closed fixture | — | SPEC §9.1.1 A/B/C、§9.3 prompt_contract schema、§13.5 runner contract | `e2e/runners/spike-runner-stability.ts`、prompt_contract fixture (`need_input` default あり/なし、paused schema、schema mismatch)、公式 docs evidence | runner 実装、同梱 asset 実装 |
+| AK-001 runner-sdk-contract-spike | runner | S0 D1-D3: Claude CLI / Claude Agent SDK / Codex SDK / gh merge の公式 docs 確認、one-shot 実機 smoke、`docs/spike-results.md`、prompt_contract parse/schema fail-closed fixture、full matrix 実行計画 | — | SPEC §9.1.1 evidence gate、§9.3 prompt_contract schema、§13.5 runner contract。N=20 / N=50 統計閾値は follow-up #23 の runner 採用 gate | `e2e/runners/spike-runner-stability.ts`、prompt_contract fixture (`need_input` default あり/なし、paused schema、schema mismatch)、公式 docs evidence、one-shot smoke evidence | runner 実装、同梱 asset 実装、full live matrix 実行 |
 | AK-002 runner-visibility-spike-fixtures | runner | S0 用の仮設 fixture assets (`e2e/fixtures/runner-visibility/`) と固定 fixture Issue 入力を作り、`.claude` / `.codex` / `.agents` visibility と `autokit-question` resolver を検証 | AK-001 docs 確認 | SPEC §9.1.1 A/B/C の skill loading 条件、§13.5 prompt_contract 参照 | spike visibility script、`docs/spike-results.md` evidence | S5 の本番同梱 asset、init transaction |
 | AK-003 repo-foundation-shell | core | bun workspace、biome/tsconfig、`.github/` seed、CI baseline | AK-001 | §13.7 private 配布の CI 前提 | build/lint/typecheck smoke | core runtime 実装 |
 | AK-004 core-env-auth-boundary | core | `core/env-allowlist.ts`、auth probe env 境界、runner/core child spawn env 分離、ESLint custom rule | AK-003 | §13.1 env unset、§13.4 GH token/API key 継承防止 | `core/env-allowlist` 100%、runner auth spawn grep | logger、tasks、workflow 実装 |
@@ -66,8 +66,8 @@ v0.1 の GitHub Issue 化は下表を単位に行う。各 Issue 本文は `scop
 | AK-006 core-logger-audit | core | `core/logger.ts`、audit kind、atomic rotation、redaction/truncate ordering | AK-003, AK-005 | §13.3 failure schema、§13.4 audit/log/sanitize HMAC | `core/logger` 85%+、audit kind set diff | state machine edge 実装 |
 | AK-007 core-tasks-state-reconcile-retry | core | `tasks.ts`、state-machine、git/gh/pr、reconcile、retry-cleanup/recover-corruption | AK-003, AK-005, AK-006 | §13.1 retry/reconcile/state、§13.2 cleaning、§13.3 tasks atomic | `core/tasks`、`core/state-machine`、`core/reconcile`、`core/retry-cleanup` | runner/TUI、GitHub Actions provisioning |
 | AK-008 cli-doctor-list-cleanup | cli | `packages/cli` parser、add/list/status/doctor、run/resume public entrypoint dispatch、retry --recover-corruption entrypoint、cleanup --force-detach、exit code | AK-004, AK-005, AK-007 | §13.4 exit code、force-detach precondition、doctor gates | `cli/exit-code`、cleanup force-detach fixtures、retry recover-corruption parser fixture、status output fixture | full run workflow internals |
-| AK-009 claude-runner | runner | `claude-runner` auth/runner/resume/safety、Claude 4 phase read-only boundary | AK-001, AK-002, AK-004, AK-005 | §9.1.1 A、§11.4.3、§13.4 Claude safety | `claude-runner/safety`、mock runner、manual hello world | Codex runner、workflow orchestration |
-| AK-010 codex-runner | runner | `codex-runner` auth/runner/resume/sandbox、process group、hard timeout、question callback | AK-001, AK-002, AK-004, AK-005 | §9.1.1 B、§13.1 question、§13.4 sandbox/timeout | `codex-runner` mock、manual hello world | Claude runner、workflow orchestration |
+| AK-009 claude-runner | runner | `claude-runner` auth/runner/resume/safety、Claude 4 phase read-only boundary | AK-001, AK-001-FU #23, AK-002, AK-004, AK-005 | §9.1.1 A、§11.4.3、§13.4 Claude safety | `claude-runner/safety`、mock runner、manual hello world | Codex runner、workflow orchestration |
+| AK-010 codex-runner | runner | `codex-runner` auth/runner/resume/sandbox、process group、hard timeout、question callback | AK-001, AK-001-FU #23, AK-002, AK-004, AK-005 | §9.1.1 B、§13.1 question、§13.4 sandbox/timeout | `codex-runner` mock、manual hello world | Claude runner、workflow orchestration |
 | AK-011 workflows-plan-review-supervise | workflow | plan / plan_verify / plan_fix / review / supervise orchestration、prompt_contract strict schema validation、finding_id、known reject 短絡 | AK-007, AK-009, AK-010 | §13.1 review_max / reject_history / prompt status、§13.5 prompt_contract schema | `workflows/*` mock、state-machine E08/E11/E12、prompt_contract schema fixtures | implement/fix commit/push、CI wait |
 | AK-012 workflows-implement-fix | workflow | implement/fix 7 checkpoints、rebase、commit/push/PR ready、CI-origin fix 分岐 | AK-007, AK-010, AK-011 | §13.1 crash checkpoint、CI fix counter 独立 | `core/reconcile` implement/fix matrix、workflow scenario (c) | CI polling/auto-merge reservation |
 | AK-013 workflows-ci-wait-reservation | workflow | `workflows/ci-wait.ts`、CI polling、auto-merge reservation、2 回 head_sha race 検知、timeout 分岐 | AK-007, AK-012 | §13.2 auto-merge timing、§13.4 race window/exit code | workflows scenario CI timeout/failure、E14-E21 | merge/cleaning cleanup |
@@ -263,7 +263,14 @@ agent-autokit/
   - parse pipeline は sanitize-before-parse → YAML/JSON parse → §9.3 schema validation → `AgentRunOutput.structured` 転写の順で固定し、sanitize 前 raw output は永続化しない
 - [ ] D3: spike 結果を SPEC §9 / tasks.yaml provider_sessions に反映
 
-**Exit (SPEC §9.1.1 A/B/C 3 系統と相互参照、各系統独立に評価):**
+**AK-001 close gate (PR #22 / Issue #2):**
+- [ ] 公式 docs / help / package metadata / type definition evidence を `docs/spike-results.md` に記録
+- [ ] Claude CLI / Codex CLI or SDK の one-shot live smoke evidence を記録し、CLI の cost telemetry を実課金証跡として断定しない
+- [ ] prompt_contract fixture が pass / fail-closed expectations を満たす
+- [ ] full matrix 実行計画と停止条件を `docs/spike-results.md` に記録
+- [ ] full matrix は follow-up #23 に分離し、AK-009 / AK-010 の runner 採用 gate として扱う
+
+**Runner adoption gate (follow-up #23、AK-009 / AK-010 の採用済み扱い前に必須):**
 
 **A. primary `claude -p` (Claude phase 4 種: plan / plan_fix / review / supervise、必達、未達で v0.1.0 出荷不可):**
 - [ ] N=20 試行で `plan` / `plan_fix` / `review` / `supervise` の prompt_contract YAML parse + §9.3 schema validation 成功率 **>= 95%**
@@ -295,7 +302,7 @@ agent-autokit/
 - [ ] AgentRunInput / AgentRunOutput 確定 (status 小文字 enum 1 系: `completed` / `need_input` / `paused` / `failed`、`rate_limited` のみ runner 層生成)
 - [ ] 計測結果を `docs/spike-results.md` に記録 (実行日時 / 系統別試行数 / 成功率 / 失敗時の status 値分布)
 
-**閾値未達時:** A or B 未達 → S1 へ進まず仕様再検討。C 未達 → `claude-runner/sdk-experimental.ts` を S2 D2 task から削除して PLAN を更新、A の `claude -p` のみで MVP 完走。
+**閾値未達時:** A or B 未実行 / 未達 → AK-009 / AK-010 を runner 採用済みとして ready / merge せず仕様再検討。C 未達 → `claude-runner/sdk-experimental.ts` を S2 D2 task から削除して PLAN を更新、A の `claude -p` のみで MVP 完走。
 
 ### S1: Foundation (5日)
 

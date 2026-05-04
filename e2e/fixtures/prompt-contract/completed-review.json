@@ -1,0 +1,16 @@
+{
+  "status": "completed",
+  "summary": "Review completed",
+  "data": {
+    "findings": [
+      {
+        "severity": "P2",
+        "file": "src/example.ts",
+        "line": 12,
+        "title": "Missing error branch",
+        "rationale": "The failure path is not covered.",
+        "suggested_fix": "Add a test for provider failure."
+      }
+    ]
+  }
+}

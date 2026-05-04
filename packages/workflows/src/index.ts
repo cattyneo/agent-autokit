@@ -125,6 +125,41 @@ export type CiWaitWorkflowResult = WorkflowResult & {
   ciFailureLog?: string;
 };
 
+export type MergePrObservation = {
+  state: "OPEN" | "MERGED" | "CLOSED";
+  merged: boolean;
+  headSha: string | null;
+  mergeable: "MERGEABLE" | "BLOCKED" | "UNKNOWN";
+};
+
+export type MergeDeps = {
+  getPr: (prNumber: number) => Promise<MergePrObservation> | MergePrObservation;
+  disableAutoMerge: (prNumber: number) => Promise<void> | void;
+  sleep?: (ms: number) => Promise<void> | void;
+};
+
+export type MergeWorkflowOptions = WorkflowOptions & {
+  github: MergeDeps;
+  startedAtMs?: number;
+  nowMs?: () => number;
+};
+
+export type CleaningStepResult = { ok: true } | { ok: false; message: string };
+
+export type CleaningDeps = {
+  deleteRemoteBranch: (branch: string) => Promise<CleaningStepResult> | CleaningStepResult;
+  removeWorktree: (
+    worktreePath: string,
+    options: { force: boolean },
+  ) => Promise<CleaningStepResult> | CleaningStepResult;
+  pruneWorktrees?: () => Promise<CleaningStepResult> | CleaningStepResult;
+  sleep?: (ms: number) => Promise<void> | void;
+};
+
+export type CleaningWorkflowOptions = WorkflowOptions & {
+  cleanup: CleaningDeps;
+};
+
 export type PlanVerifyFinding = {
   severity: "blocker" | "major" | "minor";
   title: string;
@@ -711,6 +746,108 @@ export async function runCiWaitWorkflow(
   }
 }
 
+export async function runMergeWorkflow(
+  inputTask: TaskEntry,
+  options: MergeWorkflowOptions,
+): Promise<WorkflowResult> {
+  const config = options.config ?? DEFAULT_CONFIG;
+  const task = cloneTask(inputTask);
+  if (task.state !== "merging" || task.runtime_phase !== "merge") {
+    return {
+      task: failWorkflow(
+        task,
+        task.runtime_phase ?? "merge",
+        "other",
+        "merge workflow requires state=merging and runtime_phase=merge",
+        options,
+      ).task,
+    };
+  }
+  const prNumber = requirePrNumber(task);
+  const expectedHead = requirePrHead(task);
+  const startedAt = options.startedAtMs ?? currentMs(options);
+
+  for (;;) {
+    if (currentMs(options) - startedAt >= config.merge.timeout_ms) {
+      await options.github.disableAutoMerge(prNumber);
+      return { task: transitionTask(task, { type: "merge_timeout" }, config) };
+    }
+
+    const pr = await options.github.getPr(prNumber);
+    if (pr.state === "MERGED" || pr.merged) {
+      if (pr.headSha !== expectedHead) {
+        await options.github.disableAutoMerge(prNumber);
+      }
+      return { task: transitionTask(task, { type: "pr_merged", headSha: pr.headSha }, config) };
+    }
+    if (pr.state === "CLOSED") {
+      await options.github.disableAutoMerge(prNumber);
+      return { task: transitionTask(task, { type: "pr_closed_unmerged" }, config) };
+    }
+    if (pr.mergeable === "BLOCKED") {
+      await options.github.disableAutoMerge(prNumber);
+      return { task: transitionTask(task, { type: "merge_blocked" }, config) };
+    }
+    await sleepFor(config.merge.poll_interval_ms, options);
+  }
+}
+
+export async function runCleaningWorkflow(
+  inputTask: TaskEntry,
+  options: CleaningWorkflowOptions,
+): Promise<WorkflowResult> {
+  const config = options.config ?? DEFAULT_CONFIG;
+  let task = cloneTask(inputTask);
+  if (task.state !== "cleaning" || task.runtime_phase !== null) {
+    return {
+      task: failWorkflow(
+        task,
+        task.runtime_phase ?? "cleaning",
+        "other",
+        "cleaning workflow requires state=cleaning and runtime_phase=null",
+        options,
+      ).task,
+    };
+  }
+
+  if (!task.cleaning_progress.grace_period_done) {
+    await sleepFor(config.merge.branch_delete_grace_ms, options);
+    task.cleaning_progress.grace_period_done = true;
+    await persistTask(task, options);
+  }
+
+  if (!task.cleaning_progress.branch_deleted_done) {
+    const branch = requireBranch(task);
+    const deleted = await options.cleanup.deleteRemoteBranch(branch);
+    if (!deleted.ok) {
+      return {
+        task: transitionTask(task, {
+          type: "cleaning_branch_failed",
+          message: `branch cleanup incomplete: ${deleted.message}`,
+        }),
+      };
+    }
+    task.cleaning_progress.branch_deleted_done = true;
+    await persistTask(task, options);
+  }
+
+  if (!task.cleaning_progress.worktree_removed_done) {
+    const worktreePath = requireWorktreePath(task);
+    const removed = await removeWorktreeWithRetry(task, worktreePath, config, options);
+    if (!removed.ok) {
+      return { task: removed.task };
+    }
+    task = removed.task;
+    task.cleaning_progress.worktree_removed_done = true;
+    task.cleaning_progress.worktree_remove_attempts = 0;
+    await persistTask(task, options);
+  }
+
+  task = transitionTask(task, { type: "cleaning_completed" }, config);
+  await persistTask(task, options);
+  return { task };
+}
+
 export function assignFindingIds(findings: ReviewFinding[]): ReviewFindingWithId[] {
   return findings.map((finding) => ({
     ...finding,
@@ -1047,16 +1184,62 @@ async function persistTask(task: TaskEntry, options: WorkflowOptions): Promise<v
   await options.persistTask?.(cloneTask(task));
 }
 
-function currentMs(options: CiWaitWorkflowOptions): number {
+function currentMs(options: { nowMs?: () => number }): number {
   return options.nowMs?.() ?? Date.now();
 }
 
-async function sleepFor(ms: number, options: CiWaitWorkflowOptions): Promise<void> {
-  if (options.github.sleep !== undefined) {
-    await options.github.sleep(ms);
+async function sleepFor(
+  ms: number,
+  options: CiWaitWorkflowOptions | MergeWorkflowOptions | CleaningWorkflowOptions,
+): Promise<void> {
+  const sleeper = "github" in options ? options.github.sleep : options.cleanup.sleep;
+  if (sleeper !== undefined) {
+    await sleeper(ms);
     return;
   }
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function removeWorktreeWithRetry(
+  task: TaskEntry,
+  worktreePath: string,
+  config: AutokitConfig,
+  options: CleaningWorkflowOptions,
+): Promise<{ ok: true; task: TaskEntry } | { ok: false; task: TaskEntry }> {
+  const next = cloneTask(task);
+  for (;;) {
+    const removed = await options.cleanup.removeWorktree(worktreePath, { force: false });
+    if (removed.ok) {
+      return { ok: true, task: next };
+    }
+    next.cleaning_progress.worktree_remove_attempts += 1;
+    await persistTask(next, options);
+
+    if (next.cleaning_progress.worktree_remove_attempts >= config.merge.worktree_remove_retry_max) {
+      const forced = await options.cleanup.removeWorktree(worktreePath, { force: true });
+      if (forced.ok) {
+        return { ok: true, task: next };
+      }
+      const pruned = await options.cleanup.pruneWorktrees?.();
+      if (pruned?.ok) {
+        return { ok: true, task: next };
+      }
+      const message = pruned && !pruned.ok ? pruned.message : forced.message;
+      return {
+        ok: false,
+        task: transitionTask(next, {
+          type: "cleaning_worktree_failed",
+          message: `worktree cleanup incomplete after ${next.cleaning_progress.worktree_remove_attempts} attempts: ${message}`,
+        }),
+      };
+    }
+
+    await sleepFor(worktreeBackoffMs(next.cleaning_progress.worktree_remove_attempts), options);
+  }
+}
+
+function worktreeBackoffMs(attempts: number): number {
+  return Math.min(9_000, attempts === 1 ? 1_000 : attempts === 2 ? 3_000 : 9_000);
 }
 
 async function waitForAutoMergeDisabled(
@@ -1128,6 +1311,13 @@ function requireBranch(task: TaskEntry): string {
     throw new Error("task branch is required");
   }
   return task.branch;
+}
+
+function requireWorktreePath(task: TaskEntry): string {
+  if (task.worktree_path === null) {
+    throw new Error("task worktree path is required");
+  }
+  return task.worktree_path;
 }
 
 function requirePrNumber(task: TaskEntry): number {

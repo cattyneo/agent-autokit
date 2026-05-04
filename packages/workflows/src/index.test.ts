@@ -15,12 +15,17 @@ import {
   type CiCheckObservation,
   type CiWaitDeps,
   type CiWaitPrObservation,
+  type CleaningDeps,
   computeFindingId,
   type ImplementFixGitDeps,
+  type MergeDeps,
+  type MergePrObservation,
   type ReviewFinding,
   runCiWaitWorkflow,
+  runCleaningWorkflow,
   runFixWorkflow,
   runImplementWorkflow,
+  runMergeWorkflow,
   runPlanningWorkflow,
   runReviewSuperviseWorkflow,
   type WorkflowRunner,
@@ -739,6 +744,172 @@ describe("ci-wait workflow", () => {
   });
 });
 
+describe("merge and cleaning workflow", () => {
+  it("moves merged PRs with matching head into cleaning", async () => {
+    const github = mockMergeDeps({
+      prs: [{ state: "MERGED", merged: true, headSha: "head-sha", mergeable: "MERGEABLE" }],
+    });
+
+    const result = await runMergeWorkflow(mergingTask(), {
+      runner: queueRunner([], []),
+      github,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(result.task.state, "cleaning");
+    assert.equal(result.task.runtime_phase, null);
+    assert.deepEqual(github.calls, ["getPr:51"]);
+  });
+
+  it("disables auto-merge for merge mismatch, blocked, closed, and timeout", async () => {
+    const mismatchGithub = mockMergeDeps({
+      prs: [{ state: "MERGED", merged: true, headSha: "new-head", mergeable: "MERGEABLE" }],
+    });
+    const mismatch = await runMergeWorkflow(mergingTask(), {
+      runner: queueRunner([], []),
+      github: mismatchGithub,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+    assert.equal(mismatch.task.failure?.code, "merge_sha_mismatch");
+    assert.deepEqual(mismatchGithub.calls, ["getPr:51", "disable:51"]);
+
+    const blockedGithub = mockMergeDeps({
+      prs: [{ state: "OPEN", merged: false, headSha: "head-sha", mergeable: "BLOCKED" }],
+    });
+    const blocked = await runMergeWorkflow(mergingTask(), {
+      runner: queueRunner([], []),
+      github: blockedGithub,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+    assert.equal(blocked.task.failure?.code, "branch_protection");
+    assert.deepEqual(blockedGithub.calls, ["getPr:51", "disable:51"]);
+
+    const closedGithub = mockMergeDeps({
+      prs: [{ state: "CLOSED", merged: false, headSha: "head-sha", mergeable: "UNKNOWN" }],
+    });
+    const closed = await runMergeWorkflow(mergingTask(), {
+      runner: queueRunner([], []),
+      github: closedGithub,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+    assert.equal(closed.task.failure?.code, "other");
+    assert.deepEqual(closedGithub.calls, ["getPr:51", "disable:51"]);
+
+    const timeoutGithub = mockMergeDeps({
+      prs: [{ state: "OPEN", merged: false, headSha: "head-sha", mergeable: "UNKNOWN" }],
+    });
+    const timeout = await runMergeWorkflow(mergingTask(), {
+      runner: queueRunner([], []),
+      github: timeoutGithub,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+      config: parseConfig({ merge: { timeout_ms: 100, poll_interval_ms: 10 } }),
+      startedAtMs: 0,
+      nowMs: queueNow([0, 101]),
+    });
+    assert.equal(timeout.task.failure?.code, "merge_timeout");
+    assert.deepEqual(timeoutGithub.calls, ["getPr:51", "sleep:10", "disable:51"]);
+  });
+
+  it("cleans merged branch and worktree with forward-resume flags", async () => {
+    const persisted: string[] = [];
+    const cleanup = mockCleaningDeps({ branch: [{ ok: true }], worktree: [{ ok: true }] });
+
+    const result = await runCleaningWorkflow(cleaningTask(), {
+      runner: queueRunner([], []),
+      cleanup,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+      persistTask: (task) => {
+        persisted.push(cleaningState(task));
+      },
+    });
+
+    assert.equal(result.task.state, "merged");
+    assert.equal(result.task.cleaning_progress.finalized_done, true);
+    assert.deepEqual(cleanup.calls, [
+      "sleep:5000",
+      "deleteRemoteBranch:autokit/issue-13",
+      "removeWorktree:.autokit/worktrees/issue-13:false",
+    ]);
+    assert.deepEqual(persisted, [
+      "grace=true branch=false worktree=false finalized=false attempts=0 state=cleaning",
+      "grace=true branch=true worktree=false finalized=false attempts=0 state=cleaning",
+      "grace=true branch=true worktree=true finalized=false attempts=0 state=cleaning",
+      "grace=true branch=true worktree=true finalized=true attempts=0 state=merged",
+    ]);
+
+    const resumedCleanup = mockCleaningDeps({ branch: [], worktree: [{ ok: true }] });
+    const resumed = await runCleaningWorkflow(
+      {
+        ...cleaningTask(),
+        cleaning_progress: {
+          grace_period_done: true,
+          branch_deleted_done: true,
+          worktree_removed_done: false,
+          finalized_done: false,
+          worktree_remove_attempts: 0,
+        },
+      },
+      {
+        runner: queueRunner([], []),
+        cleanup: resumedCleanup,
+        repoRoot: "/repo",
+        worktreeRoot: "/worktree",
+      },
+    );
+    assert.equal(resumed.task.state, "merged");
+    assert.deepEqual(resumedCleanup.calls, ["removeWorktree:.autokit/worktrees/issue-13:false"]);
+  });
+
+  it("pauses cleaning on branch and worktree cleanup failures", async () => {
+    const branchFailure = await runCleaningWorkflow(cleaningTask(), {
+      runner: queueRunner([], []),
+      cleanup: mockCleaningDeps({
+        branch: [{ ok: false, message: "denied" }],
+        worktree: [],
+      }),
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+    assert.equal(branchFailure.task.failure?.code, "branch_delete_failed");
+
+    const cleanup = mockCleaningDeps({
+      branch: [{ ok: true }],
+      worktree: [
+        { ok: false, message: "locked-1" },
+        { ok: false, message: "locked-2" },
+        { ok: false, message: "locked-3" },
+        { ok: false, message: "force failed" },
+      ],
+      prune: { ok: false, message: "prune failed" },
+    });
+    const worktreeFailure = await runCleaningWorkflow(cleaningTask(), {
+      runner: queueRunner([], []),
+      cleanup,
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+    assert.equal(worktreeFailure.task.failure?.code, "worktree_remove_failed");
+    assert.equal(worktreeFailure.task.cleaning_progress.worktree_remove_attempts, 3);
+    assert.deepEqual(cleanup.calls, [
+      "sleep:5000",
+      "deleteRemoteBranch:autokit/issue-13",
+      "removeWorktree:.autokit/worktrees/issue-13:false",
+      "sleep:1000",
+      "removeWorktree:.autokit/worktrees/issue-13:false",
+      "sleep:3000",
+      "removeWorktree:.autokit/worktrees/issue-13:false",
+      "removeWorktree:.autokit/worktrees/issue-13:true",
+      "pruneWorktrees",
+    ]);
+  });
+});
+
 describe("review and supervise workflow", () => {
   it("moves accepted findings to fixing without running the fix phase", async () => {
     const calls: AgentRunInput[] = [];
@@ -1001,6 +1172,18 @@ function ciWaitingTask() {
   };
 }
 
+function mergingTask() {
+  return transitionTask(ciWaitingTask(), { type: "auto_merge_reserved" });
+}
+
+function cleaningTask() {
+  return {
+    ...transitionTask(mergingTask(), { type: "pr_merged", headSha: "head-sha" }),
+    branch: "autokit/issue-13",
+    worktree_path: ".autokit/worktrees/issue-13",
+  };
+}
+
 function reviewFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
   return {
     severity: "P1",
@@ -1011,6 +1194,68 @@ function reviewFinding(overrides: Partial<ReviewFinding> = {}): ReviewFinding {
     suggested_fix: "Record the finding decision.",
     ...overrides,
   };
+}
+
+function mockMergeDeps(input: { prs: MergePrObservation[] }): MergeDeps & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    getPr: (prNumber) => {
+      calls.push(`getPr:${prNumber}`);
+      const next = input.prs.shift();
+      assert.ok(next, "expected queued merge PR observation");
+      return next;
+    },
+    disableAutoMerge: (prNumber) => {
+      calls.push(`disable:${prNumber}`);
+    },
+    sleep: (ms) => {
+      calls.push(`sleep:${ms}`);
+    },
+  };
+}
+
+function mockCleaningDeps(input: {
+  branch: Array<{ ok: true } | { ok: false; message: string }>;
+  worktree: Array<{ ok: true } | { ok: false; message: string }>;
+  prune?: { ok: true } | { ok: false; message: string };
+}): CleaningDeps & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    deleteRemoteBranch: (branch) => {
+      calls.push(`deleteRemoteBranch:${branch}`);
+      const next = input.branch.shift();
+      assert.ok(next, "expected queued branch cleanup result");
+      return next;
+    },
+    removeWorktree: (worktreePath, options) => {
+      calls.push(`removeWorktree:${worktreePath}:${options.force}`);
+      const next = input.worktree.shift();
+      assert.ok(next, "expected queued worktree cleanup result");
+      return next;
+    },
+    pruneWorktrees: () => {
+      calls.push("pruneWorktrees");
+      assert.ok(input.prune, "expected queued prune result");
+      return input.prune;
+    },
+    sleep: (ms) => {
+      calls.push(`sleep:${ms}`);
+    },
+  };
+}
+
+function cleaningState(task: TaskEntry): string {
+  const progress = task.cleaning_progress;
+  return [
+    `grace=${progress.grace_period_done}`,
+    `branch=${progress.branch_deleted_done}`,
+    `worktree=${progress.worktree_removed_done}`,
+    `finalized=${progress.finalized_done}`,
+    `attempts=${progress.worktree_remove_attempts}`,
+    `state=${task.state}`,
+  ].join(" ");
 }
 
 function mockCiDeps(input: {

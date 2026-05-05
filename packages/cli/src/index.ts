@@ -8,6 +8,7 @@ import {
   buildGitBranchDeleteArgs,
   buildGitWorktreeRemoveArgs,
   createTaskEntry,
+  DEFAULT_CONFIG,
   type GhPrView,
   loadTasksFile,
   makeFailure,
@@ -27,6 +28,8 @@ import {
   type TuiTaskSummary,
 } from "@cattyneo/autokit-tui";
 import { Command, CommanderError } from "commander";
+
+import { type InitOptions, promptContractAssetNames, runInit } from "./init.js";
 
 export const AUTOKIT_VERSION = "0.1.0";
 export const TEMPFAIL_EXIT_CODE = 75;
@@ -57,6 +60,7 @@ export type CliDeps = {
     answerQuestion: (input: CliQuestionInput) => Promise<string> | string;
   }) => Promise<TaskEntry[]> | TaskEntry[];
   askQuestion?: (input: CliQuestionInput) => Promise<string> | string;
+  initProject?: (input: InitOptions) => { changed: string[]; skipped: string[]; dryRun: boolean };
 };
 
 export type CliQuestionInput = {
@@ -157,6 +161,15 @@ function createProgram(deps: CliDeps, setExitCode: (code: number) => void): Comm
     .action(() => {
       deps.stdout.write(`autokit ${AUTOKIT_VERSION}\n`);
       setExitCode(0);
+    });
+
+  program
+    .command("init")
+    .description("initialize autokit assets in this repository")
+    .option("--dry-run", "show planned changes without writing")
+    .option("--force", "allow init when prior backup residue exists")
+    .action((options: { dryRun?: boolean; force?: boolean }) => {
+      setExitCode(commandInit(options, deps));
     });
 
   program
@@ -262,6 +275,37 @@ function createProgram(deps: CliDeps, setExitCode: (code: number) => void): Comm
     });
 
   return program;
+}
+
+function commandInit(options: { dryRun?: boolean; force?: boolean }, deps: CliDeps): number {
+  try {
+    if (deps.initProject === undefined) {
+      for (const check of [
+        checkCommand(deps, "git repo", "git", ["rev-parse", "--is-inside-work-tree"]),
+        checkCommand(deps, "gh auth", "gh", ["auth", "status"]),
+        checkEnvUnset(deps),
+      ]) {
+        if (check.status === "FAIL") {
+          deps.stderr.write(`${check.name}: ${check.message}\n`);
+          return 1;
+        }
+      }
+    }
+    const result =
+      deps.initProject?.({ dryRun: options.dryRun === true, force: options.force === true }) ??
+      runInit(deps.cwd, { dryRun: options.dryRun === true, force: options.force === true });
+    deps.stdout.write(result.dryRun ? "init dry-run\n" : "init complete\n");
+    for (const entry of result.changed) {
+      deps.stdout.write(`change\t${entry}\n`);
+    }
+    for (const entry of result.skipped) {
+      deps.stdout.write(`skip\t${entry}\n`);
+    }
+    return 0;
+  } catch (error) {
+    deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
 }
 
 function commandAdd(
@@ -568,6 +612,7 @@ export function runDoctor(deps: CliDeps): { ok: boolean; checks: DoctorCheck[] }
   checks.push(checkEnvUnset(deps));
   checks.push(checkDotEnv(deps));
   checks.push(checkConfig(deps));
+  checks.push(checkPromptContracts(deps));
   return { ok: checks.every((check) => check.status !== "FAIL"), checks };
 }
 
@@ -585,7 +630,7 @@ function checkCommand(deps: CliDeps, name: string, command: string, args: string
 }
 
 function checkEnvUnset(deps: CliDeps): DoctorCheck {
-  const leaked = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY"].filter(
+  const leaked = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"].filter(
     (key) => deps.env[key] !== undefined,
   );
   return leaked.length === 0
@@ -598,7 +643,8 @@ function checkDotEnv(deps: CliDeps): DoctorCheck {
     (file) => {
       const path = join(deps.cwd, file);
       return (
-        existsSync(path) && /^(ANTHROPIC_API_KEY|OPENAI_API_KEY)=/m.test(readFileSync(path, "utf8"))
+        existsSync(path) &&
+        /^(ANTHROPIC_API_KEY|OPENAI_API_KEY|CODEX_API_KEY)=/m.test(readFileSync(path, "utf8"))
       );
     },
   );
@@ -622,6 +668,27 @@ function checkConfig(deps: CliDeps): DoctorCheck {
       message: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+function checkPromptContracts(deps: CliDeps): DoctorCheck {
+  const promptsDir = join(deps.cwd, ".agents", "prompts");
+  if (!existsSync(promptsDir)) {
+    return { name: "prompt contracts", status: "WARN", message: ".agents/prompts not found" };
+  }
+  const expected: string[] = Object.values(DEFAULT_CONFIG.phases)
+    .map((phase) => phase.prompt_contract)
+    .sort();
+  const actual = promptContractAssetNames(join(deps.cwd, ".agents"));
+  const missing = expected.filter((contract) => !actual.includes(contract));
+  const extra = actual.filter((contract) => !expected.includes(contract));
+  if (missing.length > 0 || extra.length > 0) {
+    return {
+      name: "prompt contracts",
+      status: "FAIL",
+      message: `missing=${missing.join(",") || "-"} extra=${extra.join(",") || "-"}`,
+    };
+  }
+  return { name: "prompt contracts", status: "PASS", message: "valid" };
 }
 
 function loadTasksOrEmpty(deps: CliDeps): TasksFile {

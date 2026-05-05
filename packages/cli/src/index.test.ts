@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -24,6 +33,7 @@ import {
   runCli,
   TEMPFAIL_EXIT_CODE,
 } from "./index.ts";
+import { INIT_MARKER_START, runInit } from "./init.ts";
 
 const NOW = "2026-05-04T19:50:00+09:00";
 
@@ -59,6 +69,91 @@ describe("cli exit code contract", () => {
 });
 
 describe("cli task commands", () => {
+  it("initializes assets transactionally and doctor validates prompt contracts", async () => {
+    const root = makeTempDir();
+    const init = runInit(root, { now: () => NOW });
+
+    assert.equal(init.dryRun, false);
+    assert.equal(existsSync(join(root, ".autokit", "tasks.yaml")), true);
+    assert.equal(existsSync(join(root, ".autokit", "audit-hmac-key")), true);
+    assert.equal(existsSync(join(root, ".agents", "prompts", "plan.md")), true);
+    assert.equal(existsSync(join(root, ".agents", "skills", "autokit-question", "SKILL.md")), true);
+    assert.equal(lstatSync(join(root, ".claude", "skills")).isSymbolicLink(), true);
+    assert.match(readFileSync(join(root, "AGENTS.md"), "utf8"), new RegExp(INIT_MARKER_START));
+    assert.equal(existsSync(join(root, ".autokit", ".backup")), false);
+
+    const harness = makeCliHarness(root, { execFile: () => "ok" });
+    assert.equal(await runCli(["doctor"], harness.deps), 0);
+    assert.match(harness.stdout(), /PASS\tprompt contracts\tvalid/);
+  });
+
+  it("supports init --dry-run through the CLI seam without writing", async () => {
+    const root = makeTempDir();
+    const calls: unknown[] = [];
+    const harness = makeCliHarness(root, {
+      initProject: (input) => {
+        calls.push(input);
+        return { dryRun: input.dryRun === true, changed: [".agents/prompts/plan.md"], skipped: [] };
+      },
+    });
+
+    assert.equal(await runCli(["init", "--dry-run"], harness.deps), 0);
+    assert.deepEqual(calls, [{ dryRun: true, force: false }]);
+    assert.match(harness.stdout(), /init dry-run/);
+    assert.match(harness.stdout(), /change\t\.agents\/prompts\/plan\.md/);
+  });
+
+  it("rolls back staged init assets on injected failure", () => {
+    const root = makeTempDir();
+
+    assert.throws(() => runInit(root, { now: () => NOW, failAfterAssets: true }), /injected/);
+    assert.equal(existsSync(join(root, ".agents")), false);
+    assert.equal(existsSync(join(root, ".claude")), false);
+    assert.equal(existsSync(join(root, ".autokit")), false);
+  });
+
+  it("aborts init for marker symlinks, parent symlinks, and backup blacklist conflicts", () => {
+    const root = makeTempDir();
+    const outside = makeTempDir();
+    symlinkSync(join(outside, "AGENTS.md"), join(root, "AGENTS.md"));
+    assert.throws(() => runInit(root, { now: () => NOW }), /symlink_invalid: AGENTS\.md/);
+
+    const parentSymlinkRoot = makeTempDir();
+    symlinkSync(outside, join(parentSymlinkRoot, ".agents"));
+    assert.throws(() => runInit(parentSymlinkRoot, { now: () => NOW }), /symlink_invalid/);
+
+    const backupSymlinkRoot = makeTempDir();
+    mkdirSync(join(backupSymlinkRoot, ".autokit"), { recursive: true });
+    symlinkSync(outside, join(backupSymlinkRoot, ".autokit", ".backup"));
+    assert.throws(() => runInit(backupSymlinkRoot, { now: () => NOW }), /symlink_invalid/);
+
+    const providerDirRoot = makeTempDir();
+    mkdirSync(join(providerDirRoot, ".claude", "skills"), { recursive: true });
+    assert.throws(() => runInit(providerDirRoot, { now: () => NOW }), /symlink_invalid/);
+
+    const danglingProviderRoot = makeTempDir();
+    mkdirSync(join(danglingProviderRoot, ".claude"), { recursive: true });
+    symlinkSync("missing", join(danglingProviderRoot, ".claude", "skills"));
+    assert.throws(() => runInit(danglingProviderRoot, { now: () => NOW }), /symlink_invalid/);
+
+    const blacklistRoot = makeTempDir();
+    mkdirSync(join(blacklistRoot, ".codex"), { recursive: true });
+    writeFileSync(join(blacklistRoot, ".codex", "auth.json"), "{}", { mode: 0o600 });
+    assert.throws(() => runInit(blacklistRoot, { now: () => NOW }), /backup blacklist conflict/);
+  });
+
+  it("records rollback failure evidence without exposing backup contents", () => {
+    const root = makeTempDir();
+
+    assert.throws(
+      () => runInit(root, { now: () => NOW, failAfterAssets: true, failDuringRollback: true }),
+      /init rollback failed; backup retained at .autokit\/.backup/,
+    );
+    const audit = readFileSync(join(root, ".autokit", "init-audit.jsonl"), "utf8");
+    assert.match(audit, /init_rollback_failed/);
+    assert.equal(readdirSync(join(root, ".autokit", ".backup")).length, 1);
+  });
+
   it("parses issue ranges with de-duplication and stable ordering", () => {
     assert.deepEqual(parseIssueRange("12,10-11,10"), [10, 11, 12]);
     assert.equal(parseIssueRange("all"), "all");
@@ -230,12 +325,15 @@ describe("cli doctor/retry/cleanup gates", () => {
     assert.match(passHarness.stdout(), /WARN\tconfig\t\.autokit\/config\.yaml not found/);
 
     const failHarness = makeCliHarness(root, {
-      env: { ANTHROPIC_API_KEY: "dummy" },
+      env: { ANTHROPIC_API_KEY: "dummy", CODEX_API_KEY: "dummy" },
       execFile: okExec,
     });
 
     assert.equal(await runCli(["doctor"], failHarness.deps), 1);
-    assert.match(failHarness.stdout(), /FAIL\tenv unset\tANTHROPIC_API_KEY must not be exported/);
+    assert.match(
+      failHarness.stdout(),
+      /FAIL\tenv unset\tANTHROPIC_API_KEY,CODEX_API_KEY must not be exported/,
+    );
   });
 
   it("recovers a corrupt queue from tasks.yaml.bak for retry --recover-corruption", async () => {

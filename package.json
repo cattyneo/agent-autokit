@@ -14,7 +14,10 @@
     "typecheck": "tsc -b"
   },
   "dependencies": {
+    "@cattyneo/autokit-claude-runner": "workspace:*",
     "@cattyneo/autokit-core": "workspace:*",
+    "@cattyneo/autokit-codex-runner": "workspace:*",
+    "@cattyneo/autokit-workflows": "workspace:*",
     "@cattyneo/autokit-tui": "workspace:*"
   },
   "devDependencies": {

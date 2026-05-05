@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import {
+  type AgentRunInput,
   createTaskEntry,
   loadTasksFile,
   makeFailure,
@@ -280,6 +281,66 @@ describe("cli task commands", () => {
     assert.deepEqual(answered, ["vitest"]);
     assert.match(harness.stdout(), /auto-answered need_input with default for #16/);
     assert.match(harness.stdout(), /#16 merged - PR - \[AK-015\] tui-question-monitoring/);
+  });
+
+  it("uses the production workflow runner when no test seam is injected", async () => {
+    const root = makeTempDir();
+    writeTasks(root, [task({ issue: 9, state: "queued" })]);
+    const calls: AgentRunInput[] = [];
+    const harness = makeCliHarness(root, {
+      workflowMaxSteps: 1,
+      workflowRunner: async (input) => {
+        calls.push(input);
+        if (input.phase === "plan_verify") {
+          return {
+            status: "completed",
+            summary: "verified",
+            structured: { result: "ok", findings: [] },
+          };
+        }
+        return {
+          status: "completed",
+          summary: "planned",
+          structured: { plan_markdown: "## Plan", assumptions: [], risks: [] },
+        };
+      },
+      execFile: (command, args) => {
+        assert.deepEqual(
+          [command, ...args],
+          ["gh", "issue", "view", "9", "--json", "number,title,body,labels,state,url"],
+        );
+        return JSON.stringify({ number: 9, title: "AK-009", body: "Issue body" });
+      },
+    });
+
+    assert.equal(await runCli(["run"], harness.deps), TEMPFAIL_EXIT_CODE);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].phase, "plan");
+    assert.equal(calls[0].provider, "claude");
+    assert.equal(calls[1].phase, "plan_verify");
+    assert.equal(calls[1].provider, "codex");
+    assert.match(calls[0].prompt, /Issue context JSON:/);
+    assert.match(calls[0].prompt, /Issue body/);
+    const loaded = loadTasksFile(tasksPath(root)).tasks[0];
+    assert.equal(loaded.state, "planned");
+    assert.equal(loaded.runtime_phase, null);
+  });
+
+  it("fails production run before runner dispatch when API key env is exported", async () => {
+    const root = makeTempDir();
+    writeTasks(root, [task({ issue: 9, state: "queued" })]);
+    const calls: AgentRunInput[] = [];
+    const harness = makeCliHarness(root, {
+      env: { OPENAI_API_KEY: "dummy" },
+      workflowRunner: async (input) => {
+        calls.push(input);
+        return { status: "completed", summary: "unexpected" };
+      },
+    });
+
+    assert.equal(await runCli(["run"], harness.deps), 1);
+    assert.match(harness.stderr(), /OPENAI_API_KEY must not be exported/);
+    assert.equal(calls.length, 0);
   });
 
   it("rejects resume of retry_cleanup_failed paused tasks with tempfail", async () => {

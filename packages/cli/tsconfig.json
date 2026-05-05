@@ -6,5 +6,11 @@
     "tsBuildInfoFile": "../../.tsbuildinfo/cli.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../core" }, { "path": "../tui" }]
+  "references": [
+    { "path": "../core" },
+    { "path": "../tui" },
+    { "path": "../workflows" },
+    { "path": "../claude-runner" },
+    { "path": "../codex-runner" }
+  ]
 }

@@ -16,6 +16,62 @@ export function buildGhPrViewArgs(prNumber: number): string[] {
   return ["pr", "view", String(prNumber), "--json", "state,mergedAt,headRefOid,mergeable"];
 }
 
+export function buildGhPrViewHeadArgs(prNumber: number): string[] {
+  return ["pr", "view", String(prNumber), "--json", "headRefOid,baseRefOid"];
+}
+
+export function buildGhPrViewCiArgs(prNumber: number): string[] {
+  return ["pr", "view", String(prNumber), "--json", "statusCheckRollup"];
+}
+
+export function buildGhPrViewMergeArgs(prNumber: number): string[] {
+  return ["pr", "view", String(prNumber), "--json", "headRefOid,mergeable,autoMergeRequest"];
+}
+
+export function buildGhPrListHeadArgs(branch: string): string[] {
+  return [
+    "pr",
+    "list",
+    "--head",
+    branch,
+    "--state",
+    "all",
+    "--json",
+    "number,state,headRefOid,baseRefOid",
+    "--limit",
+    "1",
+  ];
+}
+
+export function buildGhPrCreateDraftArgs(input: {
+  title: string;
+  body: string;
+  head: string;
+  base: string;
+}): string[] {
+  return [
+    "pr",
+    "create",
+    "--draft",
+    "--title",
+    input.title,
+    "--body",
+    input.body,
+    "--head",
+    input.head,
+    "--base",
+    input.base,
+  ];
+}
+
+export function buildGhPrReadyArgs(prNumber: number): string[] {
+  return ["pr", "ready", String(prNumber)];
+}
+
+export function buildGhIssueViewBodyArgs(issue: number): string[] {
+  return ["issue", "view", String(issue), "--json", "number,title,body,labels,state,url"];
+}
+
 export function buildGhPrCloseArgs(prNumber: number): string[] {
   return [
     "pr",

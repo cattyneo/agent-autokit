@@ -27,8 +27,10 @@ import {
   promptQuestion,
   type TuiTaskSummary,
 } from "@cattyneo/autokit-tui";
+import type { WorkflowRunner } from "@cattyneo/autokit-workflows";
 import { Command, CommanderError } from "commander";
 
+import { runProductionWorkflow } from "./executor.js";
 import { type InitOptions, promptContractAssetNames, runInit } from "./init.js";
 
 export const AUTOKIT_VERSION = "0.1.0";
@@ -59,6 +61,8 @@ export type CliDeps = {
     yes: boolean;
     answerQuestion: (input: CliQuestionInput) => Promise<string> | string;
   }) => Promise<TaskEntry[]> | TaskEntry[];
+  workflowRunner?: WorkflowRunner;
+  workflowMaxSteps?: number;
   askQuestion?: (input: CliQuestionInput) => Promise<string> | string;
   initProject?: (input: InitOptions) => { changed: string[]; skipped: string[]; dryRun: boolean };
 };
@@ -383,15 +387,25 @@ function commandAdd(
 
 async function commandWorkflowStatus(deps: CliDeps, yes = false): Promise<number> {
   try {
-    if (deps.runWorkflow !== undefined) {
-      const tasks = await deps.runWorkflow({
-        yes,
-        answerQuestion: (input) => answerCliQuestion(input, deps, yes),
-      });
-      deps.stdout.write(formatRunFrame({ tasks: tasks.map(toTuiTaskSummary) }));
-      return getWorkflowExitCode(tasks);
-    }
-    const tasks = loadTasksFile(tasksPath(deps)).tasks;
+    const runWorkflow =
+      deps.runWorkflow ??
+      ((input: {
+        yes: boolean;
+        answerQuestion: (input: CliQuestionInput) => Promise<string> | string;
+      }) =>
+        runProductionWorkflow({
+          cwd: deps.cwd,
+          env: deps.env,
+          execFile: deps.execFile,
+          runner: deps.workflowRunner,
+          maxSteps: deps.workflowMaxSteps,
+          now: deps.now,
+          answerQuestion: input.answerQuestion,
+        }));
+    const tasks = await runWorkflow({
+      yes,
+      answerQuestion: (input) => answerCliQuestion(input, deps, yes),
+    });
     deps.stdout.write(
       formatRunFrame({
         tasks: tasks.map(toTuiTaskSummary),

@@ -415,11 +415,12 @@ Issue #21 private release documentation and install smoke (2026-05-05 Asia/Tokyo
 - API key guard: `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CODEX_API_KEY` were unset for live smoke commands; auth JSON files were not read, copied, logged, or included in artifacts.
 - Build: `PATH="$HOME/.bun/bin:$PATH" bun run build` passed.
 - Package content gate: `PATH="$HOME/.bun/bin:$PATH" /bin/bash scripts/check-assets-hygiene.sh` passed with 18 packed files.
-- Tarball: `packages/cli/cattyneo-autokit-0.1.0.tgz` from `PATH="$HOME/.bun/bin:$PATH" bun pm pack`; shasum `0a2070ee0d0ce849f86749449fd6cfa2fe44c1c0`; sha256 `1932833a7939bc8b86ad3deb45f52200c0b31d7c261334daeadae74755041c11`.
+- Install-smoke tarball candidate: `packages/cli/cattyneo-autokit-0.1.0.tgz` from `PATH="$HOME/.bun/bin:$PATH" bun pm pack`; shasum `0a2070ee0d0ce849f86749449fd6cfa2fe44c1c0`; sha256 `1932833a7939bc8b86ad3deb45f52200c0b31d7c261334daeadae74755041c11`.
+- Main release tarball candidate: regenerated from merge commit `a60d1240eca41ae664b52d351189dff6c3d844c3`; shasum `9578ddee4c1b19f75672e5c5c6bb0824346cca7d`; sha256 `b1384c27e13402ef7c838aacb7a2d4e3edd4721b9a8c2be5f396538d15ab6d2a`.
 - Private tarball install smoke: `npm install -g <tarball>` into an isolated prefix, `autokit --version` returned `0.1.0`, `autokit init --dry-run` passed, and `autokit doctor` passed with expected missing config / prompt warnings in an empty repo.
 - Checkout-link smoke: `bun link` + `bun link @cattyneo/autokit`, `autokit --version` returned `0.1.0`, and `autokit doctor` passed with expected missing config / prompt warnings in an empty repo.
 - Fully isolated HOME note: `autokit doctor` without an interactive `gh` login failed the expected `gh auth` check; authenticated smoke reused operator `gh` auth without copying credential files.
-- GitHub Release: tag `v0.1.0` and attached tarball are created after the PR merges, from `main`, using the same build and pack path.
+- GitHub Release: tag `v0.1.0` and attached tarball are created after the checksum sync merges, using the main release tarball candidate.
 - Detailed artifact: `docs/artifacts/issue-21-private-release-smoke-2026-05-05.json`.
 
 ## Full Matrix Execution Plan

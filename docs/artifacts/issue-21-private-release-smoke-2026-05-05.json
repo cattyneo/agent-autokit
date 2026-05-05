@@ -1,0 +1,66 @@
+{
+  "issue": 21,
+  "title": "[AK-020] private-release-docs",
+  "executedAt": "2026-05-05T07:20:00Z",
+  "version": "0.1.0",
+  "guards": {
+    "apiKeyEnv": "ANTHROPIC_API_KEY / OPENAI_API_KEY / CODEX_API_KEY were unset for doctor smoke commands",
+    "authFiles": "~/.codex/auth.json and $CODEX_HOME/auth.json contents were not inspected, copied, logged, or included in artifacts",
+    "registryPublish": "not executed; packages/cli/package.json private=true"
+  },
+  "build": {
+    "command": "PATH=\"$HOME/.bun/bin:$PATH\" bun run build",
+    "result": "passed"
+  },
+  "pack": {
+    "hygiene": {
+      "command": "PATH=\"$HOME/.bun/bin:$PATH\" /bin/bash scripts/check-assets-hygiene.sh",
+      "result": "passed",
+      "packCandidateFiles": 18
+    },
+    "releaseTarball": {
+      "command": "PATH=\"$HOME/.bun/bin:$PATH\" bun pm pack",
+      "path": "packages/cli/cattyneo-autokit-0.1.0.tgz",
+      "shasum": "0a2070ee0d0ce849f86749449fd6cfa2fe44c1c0",
+      "sha256": "1932833a7939bc8b86ad3deb45f52200c0b31d7c261334daeadae74755041c11",
+      "packedSize": "0.50MB",
+      "unpackedSize": "2.60MB",
+      "files": 18
+    }
+  },
+  "npmInstallSmoke": {
+    "home": "/tmp/autokit-release-smoke.GWCz1S/home",
+    "prefix": "/tmp/autokit-release-smoke.GWCz1S/prefix",
+    "commands": [
+      "npm_config_prefix=/tmp/autokit-release-smoke.GWCz1S/prefix npm install -g packages/cli/cattyneo-autokit-0.1.0.tgz",
+      "PATH=/tmp/autokit-release-smoke.GWCz1S/prefix/bin:$PATH autokit --version",
+      "PATH=/tmp/autokit-release-smoke.GWCz1S/prefix/bin:$PATH env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u CODEX_API_KEY autokit init --dry-run",
+      "PATH=/tmp/autokit-release-smoke.GWCz1S/prefix/bin:$PATH env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u CODEX_API_KEY autokit doctor"
+    ],
+    "result": {
+      "install": "added 5 packages",
+      "version": "0.1.0",
+      "initDryRun": "passed",
+      "doctor": "passed with expected missing config/prompt warnings in empty repo"
+    },
+    "cleanHomeAuthNote": "autokit doctor under fully isolated HOME failed gh auth because no interactive login was present; authenticated doctor smoke used the operator gh auth without copying credential files."
+  },
+  "bunLinkSmoke": {
+    "home": "/tmp/autokit-link-smoke.4v9Tik/home",
+    "commands": [
+      "HOME=/tmp/autokit-link-smoke.4v9Tik/home bun link",
+      "HOME=/tmp/autokit-link-smoke.4v9Tik/home bun link @cattyneo/autokit",
+      "PATH=/tmp/autokit-link-smoke.4v9Tik/repo/node_modules/.bin:$PATH autokit --version",
+      "PATH=/tmp/autokit-link-smoke.4v9Tik/repo/node_modules/.bin:$PATH env -u ANTHROPIC_API_KEY -u OPENAI_API_KEY -u CODEX_API_KEY autokit doctor"
+    ],
+    "result": {
+      "link": "installed @cattyneo/autokit@link:@cattyneo/autokit with autokit binary",
+      "version": "0.1.0",
+      "doctor": "passed with expected missing config/prompt warnings in empty repo"
+    }
+  },
+  "release": {
+    "tag": "v0.1.0",
+    "status": "to be created after PR merge from the same tarball command on main"
+  }
+}

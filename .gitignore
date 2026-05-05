@@ -26,6 +26,7 @@ dist/
 coverage/
 .reports/
 *.tsbuildinfo
+*.tgz
 
 .agents/worktrees/
 .autokit/

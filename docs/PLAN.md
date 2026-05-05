@@ -610,14 +610,14 @@ agent-autokit/
 
 ### S7: Release (private 配布) (2日)
 
-- [ ] D1: README.md (日本語、インストール = `bun pm pack` release tarball + `bun link` の 2 経路のみ。`npm pack --dry-run` は content / compatibility 検査。registry publish は `private: true` のため不可)
-- [ ] D1: AGENTS.md (English、開発者向け)
-- [ ] D1: CHANGELOG.md (v0.1.0 初版)
-- [ ] D2: LICENSE (MIT)
-- [ ] D2: `bun run build` → `cd packages/cli && npm pack --dry-run` / `bun pm pack --dry-run` で content 検査 → `bun pm pack` で release tarball artifact 生成 (`packages/cli/<name>-<ver>.tgz`)
+- [x] D1: README.md (日本語、インストール = `bun pm pack` release tarball + `bun link` の 2 経路のみ。`npm pack --dry-run` は content / compatibility 検査。registry publish は `private: true` のため不可)
+- [x] D1: AGENTS.md (English、開発者向け)
+- [x] D1: CHANGELOG.md (v0.1.0 初版)
+- [x] D2: LICENSE (MIT)
+- [x] D2: `bun run build` → `cd packages/cli && npm pack --dry-run` / `bun pm pack --dry-run` で content 検査 → `bun pm pack` で release tarball artifact 生成 (`packages/cli/<name>-<ver>.tgz`)
 - [ ] D2: GitHub Release (タグ v0.1.0 + リリースノート + tarball 添付)
-- [ ] D2: AK-019 で準備済みの release verification environment で `npm i -g <tarball>` または `bun link` 検証
-  - 証跡: install command / `autokit --version` / `autokit doctor` / fixture repo 1 Issue 完走ログ / `autokit list --json` / `gh pr view <pr> --json state,headRefOid`
+- [x] D2: AK-019 で準備済みの release verification environment で `npm i -g <tarball>` または `bun link` 検証
+  - 証跡: install command / `autokit --version` / `autokit doctor` / #19 fixture repo 1 Issue 完走ログ / `autokit list --json` / `gh pr view <pr> --json state,headRefOid`
   - 権限: fixture repo write、workflow read、PR merge permission を検証前に確認し、不足時は release gate を stop
 
 **Exit:** 別マシンで private artifact から install → 1 Issue 完走。

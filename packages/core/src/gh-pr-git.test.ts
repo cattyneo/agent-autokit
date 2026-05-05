@@ -84,7 +84,7 @@ describe("core git/gh/pr wrappers", () => {
       "view",
       "28",
       "--json",
-      "state,mergedAt,headRefOid,mergeable",
+      "state,mergedAt,headRefOid,mergeable,mergeStateStatus",
     ]);
     assert.deepEqual(buildGhPrCloseArgs(28), [
       "pr",
@@ -107,7 +107,7 @@ describe("core git/gh/pr wrappers", () => {
       "view",
       "28",
       "--json",
-      "headRefOid,mergeable,autoMergeRequest",
+      "headRefOid,mergeable,mergeStateStatus,autoMergeRequest",
     ]);
     assert.deepEqual(buildGhPrListHeadArgs("autokit/issue-8"), [
       "pr",
@@ -159,6 +159,7 @@ describe("core git/gh/pr wrappers", () => {
         mergedAt: "2026-05-04T10:08:34Z",
         headRefOid: "abc",
         mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
       }),
       { state: "MERGED", merged: true, headRefOid: "abc", mergeable: "MERGEABLE" },
     );
@@ -168,8 +169,19 @@ describe("core git/gh/pr wrappers", () => {
         mergedAt: null,
         headRefOid: "abc",
         mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
       }).merged,
       false,
+    );
+    assert.equal(
+      parseGhPrView({
+        state: "OPEN",
+        mergedAt: null,
+        headRefOid: "abc",
+        mergeable: "MERGEABLE",
+        mergeStateStatus: "BLOCKED",
+      }).mergeable,
+      "BLOCKED",
     );
     assert.equal(shouldPauseForHeadMismatch("abc", "def"), true);
     assert.deepEqual(buildAutoMergeArgs(28, "abc"), [

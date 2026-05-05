@@ -568,7 +568,7 @@ agent-autokit/
 - [ ] D1a: protected auto-merge fixture provisioning (`cattyneo/agent-autokit-e2e-fixture-protected`、SPEC §13.6.1)
   - required check 1 件 (`bun test`) と branch protection を有効化
   - E17 (internal mergeable=BLOCKED) / E24 (予約後 BLOCKED) / `auto_merge_reserved` / `--disable-auto` / `autoMergeRequest=null` 2 回連続観測 barrier の証跡を固定
-- [ ] D1b: release verification environment provisioning (`AK-019` の前提整理、artifact 不要)
+- [x] D1b: release verification environment provisioning (`AK-019` の前提整理、release artifact 生成は不要。Runbook: `docs/release-verification-environment.md`; evidence: `docs/artifacts/issue-20-release-verification-environment-2026-05-05.json`)
   - 別マシンまたは clean HOME の検証環境、必要な `gh` / `claude` / `codex` subscription login、Apple Silicon macOS / fallback OS の差分を evidence に固定
   - 成功コマンド: `node -v`, `bun -v`, `gh auth status`, `claude --version`, `codex --version`, `env | grep -E 'ANTHROPIC_API_KEY|OPENAI_API_KEY'` が空であること、fixture repo write/merge permission の確認
   - tarball 生成・install・release smoke は S7 / AK-020 で実施する

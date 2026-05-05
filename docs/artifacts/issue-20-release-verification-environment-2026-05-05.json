@@ -1,0 +1,81 @@
+{
+  "issue": 20,
+  "title": "[AK-019] release-verification-environment",
+  "executedAt": "2026-05-05T07:03:00Z",
+  "host": {
+    "os": "macOS 26.3.1 (25D771280a)",
+    "arch": "arm64"
+  },
+  "tools": {
+    "node": "v25.6.1",
+    "bun": "1.3.11",
+    "gh": "gh version 2.92.0 (2026-04-28)",
+    "claude": "2.1.128 (Claude Code)",
+    "codex": "codex-cli 0.128.0"
+  },
+  "guards": {
+    "apiKeyEnv": "ANTHROPIC_API_KEY / OPENAI_API_KEY / CODEX_API_KEY were unset",
+    "authFiles": "~/.codex/auth.json and $CODEX_HOME/auth.json contents were not inspected, copied, logged, or included in artifacts",
+    "releaseScope": "preflight only; no tarball generation, install smoke, SDK matrix, or fixture mutation"
+  },
+  "github": {
+    "authStatus": {
+      "host": "github.com",
+      "account": "cattyneo",
+      "protocol": "https",
+      "scopes": ["gist", "read:org", "repo", "workflow"]
+    },
+    "fixtures": [
+      {
+        "nameWithOwner": "cattyneo/agent-autokit-e2e-fixture",
+        "defaultBranch": "main",
+        "isPrivate": true,
+        "viewerPermission": "ADMIN",
+        "viewerCanAdminister": true,
+        "mergeMethods": {
+          "mergeCommitAllowed": true,
+          "rebaseMergeAllowed": true,
+          "squashMergeAllowed": true
+        }
+      },
+      {
+        "nameWithOwner": "cattyneo/agent-autokit-e2e-fixture-protected",
+        "defaultBranch": "main",
+        "isPrivate": true,
+        "viewerPermission": "ADMIN",
+        "viewerCanAdminister": true,
+        "mergeMethods": {
+          "mergeCommitAllowed": true,
+          "rebaseMergeAllowed": true,
+          "squashMergeAllowed": true
+        },
+        "protection": {
+          "requiredStatusChecks": ["test"],
+          "enforceAdmins": false,
+          "requiredApprovingReviewCount": null
+        },
+        "openPullRequests": []
+      }
+    ]
+  },
+  "commands": [
+    "uname -m",
+    "sw_vers",
+    "node -v",
+    "PATH=\"$HOME/.bun/bin:$PATH\" bun -v",
+    "gh --version",
+    "gh auth status -h github.com",
+    "claude --version",
+    "codex --version",
+    "env | rg '^(ANTHROPIC_API_KEY|OPENAI_API_KEY|CODEX_API_KEY)='",
+    "gh repo view cattyneo/agent-autokit-e2e-fixture --json nameWithOwner,viewerPermission,viewerCanAdminister,defaultBranchRef,isPrivate,mergeCommitAllowed,rebaseMergeAllowed,squashMergeAllowed",
+    "gh repo view cattyneo/agent-autokit-e2e-fixture-protected --json nameWithOwner,viewerPermission,viewerCanAdminister,defaultBranchRef,isPrivate,mergeCommitAllowed,rebaseMergeAllowed,squashMergeAllowed",
+    "gh api repos/cattyneo/agent-autokit-e2e-fixture-protected/branches/main/protection --jq '{contexts:.required_status_checks.contexts, reviews:(.required_pull_request_reviews.required_approving_review_count // null), enforce_admins:.enforce_admins.enabled}'",
+    "gh pr list --repo cattyneo/agent-autokit-e2e-fixture-protected --state open --json number,title,headRefName"
+  ],
+  "ak020Handoff": {
+    "tarballInstall": "AK-020 generates the release tarball and verifies npm i -g <tarball> in this environment.",
+    "bunLink": "AK-020 verifies the checkout path with bun link in this environment.",
+    "releaseSmoke": "AK-020 records autokit doctor and release smoke logs from the selected clean HOME."
+  }
+}

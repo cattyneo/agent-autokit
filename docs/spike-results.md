@@ -395,6 +395,18 @@ Issue #19 unprotected fixture smoke execution (2026-05-05 Asia/Tokyo):
 - OBS result: OBS-01..OBS-11 all passed. Detailed artifact: `docs/artifacts/issue-19-full-integration-smoke-2026-05-05.json`.
 - Protected fixture live gate: completed in #68 on `cattyneo/agent-autokit-e2e-fixture-protected`. E17 observed CI success + `mergeStateStatus=BLOCKED` -> `failure.code=branch_protection`; E24 observed reserved auto-merge -> `--disable-auto` -> `autoMergeRequest=null` twice -> `failure.code=branch_protection`. Detailed artifact: `docs/artifacts/issue-68-protected-fixture-gate-2026-05-05.json`.
 
+## AK-019 Release Verification Environment Preflight
+
+Issue #20 release verification environment preflight (2026-05-05 Asia/Tokyo):
+
+- Runbook: `docs/release-verification-environment.md`.
+- Preflight script: `scripts/check-release-verification-env.sh`.
+- Tool evidence: node `v25.6.1`, bun `1.3.11`, gh `2.92.0`, Claude Code `2.1.128`, Codex CLI `0.128.0`.
+- Guard evidence: `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CODEX_API_KEY` unset; auth file contents were not inspected or copied.
+- Fixture permission evidence: both `cattyneo/agent-autokit-e2e-fixture` and `cattyneo/agent-autokit-e2e-fixture-protected` report `viewerPermission=ADMIN`.
+- Protected fixture reset evidence: required status check `test`, `enforce_admins=false`, required review count `null`, open PRs `[]`.
+- Detailed artifact: `docs/artifacts/issue-20-release-verification-environment-2026-05-05.json`.
+
 ## Full Matrix Execution Plan
 
 This section records the execution shape, preconditions, and stop criteria used for #23.

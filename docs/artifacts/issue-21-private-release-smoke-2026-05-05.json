@@ -71,6 +71,14 @@
   },
   "release": {
     "tag": "v0.1.0",
-    "status": "mainReleaseTarball is the release attachment candidate; GitHub Release is created after this checksum sync is merged"
+    "status": "published",
+    "url": "https://github.com/cattyneo/agent-autokit/releases/tag/v0.1.0",
+    "targetCommitish": "75ae6c489f1f005956bd9cd4e6b39e88d7e76c45",
+    "asset": {
+      "name": "cattyneo-autokit-0.1.0.tgz",
+      "url": "https://github.com/cattyneo/agent-autokit/releases/download/v0.1.0/cattyneo-autokit-0.1.0.tgz",
+      "digest": "sha256:b1384c27e13402ef7c838aacb7a2d4e3edd4721b9a8c2be5f396538d15ab6d2a",
+      "size": 498507
+    }
   }
 }

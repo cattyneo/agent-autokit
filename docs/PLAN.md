@@ -615,7 +615,7 @@ agent-autokit/
 - [x] D1: CHANGELOG.md (v0.1.0 初版)
 - [x] D2: LICENSE (MIT)
 - [x] D2: `bun run build` → `cd packages/cli && npm pack --dry-run` / `bun pm pack --dry-run` で content 検査 → `bun pm pack` で release tarball artifact 生成 (`packages/cli/<name>-<ver>.tgz`)
-- [ ] D2: GitHub Release (タグ v0.1.0 + リリースノート + tarball 添付)
+- [x] D2: GitHub Release (タグ v0.1.0 + リリースノート + tarball 添付)
 - [x] D2: AK-019 で準備済みの release verification environment で `npm i -g <tarball>` または `bun link` 検証
   - 証跡: install command / `autokit --version` / `autokit doctor` / #19 fixture repo 1 Issue 完走ログ / `autokit list --json` / `gh pr view <pr> --json state,headRefOid`
   - 権限: fixture repo write、workflow read、PR merge permission を検証前に確認し、不足時は release gate を stop

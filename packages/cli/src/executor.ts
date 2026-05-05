@@ -112,7 +112,15 @@ export async function runProductionWorkflow(
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
-          buildPrompt: (input) => buildPrompt(options.cwd, input.task, input.phase, issueContext()),
+          buildPrompt: (input) =>
+            buildPrompt(
+              options.cwd,
+              input.task,
+              input.phase,
+              issueContext(),
+              input.currentFindings,
+              input.planMarkdown,
+            ),
         });
         if (result.planMarkdown !== undefined) {
           writePlan(options.cwd, result.task, result.planMarkdown);
@@ -132,7 +140,15 @@ export async function runProductionWorkflow(
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
-          buildPrompt: (input) => buildPrompt(options.cwd, input.task, input.phase, issueContext()),
+          buildPrompt: (input) =>
+            buildPrompt(
+              options.cwd,
+              input.task,
+              input.phase,
+              issueContext(),
+              input.currentFindings,
+              input.planMarkdown,
+            ),
           git: createGitDeps(options.cwd, task, config, execFile),
         });
         task = result.task;
@@ -156,6 +172,7 @@ export async function runProductionWorkflow(
               input.phase,
               issueContext(),
               input.currentFindings,
+              input.planMarkdown,
             ),
         });
         writeReviewArtifact(options.cwd, result.task, result.findings);
@@ -174,7 +191,15 @@ export async function runProductionWorkflow(
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
-          buildPrompt: (input) => buildPrompt(options.cwd, input.task, input.phase, issueContext()),
+          buildPrompt: (input) =>
+            buildPrompt(
+              options.cwd,
+              input.task,
+              input.phase,
+              issueContext(),
+              input.currentFindings,
+              input.planMarkdown,
+            ),
           git: createGitDeps(options.cwd, task, config, execFile),
         });
         task = result.task;
@@ -616,9 +641,10 @@ function buildPrompt(
   phase: RuntimePhase,
   issueContext: string,
   currentFindings?: unknown,
+  planMarkdown?: string,
 ): string {
   const planPath = join(cwd, task.plan.path);
-  const plan = existsSync(planPath) ? readFileSync(planPath, "utf8") : "";
+  const plan = planMarkdown ?? (existsSync(planPath) ? readFileSync(planPath, "utf8") : "");
   const phasePrompt = readPhasePrompt(cwd, phase);
   return [
     phasePrompt,
@@ -630,7 +656,7 @@ function buildPrompt(
     "Issue context JSON:",
     issueContext || "{}",
     "",
-    "Current verified plan:",
+    "Current plan:",
     plan || "(none yet)",
     "",
     currentFindings === undefined

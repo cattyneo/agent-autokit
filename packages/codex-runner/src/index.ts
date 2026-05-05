@@ -158,6 +158,7 @@ export function buildCodexArgs(input: AgentRunInput, files: CodexRunFiles): stri
     "never",
     "--sandbox",
     sandbox,
+    ...(input.phase === "plan_verify" ? ["--disable", "shell_tool"] : []),
     ...(input.model === "auto" ? [] : ["--model", input.model]),
     "exec",
   ];

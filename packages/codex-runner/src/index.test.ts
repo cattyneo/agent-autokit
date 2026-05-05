@@ -68,6 +68,14 @@ describe("codex-runner", () => {
 
     assert.equal(readArg(args, "--sandbox"), "read-only");
     assert.equal(readArg(args, "--model"), "gpt-5.4");
+    assert.equal(readArg(args, "--disable"), "shell_tool");
+  });
+
+  it("keeps shell access available for workspace-write Codex phases", () => {
+    const args = buildCodexArgs(baseInput, runFiles);
+
+    assert.equal(args.includes("--disable"), false);
+    assert.equal(args.includes("shell_tool"), false);
   });
 
   it("uses stored codex session id for resume and never uses --last", () => {

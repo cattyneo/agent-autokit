@@ -1,4 +1,4 @@
-- [User Guide](/user-guide/)
-- [Dev Guide](/dev-guide/)
+- [User Guide](/user/)
+- [Dev Guide](/dev/)
 - [SPEC](https://github.com/cattyneo/agent-autokit/blob/main/docs/SPEC.md ":target=_blank")
 - [Repo](https://github.com/cattyneo/agent-autokit ":target=_blank")

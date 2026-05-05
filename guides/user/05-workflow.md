@@ -7,7 +7,7 @@
 - **runtime_phase（7 種）**: LLM を呼び出す単位 — `plan` / `plan_verify` / `plan_fix` / `implement` / `review` / `supervise` / `fix`
 - **workflow ステップ（9 種）**: state-machine の active state — runtime_phase 7 + GitHub 操作のみの `ci_wait` / `merge`
 
-正典: [`docs/SPEC.md`](../SPEC.md) §5（state 遷移）/ §2.2（Phase × Provider）/ §4.5（レビュー Markdown）。内部不変条件・遷移詳細は [dev-guide/03](../dev-guide/03-state-machine.md)、安全境界は [dev-guide/05](../dev-guide/05-safety.md)。本章はユーザーが「どこで何が起きうるか」を読むための振舞要約。
+正典: [`docs/SPEC.md`](../../docs/SPEC.md) §5（state 遷移）/ §2.2（Phase × Provider）/ §4.5（レビュー Markdown）。内部不変条件・遷移詳細は [dev-guide/03](../dev/03-state-machine.md)、安全境界は [dev-guide/05](../dev/05-safety.md)。本章はユーザーが「どこで何が起きうるか」を読むための振舞要約。
 
 ## 全体像
 
@@ -79,9 +79,9 @@
 - 上限: `config.review.max_rounds` 回。超過時は `paused` (`failure.code: review_max`)
 - `config.review.warn_threshold` 以降のラウンドは log level warn
 - 成果物: `.autokit/reviews/issue-{N}-review-{round}.md`（YAML frontmatter + JSON findings）
-- supervisor が却下した finding は sanitize 規則（[`docs/SPEC.md`](../SPEC.md) §4.6.2）の round 越え redact を経て次ラウンドへ伝播
+- supervisor が却下した finding は sanitize 規則（[`docs/SPEC.md`](../../docs/SPEC.md) §4.6.2）の round 越え redact を経て次ラウンドへ伝播
 
-ループの内部遷移条件・不変条件は [dev-guide/03](../dev-guide/03-state-machine.md) のレビューループ節を参照。
+ループの内部遷移条件・不変条件は [dev-guide/03](../dev/03-state-machine.md) のレビューループ節を参照。
 
 ## CI / fix ループ（観測される振舞）
 
@@ -102,7 +102,7 @@
 - レビュー後に PR へ追加 push が入っていた場合、auto-merge が拒否されて `paused` (`failure.code: merge_sha_mismatch`) になる
 - merge 後の cleanup が失敗しても `autokit cleanup --force-detach` が同じ head SHA gate を再評価してから merged 化する
 
-ガードの内部実装（`gh` 引数 / poll 戦略 / `pr.headRefOid` 照合）は [dev-guide/05](../dev-guide/05-safety.md) の auto-merge head SHA gate 節。
+ガードの内部実装（`gh` 引数 / poll 戦略 / `pr.headRefOid` 照合）は [dev-guide/05](../dev/05-safety.md) の auto-merge head SHA gate 節。
 
 ## cleaning フェーズ
 
@@ -137,4 +137,4 @@
 
 - 復旧手順: [06-recovery.md](./06-recovery.md)
 - 設定値の意味: [04-configuration.md](./04-configuration.md)
-- 形式定義: [`docs/SPEC.md`](../SPEC.md) §5
+- 形式定義: [`docs/SPEC.md`](../../docs/SPEC.md) §5

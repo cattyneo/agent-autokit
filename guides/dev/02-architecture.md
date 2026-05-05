@@ -167,7 +167,7 @@ deps は CLI 側 (`cli/executor.ts`) で組み立てられる。テストは dep
 
 ## アーティファクト
 
-`autokit run` が触る永続物（[user-guide/04](../user-guide/04-configuration.md) 参照）:
+`autokit run` が触る永続物（[user-guide/04](../user/04-configuration.md) 参照）:
 
 ```
 .autokit/

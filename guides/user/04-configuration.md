@@ -2,7 +2,7 @@
 
 > この章で解決すること: `.autokit/` `.agents/` の中身、`config.yaml` フィールド、参照される env 変数、HMAC 鍵の扱いを把握する。
 
-正典: [`docs/SPEC.md`](../SPEC.md) §3.2 / §4.1 / §4.2。本章は実装値ベースの実用要約。
+正典: [`docs/SPEC.md`](../../docs/SPEC.md) §3.2 / §4.1 / §4.2。本章は実装値ベースの実用要約。
 
 ## ディレクトリ構造（init 後）
 
@@ -184,7 +184,7 @@ state（取りうる値）:
 | `merged` | 完了 |
 | `failed` | 終端失敗 |
 
-`failure.code` 一覧の正典は [`docs/SPEC.md`](../SPEC.md) §4.2.1.1。
+`failure.code` 一覧の正典は [`docs/SPEC.md`](../../docs/SPEC.md) §4.2.1.1。
 
 書き込みは常に temp file → fsync → rename の atomic 手順（`writeTasksFileAtomic`）。
 

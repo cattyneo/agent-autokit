@@ -80,7 +80,7 @@ paused になった理由は `failure.code` で判別可能:
 autokit list --json | jq '.[] | select(.failure != null) | {issue, state, code: .failure.code}'
 ```
 
-`failure.code` の意味は [`docs/SPEC.md`](../SPEC.md) §4.2.1.1 を参照。代表的なもの:
+`failure.code` の意味は [`docs/SPEC.md`](../../docs/SPEC.md) §4.2.1.1 を参照。代表的なもの:
 
 - `need_input_pending`: runner が質問中。TUI で答えて `autokit resume`
 - `merge_sha_mismatch`: PR head SHA 不一致。手動確認が必要

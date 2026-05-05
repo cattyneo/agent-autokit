@@ -1,7 +1,7 @@
 # agent-autokit ユーザーガイド
 
 `agent-autokit` を「インストール → 初回実行 → 復旧」まで通しで使うための導線ドキュメント。
-仕様の正典は [`docs/SPEC.md`](../SPEC.md)、リリース注意は [`README.md`](https://github.com/cattyneo/agent-autokit/blob/main/README.md ":target=_blank")、内部開発規約は [`AGENTS.md`](https://github.com/cattyneo/agent-autokit/blob/main/AGENTS.md ":target=_blank") に分離している。本ガイドは「実際にコマンドを叩く側」が読むためのものを集約する。
+仕様の正典は [`docs/SPEC.md`](../../docs/SPEC.md)、リリース注意は [`README.md`](https://github.com/cattyneo/agent-autokit/blob/main/README.md ":target=_blank")、内部開発規約は [`AGENTS.md`](https://github.com/cattyneo/agent-autokit/blob/main/AGENTS.md ":target=_blank") に分離している。本ガイドは「実際にコマンドを叩く側」が読むためのものを集約する。
 
 ## 対象読者
 
@@ -33,11 +33,11 @@
 
 ## 開発者向けガイド
 
-「なぜそうなっているか」「コードの読み方」「拡張方針」は [`dev-guide/`](../dev-guide/README.md) に分離。
+「なぜそうなっているか」「コードの読み方」「拡張方針」は [`dev-guide/`](../dev/README.md) に分離。
 
 ## 仕様との関係
 
-本ガイドはユーザー向け概要のみを書く。形式定義（state 遷移表、failure code 一覧、sanitize ルール、ロックプロトコル等）は [`docs/SPEC.md`](../SPEC.md) を正典とし、必要に応じて該当節へリンクする。
+本ガイドはユーザー向け概要のみを書く。形式定義（state 遷移表、failure code 一覧、sanitize ルール、ロックプロトコル等）は [`docs/SPEC.md`](../../docs/SPEC.md) を正典とし、必要に応じて該当節へリンクする。
 
 ## フィードバック
 

@@ -420,7 +420,7 @@ Issue #21 private release documentation and install smoke (2026-05-05 Asia/Tokyo
 - Private tarball install smoke: `npm install -g <tarball>` into an isolated prefix, `autokit --version` returned `0.1.0`, `autokit init --dry-run` passed, and `autokit doctor` passed with expected missing config / prompt warnings in an empty repo.
 - Checkout-link smoke: `bun link` + `bun link @cattyneo/autokit`, `autokit --version` returned `0.1.0`, and `autokit doctor` passed with expected missing config / prompt warnings in an empty repo.
 - Fully isolated HOME note: `autokit doctor` without an interactive `gh` login failed the expected `gh auth` check; authenticated smoke reused operator `gh` auth without copying credential files.
-- GitHub Release: tag `v0.1.0` and attached tarball are created after the checksum sync merges, using the main release tarball candidate.
+- GitHub Release: tag `v0.1.0` published at `https://github.com/cattyneo/agent-autokit/releases/tag/v0.1.0`; asset `cattyneo-autokit-0.1.0.tgz`; release digest `sha256:b1384c27e13402ef7c838aacb7a2d4e3edd4721b9a8c2be5f396538d15ab6d2a`.
 - Detailed artifact: `docs/artifacts/issue-21-private-release-smoke-2026-05-05.json`.
 
 ## Full Matrix Execution Plan

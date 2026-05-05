@@ -237,6 +237,89 @@ describe("codex-runner", () => {
     );
   });
 
+  it("emits a plan_verify output schema that keeps ok findings empty", async () => {
+    let observedSchema: Record<string, unknown> | undefined;
+    let outputText = "";
+    const spawn: SpawnCodexProcess = (_command, args) => {
+      const child = new FakeChild();
+      queueMicrotask(() => {
+        if (args.join(" ") === "login status") {
+          child.stdout.end("Logged in with ChatGPT\n");
+          child.emit("close", 0);
+          return;
+        }
+        outputText = JSON.stringify({
+          status: "completed",
+          summary: "verified",
+          data: { result: "ok", findings: [] },
+          question: null,
+        });
+        child.stdout.end(
+          JSON.stringify({
+            thread_id: "019df4ff-9c29-7d71-8321-9217c46e6d72",
+            type: "turn.completed",
+          }),
+        );
+        child.emit("close", 0);
+      });
+      return child.asChildProcess();
+    };
+
+    await runCodex(
+      {
+        ...baseInput,
+        phase: "plan_verify",
+        promptContract: "plan-verify",
+        permissions: { ...baseInput.permissions, mode: "readonly", workspaceScope: "repo" },
+      },
+      {
+        parentEnv: { PATH: "/bin" },
+        spawn,
+        createRunFiles: (_contract, schema) => {
+          observedSchema = schema;
+          return { ...runFiles, cleanup: () => {} };
+        },
+        readOutputFile: () => outputText,
+      },
+    );
+
+    assert.ok(observedSchema);
+    const dataSchema = (observedSchema.properties as Record<string, unknown> | undefined)?.data as
+      | { anyOf?: unknown }
+      | undefined;
+    assert.ok(Array.isArray(dataSchema?.anyOf));
+
+    const planVerifySchema = dataSchema.anyOf[0] as { anyOf?: unknown };
+    assert.ok(Array.isArray(planVerifySchema.anyOf));
+
+    const branches = planVerifySchema.anyOf;
+    const branchFor = (result: "ok" | "ng") =>
+      branches.find((branch) => {
+        if (branch === null || typeof branch !== "object") {
+          return false;
+        }
+        const properties = (branch as { properties?: Record<string, unknown> }).properties;
+        const resultSchema = properties?.result;
+        return (
+          resultSchema !== null &&
+          typeof resultSchema === "object" &&
+          Array.isArray((resultSchema as { enum?: unknown }).enum) &&
+          (resultSchema as { enum: unknown[] }).enum.length === 1 &&
+          (resultSchema as { enum: unknown[] }).enum[0] === result
+        );
+      }) as { properties?: Record<string, unknown> } | undefined;
+
+    const okBranch = branchFor("ok");
+    const ngBranch = branchFor("ng");
+    assert.ok(okBranch);
+    assert.ok(ngBranch);
+
+    const okFindings = okBranch.properties?.findings as { maxItems?: unknown } | undefined;
+    const ngFindings = ngBranch.properties?.findings as { maxItems?: unknown } | undefined;
+    assert.equal(okFindings?.maxItems, 0);
+    assert.equal(ngFindings?.maxItems, 20);
+  });
+
   it("runs Codex through a mock subprocess, reads final output, and returns session id", async () => {
     let observedArgs: string[] | undefined;
     let observedEnv: Record<string, string> | undefined;

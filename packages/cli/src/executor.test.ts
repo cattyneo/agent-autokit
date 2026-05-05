@@ -71,6 +71,9 @@ describe("production workflow executor", () => {
     assert.doesNotMatch(logText, /Wire production autokit run/);
     assert.match(calls[1].prompt, /# plan-verify/);
     assert.match(calls[1].prompt, /Do not execute shell commands/);
+    assert.match(calls[1].prompt, /Current plan:/);
+    assert.match(calls[1].prompt, /## Plan/);
+    assert.doesNotMatch(calls[1].prompt, /\(none yet\)/);
   });
 
   it("fails closed before any runner dispatch when API key env is exported", async () => {

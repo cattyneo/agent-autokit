@@ -439,10 +439,10 @@ agent-autokit/
   - **Codex phase (plan-verifier) は Codex sandbox** (`readonly` 相当): `permissions.codex.sandbox_mode` / `approval_policy` / `allow_network` / `home_isolation` を適用し、書込検出で `sandbox_violation`
   - prompt 入力 (Issue body / 既存プラン MD / verify 指摘) は両 provider とも per-invocation nonce marker `<user-content-{nonce}>...</user-content-{nonce}>` + §4.6.2 sanitize / marker 衝突検査後に embed
   - state=`planning` 内で runtime_phase subphase を `plan` (Claude) → `plan_verify` (Codex) → (NG) `plan_fix` (Claude) → `plan_verify` (Codex) → ... と遷移 (SPEC §5.1 E02a-E02d、provider が phase 毎に switch)
-  - `plan` prompt_contract で planner (Claude) runner 呼出 → core が plan ファイル書込 + provider_sessions 保存 → `runtime_phase=plan_verify` 永続化
-  - `plan-verify` prompt_contract で plan-verifier (Codex) 呼出 (max_rounds 制御、`plan_verify_round + 1 > max_rounds` で `failed`)
-  - NG + 上限内なら `runtime_phase=plan_fix` 永続化 → `plan-fix` prompt_contract で planner (Claude) に修正済み plan body を返させる → core が plan ファイル更新 → `runtime_phase=plan_verify` (Codex) に戻す
-  - 既存プラン検出 (resume / reconcile で `runtime_phase` から続きから再開、provider も runtime_phase に従って resume)
+  - `plan` prompt_contract で planner (Claude) runner 呼出 → core が provider_sessions 保存 + 同一 planning workflow 内では in-memory plan body を次 `plan_verify` prompt に渡す → workflow 完了時に plan ファイル永続化
+  - `plan-verify` prompt_contract で plan-verifier (Codex) 呼出 (in-memory plan body 優先、resume 時は plan ファイル fallback、max_rounds 制御、`plan_verify_round + 1 > max_rounds` で `failed`)
+  - NG + 上限内なら `runtime_phase=plan_fix` 永続化 → `plan-fix` prompt_contract で planner (Claude) に修正済み plan body を返させる → in-memory plan body を更新して `runtime_phase=plan_verify` (Codex) に戻す
+  - 既存プラン検出 (resume / reconcile で `runtime_phase` から続きから再開、provider も runtime_phase に従って resume、永続化済み plan ファイルを fallback SoT として使用)
   - **core 独立検証:** plan / plan_verify / plan_fix の各 phase 中も `core/sandbox-check` 実行 (provider 自己申告に依存しない)
 - [ ] D2: `workflows/implement.ts` — **7 checkpoint / 8 step atomic 永続化 (SPEC §7.3 / §4.2 / AC §13.1)**
   - 各 step 完了 **直後** に対応 checkpoint を `tasks.yaml` へ atomic write (`.tmp` → fsync → rename)。途中 crash 時は §7.3.1 reconcile 表どおりに復帰 → duplicate commit / duplicate PR / orphan ゼロ保証

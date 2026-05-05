@@ -24,6 +24,7 @@ export type WorkflowRunner = (input: AgentRunInput) => Promise<AgentRunOutput>;
 export type WorkflowPromptInput = {
   task: TaskEntry;
   phase: RuntimePhase;
+  planMarkdown?: string;
   currentFindings?: ReviewFindingWithId[];
 };
 
@@ -272,7 +273,7 @@ export async function runPlanningWorkflow(
       };
     }
 
-    const runnerResult = await runPhase(task, phase, options);
+    const runnerResult = await runPhase(task, phase, options, undefined, planMarkdown);
     if (!runnerResult.ok) {
       return { task: runnerResult.task, planMarkdown, verifierFindings };
     }
@@ -881,6 +882,7 @@ function buildAgentRunInput(
   phase: RuntimePhase,
   options: WorkflowOptions,
   currentFindings?: ReviewFindingWithId[],
+  planMarkdown?: string,
   questionResponse?: AgentRunInput["questionResponse"],
 ): AgentRunInput {
   if (!CLAUDE_PHASES.has(phase) && !CODEX_PHASES.has(phase)) {
@@ -898,7 +900,9 @@ function buildAgentRunInput(
     phase,
     cwd:
       workspaceScope === "worktree" ? (options.worktreeRoot ?? options.repoRoot) : options.repoRoot,
-    prompt: options.buildPrompt?.({ task, phase, currentFindings }) ?? defaultPrompt(task, phase),
+    prompt:
+      options.buildPrompt?.({ task, phase, planMarkdown, currentFindings }) ??
+      defaultPrompt(task, phase),
     promptContract: promptContractForPhase(phase),
     model: task.runtime.resolved_model[phase] ?? "auto",
     resume: resumeForPhase(task, phase),
@@ -995,13 +999,21 @@ async function runPhase(
   phase: RuntimePhase,
   options: WorkflowOptions,
   currentFindings?: ReviewFindingWithId[],
+  planMarkdown?: string,
 ): Promise<{ ok: true; task: TaskEntry; output: AgentRunOutput } | { ok: false; task: TaskEntry }> {
   let currentTask = task;
   let questionResponse: AgentRunInput["questionResponse"];
   for (let turn = 0; turn < 3; turn += 1) {
     try {
       const output = await options.runner(
-        buildAgentRunInput(currentTask, phase, options, currentFindings, questionResponse),
+        buildAgentRunInput(
+          currentTask,
+          phase,
+          options,
+          currentFindings,
+          planMarkdown,
+          questionResponse,
+        ),
       );
       currentTask = applyRunnerMetadata(currentTask, phase, output);
       if (output.status !== "need_input" || options.answerQuestion === undefined) {

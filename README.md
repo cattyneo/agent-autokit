@@ -75,6 +75,18 @@ autokit list --json
   - [`docs/dev-guide/`](./docs/dev-guide/README.md) — 設計意図・アーキテクチャ・状態機械・prompt-contract・安全設計
   - [`docs/SPEC.md`](./docs/SPEC.md) — 形式仕様（正典）
 
+### Web 表示（docsify）
+
+`docs/` は docsify サイトとしても閲覧できます（mermaid 図がブラウザでレンダリング、user-guide / dev-guide サイドバー切替、検索付き）。
+
+```bash
+# ローカル
+npx docsify-cli serve docs
+# → http://localhost:3000
+```
+
+GitHub Pages 公開時は `Settings → Pages → Branch: main, Folder: /docs` を設定すると `https://<owner>.github.io/agent-autokit/` で配信できます。
+
 ## Release Verification
 
 release 前に次を実行します。

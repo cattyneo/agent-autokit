@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>agent-autokit ドキュメント</title>
+    <meta name="description" content="agent-autokit user-guide and developer-guide" />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css" />
+    <style>
+      .markdown-section .mermaid { background: transparent; text-align: center; margin: 1.2em 0; }
+      .markdown-section .mermaid svg { max-width: 100%; height: auto; }
+      .markdown-section .mermaid-error {
+        background: #fff3f3;
+        border-left: 4px solid #d33;
+        padding: 0.8em 1em;
+        white-space: pre-wrap;
+        font-size: 0.85em;
+      }
+    </style>
+  </head>
+  <body class="loading">
+    <div id="app">読み込み中…</div>
+
+    <script src="//cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+      mermaid.initialize({ startOnLoad: false, securityLevel: 'loose', theme: 'default' });
+
+      function renderMermaidBlocks() {
+        const pres = document.querySelectorAll('.markdown-section pre[data-lang="mermaid"]');
+        pres.forEach((pre) => {
+          const code = pre.querySelector('code');
+          const text = code ? code.textContent : pre.textContent;
+          const div = document.createElement('div');
+          div.className = 'mermaid';
+          div.textContent = text;
+          pre.replaceWith(div);
+        });
+        try {
+          return mermaid.run({ querySelector: '.markdown-section .mermaid' });
+        } catch (e) {
+          console.error('mermaid run error:', e);
+        }
+      }
+
+      window.$docsify = {
+        name: 'agent-autokit',
+        repo: 'cattyneo/agent-autokit',
+        homepage: 'README.md',
+        loadSidebar: true,
+        loadNavbar: true,
+        coverpage: true,
+        auto2top: true,
+        relativePath: true,
+        maxLevel: 4,
+        subMaxLevel: 2,
+        routerMode: 'hash',
+        search: {
+          depth: 3,
+          maxAge: 86400000,
+          paths: 'auto',
+          placeholder: '検索…',
+          noData: 'ヒットなし',
+          namespace: 'agent-autokit-docs'
+        },
+        plugins: [
+          function (hook) {
+            hook.doneEach(function () {
+              renderMermaidBlocks();
+            });
+          }
+        ]
+      };
+    </script>
+
+    <script src="//cdn.jsdelivr.net/npm/docsify@4/lib/docsify.min.js"></script>
+    <script src="//cdn.jsdelivr.net/npm/docsify@4/lib/plugins/search.min.js"></script>
+    <script src="//cdn.jsdelivr.net/npm/docsify-copy-code/dist/docsify-copy-code.min.js"></script>
+  </body>
+</html>

@@ -29,4 +29,4 @@
 
 ## 内部開発者向け規約
 
-リポジトリのルート [`AGENTS.md`](../AGENTS.md) を参照。
+リポジトリのルート [`AGENTS.md`](https://github.com/cattyneo/agent-autokit/blob/main/AGENTS.md ":target=_blank") を参照。

@@ -1,7 +1,7 @@
 # agent-autokit ユーザーガイド
 
 `agent-autokit` を「インストール → 初回実行 → 復旧」まで通しで使うための導線ドキュメント。
-仕様の正典は [`docs/SPEC.md`](../SPEC.md)、リリース注意は [`README.md`](../../README.md)、内部開発規約は [`AGENTS.md`](../../AGENTS.md) に分離している。本ガイドは「実際にコマンドを叩く側」が読むためのものを集約する。
+仕様の正典は [`docs/SPEC.md`](../SPEC.md)、リリース注意は [`README.md`](https://github.com/cattyneo/agent-autokit/blob/main/README.md ":target=_blank")、内部開発規約は [`AGENTS.md`](https://github.com/cattyneo/agent-autokit/blob/main/AGENTS.md ":target=_blank") に分離している。本ガイドは「実際にコマンドを叩く側」が読むためのものを集約する。
 
 ## 対象読者
 

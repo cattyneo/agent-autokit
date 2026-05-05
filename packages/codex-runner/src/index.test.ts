@@ -181,6 +181,24 @@ describe("codex-runner", () => {
             type: "item.completed",
             item: { type: "agent_message" },
           }),
+          JSON.stringify({
+            thread_id: "019df4ff-9c29-7d71-8321-9217c46e6d72",
+            type: "item.started",
+            item: {
+              type: "file_change",
+              changes: [{ path: "src/pagination.ts", kind: "update" }],
+              status: "in_progress",
+            },
+          }),
+          JSON.stringify({
+            thread_id: "019df4ff-9c29-7d71-8321-9217c46e6d72",
+            type: "item.completed",
+            item: {
+              type: "file_change",
+              changes: [{ path: "src/pagination.ts", kind: "update" }],
+              status: "completed",
+            },
+          }),
         ].join("\n"),
       ),
       { codexSessionId: "019df4ff-9c29-7d71-8321-9217c46e6d72" },

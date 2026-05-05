@@ -724,6 +724,7 @@ function isRecognizedCodexItemType(value: string): boolean {
   return (
     value === "agent_message" ||
     value === "error" ||
+    value === "file_change" ||
     value === "reasoning" ||
     value === "command_execution" ||
     value === "tool_call"

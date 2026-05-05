@@ -1,0 +1,107 @@
+{
+  "issue": 68,
+  "title": "[AK-018g] protected fixture auto-merge safety live gate",
+  "executedAt": "2026-05-05T06:53:00Z",
+  "fixtureRepo": "cattyneo/agent-autokit-e2e-fixture-protected",
+  "guards": {
+    "apiKeyEnv": "ANTHROPIC_API_KEY / OPENAI_API_KEY / CODEX_API_KEY were unset for autokit live runs",
+    "authFiles": "~/.codex/auth.json and $CODEX_HOME/auth.json contents were not inspected, copied, logged, or included in artifacts",
+    "liveScope": "single protected fixture E17/E24 gate only; no high-count matrix or SDK matrix"
+  },
+  "protection": {
+    "before": {
+      "requiredStatusChecks": ["test"],
+      "enforceAdmins": false,
+      "requiredApprovingReviewCount": null
+    },
+    "blockedGate": {
+      "requiredStatusChecks": ["test", "protected-gate"],
+      "enforceAdmins": true,
+      "requiredApprovingReviewCount": 1
+    },
+    "afterRestore": {
+      "requiredStatusChecks": ["test"],
+      "enforceAdmins": false,
+      "requiredApprovingReviewCount": null
+    }
+  },
+  "githubBehavior": {
+    "finding": "GitHub returned mergeable=MERGEABLE while mergeStateStatus=BLOCKED under the temporary protection gate.",
+    "implementationResponse": "core normalizes mergeStateStatus=BLOCKED to internal mergeable=BLOCKED for E17/E24."
+  },
+  "e17": {
+    "issue": 1,
+    "pr": 3,
+    "branch": "autokit/issue-1",
+    "headRefOid": "d3c2445340464c54f3fa22f76b571a729179a6d2",
+    "baseRefOid": "45ff98dc3362362e1008d98f26bc4186f1e036a7",
+    "preRun": {
+      "state": "OPEN",
+      "statusChecks": "test passed",
+      "mergeable": "MERGEABLE",
+      "mergeStateStatus": "BLOCKED",
+      "autoMergeRequest": null
+    },
+    "command": "ANTHROPIC_API_KEY= OPENAI_API_KEY= CODEX_API_KEY= node packages/cli/dist/bin.js run",
+    "exitCode": 75,
+    "result": {
+      "state": "paused",
+      "runtimePhase": "ci_wait",
+      "failureCode": "branch_protection",
+      "failureMessage": "branch protection blocks merge"
+    }
+  },
+  "e24": {
+    "issue": 2,
+    "pr": 4,
+    "branch": "autokit/issue-2",
+    "headRefOid": "43c83ff886ef3db14bedc57be8a1f4643e9e7561",
+    "baseRefOid": "45ff98dc3362362e1008d98f26bc4186f1e036a7",
+    "preRun": {
+      "state": "OPEN",
+      "statusChecks": "test passed",
+      "mergeable": "MERGEABLE",
+      "mergeStateStatus": "BLOCKED",
+      "autoMergeRequest": {
+        "mergeMethod": "REBASE",
+        "enabledAt": "2026-05-05T06:53:18Z"
+      }
+    },
+    "command": "ANTHROPIC_API_KEY= OPENAI_API_KEY= CODEX_API_KEY= node packages/cli/dist/bin.js run",
+    "exitCode": 75,
+    "result": {
+      "state": "paused",
+      "runtimePhase": "merge",
+      "failureCode": "branch_protection",
+      "failureMessage": "merge became blocked",
+      "auditKind": "auto_merge_disabled"
+    },
+    "barrier": [
+      {
+        "autoMergeRequest": null,
+        "mergeStateStatus": "BLOCKED",
+        "state": "OPEN"
+      },
+      {
+        "autoMergeRequest": null,
+        "mergeStateStatus": "BLOCKED",
+        "state": "OPEN"
+      }
+    ]
+  },
+  "cleanup": {
+    "pullRequests": {
+      "open": [],
+      "closed": [3, 4]
+    },
+    "issues": {
+      "open": [],
+      "closed": [1, 2]
+    },
+    "branches": {
+      "autokit/issue-1": "404",
+      "autokit/issue-2": "404"
+    },
+    "protectionRestored": true
+  }
+}

@@ -28,6 +28,7 @@ export {
   buildGhPrViewCiArgs,
   buildGhPrViewHeadArgs,
   buildGhPrViewMergeArgs,
+  parseGhMergeability,
   parseGhPrView,
 } from "./gh.js";
 export type { GitWorktreeRemoveOptions } from "./git.js";

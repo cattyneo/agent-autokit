@@ -393,7 +393,7 @@ Issue #19 unprotected fixture smoke execution (2026-05-05 Asia/Tokyo):
 - Result: `autokit run` exited `0`; fixture PR #2 was created and merged; cleanup removed `autokit/issue-1` and `.autokit/worktrees/issue-1`.
 - OBS verifier: `bun e2e/runners/full-run.ts --repo /tmp/autokit-issue63-smoke.AdRcFs/fixture --owner-repo cattyneo/agent-autokit-e2e-fixture --issue 1 --run-exit-code 0 --json`.
 - OBS result: OBS-01..OBS-11 all passed. Detailed artifact: `docs/artifacts/issue-19-full-integration-smoke-2026-05-05.json`.
-- Protected fixture live gate: split to #68 because E17/E24 require controlled branch protection and PR state mutation on `cattyneo/agent-autokit-e2e-fixture-protected`. Existing non-live coverage remains in `packages/workflows/src/index.test.ts` for E17, E16 disable-auto barrier, and E24 disable-auto.
+- Protected fixture live gate: completed in #68 on `cattyneo/agent-autokit-e2e-fixture-protected`. E17 observed CI success + `mergeStateStatus=BLOCKED` -> `failure.code=branch_protection`; E24 observed reserved auto-merge -> `--disable-auto` -> `autoMergeRequest=null` twice -> `failure.code=branch_protection`. Detailed artifact: `docs/artifacts/issue-68-protected-fixture-gate-2026-05-05.json`.
 
 ## Full Matrix Execution Plan
 

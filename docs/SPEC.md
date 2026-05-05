@@ -522,7 +522,7 @@ failure:
 | code | 発火 state | 意味 |
 |---|---|---|
 | `rate_limited` | paused | provider 429 / rate-limit error code (transport 由来) |
-| `branch_protection` | paused | `mergeable=BLOCKED` / approval 要件未充足 |
+| `branch_protection` | paused | internal `mergeable=BLOCKED` (`mergeStateStatus=BLOCKED`) / approval 要件未充足 |
 | `need_input_pending` | paused | `status=need_input` 未応答中の中断 |
 | `interrupted` | paused | Ctrl+C / SIGTERM |
 | `branch_delete_failed` | paused | merged 後 cleanup の remote branch 削除失敗 |
@@ -773,17 +773,17 @@ sanitize 後の本文に再度 token-like / 絶対 path / `.env` 値が残存検
 | E11 | `reviewing` | supervise accept あり + 新 `review_round` (= 現在値 + 1) `> review.max_rounds` | `failed` | null | `failure.code=review_max` (修正受容回数が `max_rounds` を超えた判定) |
 | E12 | `fixing` | push 完了 + `fix.origin="review"` | `reviewing` | `review` | `fix.origin` クリア |
 | E13 | `fixing` | push 完了 + `fix.origin="ci"` | `reviewing` | `review` | `fix.origin` クリア。CI 由来 fix の差分も review / supervise を必ず通過する。`ci_fix_round` は E18 でのみ加算し、review_round とは合算しない |
-| E14 | `ci_waiting` | CI OK + `auto_merge=true` + head_sha 再観測一致 + `mergeable=MERGEABLE` | `merging` | `merge` | `gh pr merge --auto --rebase --match-head-commit <pr.head_sha>` 予約発行 |
+| E14 | `ci_waiting` | CI OK + `auto_merge=true` + head_sha 再観測一致 + internal `mergeable=MERGEABLE` | `merging` | `merge` | `gh pr merge --auto --rebase --match-head-commit <pr.head_sha>` 予約発行 |
 | E15 | `ci_waiting` | CI OK + `auto_merge=false` | `paused` | null | `failure.code=manual_merge_required` |
 | E16 | `ci_waiting` | CI OK + head_sha 再観測不一致 | `paused` | null | `failure.code=merge_sha_mismatch` |
-| E17 | `ci_waiting` | CI OK + `mergeable=BLOCKED` | `paused` | null | `failure.code=branch_protection` |
+| E17 | `ci_waiting` | CI OK + internal `mergeable=BLOCKED` | `paused` | null | `failure.code=branch_protection` |
 | E18 | `ci_waiting` | CI failure + `ci_fix_round + 1 <= ci.fix_max_rounds` | `fixing` | `fix` | `ci_fix_round++` / `fix.origin="ci"` 記録 (fix_max_rounds=N で N 回 fix まで許容) |
 | E19 | `ci_waiting` | CI failure + `ci_fix_round + 1 > ci.fix_max_rounds` | `failed` | null | `failure.code=ci_failure_max` (fix 受容回数が max_rounds を超えた判定、N+1 回目 CI failure で停止) |
 | E20 | `ci_waiting` | CI timeout (`config.ci.timeout_ms` 経過) + `timeout_action=paused` | `paused` | null | `failure.code=ci_timeout` |
 | E21 | `ci_waiting` | CI timeout + `timeout_action=failed` | `failed` | null | `failure.code=ci_timeout` / `gh pr merge --disable-auto` 実行 |
 | E22 | `merging` | gh PR state=MERGED + headRefOid 一致 | `cleaning` | null | grace period 後 branch / worktree 削除へ移行 |
 | E23 | `merging` | gh PR state=MERGED + headRefOid 不一致 | `paused` | null | `failure.code=merge_sha_mismatch` / `gh pr merge --disable-auto` 実行 |
-| E24 | `merging` | `mergeable=BLOCKED` (auto-merge 予約後の branch protection 変更) | `paused` | null | `failure.code=branch_protection` / `gh pr merge --disable-auto` 実行 |
+| E24 | `merging` | internal `mergeable=BLOCKED` (auto-merge 予約後の branch protection 変更) | `paused` | null | `failure.code=branch_protection` / `gh pr merge --disable-auto` 実行 |
 | E25 | `merging` | merge timeout (`config.merge.timeout_ms` 経過) | `paused` | null | `failure.code=merge_timeout` / `gh pr merge --disable-auto` 実行 |
 | E26 | `merging` | gh PR state=CLOSED (not merged) | `paused` | null | `failure.code=other` / `gh pr merge --disable-auto` 実行 |
 | E26a | `cleaning` | `git push origin --delete <branch>` + `git worktree remove` 全成功 | `merged` | null | branch_deleted audit 記録 |
@@ -895,7 +895,7 @@ resume / state machine が参照するフィールドは以下に固定。`runti
 | 条件 | state | failure.code | 復帰方法 |
 |---|---|---|---|
 | 429 / レート上限 | `paused` | `rate_limited` | `autokit resume` |
-| ブランチ保護 (approval要件 / `mergeable=BLOCKED`) | `paused` | `branch_protection` | 人間レビュー → `autokit resume` |
+| ブランチ保護 (approval要件 / internal `mergeable=BLOCKED`) | `paused` | `branch_protection` | 人間レビュー → `autokit resume` |
 | `status=need_input` 未応答中の中断 | `paused` | `need_input_pending` | 回答入力 → `autokit resume` |
 | Ctrl+C / SIGTERM | `paused` (`previous_state` 保持) | `interrupted` | `autokit resume` |
 | プラン検証 `plan.max_rounds` 超過 | `failed` | `plan_max` | `autokit retry` |
@@ -1014,7 +1014,7 @@ tasks を順次実行。
    1. tasks.yaml パース。失敗 / 0 byte → `.bak` 復元 (確認 prompt) → 失敗で起動拒否
    2. 全 active state task について以下 reconcile を実行:
       - **PR 既作成済み** (`pr.number != null`) の `merging` / `ci_waiting` / `reviewing` / `fixing`:
-        - `gh pr view --json state,mergedAt,headRefOid,mergeable` 観測 (`merged` 判定は `state=MERGED` または `mergedAt != null` から導出)
+        - `gh pr view --json state,mergedAt,headRefOid,mergeable,mergeStateStatus` 観測 (`merged` 判定は `state=MERGED` または `mergedAt != null` から導出、internal `mergeable` は `mergeStateStatus=BLOCKED` を優先)
         - PR state=MERGED + headRefOid 一致 → state=`cleaning` 同期 (E22 と同義) → §7.6.5 に従い branch / worktree 削除を実行 → 全成功で `merged` (E26a) / branch 失敗で `paused` + `branch_delete_failed` (E26b) / worktree 失敗で `paused` + `worktree_remove_failed` (E26c)
         - PR state=MERGED + headRefOid 不一致 → `paused` + `failure.code=merge_sha_mismatch`
         - PR state=CLOSED (not merged) → `paused` + `failure.code=other`
@@ -1069,7 +1069,7 @@ tasks を順次実行。
       - resume 失敗: `runtime.phase_attempt++` → cold restart 実行。cold restart が失敗し、加算後 `phase_attempt >= 3` なら E33 `failure.code=phase_attempt_exceeded`
    3. checkpoint なし → 該当 phase 先頭から再実行 (`phase_attempt++`)
    4. **他 phase の checkpoint は参照しない**。implement の after_sha が review/supervise の resume 判定に混入しない
-2. **`ci_wait` / `merge`:** checkpoint / provider_sessions を持たない (§4.2 schema)。`gh pr view --json state,mergedAt,headRefOid,mergeable` を再観測して §5.1 の対応 edge (E14-E26) を再評価
+2. **`ci_wait` / `merge`:** checkpoint / provider_sessions を持たない (§4.2 schema)。`gh pr view --json state,mergedAt,headRefOid,mergeable,mergeStateStatus` を再観測して §5.1 の対応 edge (E14-E26) を再評価
 3. **`failure.code=manual_merge_required` で paused:** resume 起動時に `gh pr view` で PR state=MERGED を観測したら state=`cleaning` 同期 (E22) → §7.6.5 に従い cleanup 実行 → 全成功で `merged` (E26a) / branch 失敗で `paused` + `branch_delete_failed` (E26b) / worktree 失敗で `paused` + `worktree_remove_failed` (E26c)
 4. **`cleaning` state で paused (`failure.code=branch_delete_failed` / `worktree_remove_failed`):** §7.6.5 末尾の cleaning paused resume 規約に従う (branch / worktree 残存再確認 → 再削除試行 / 残存なしで直接 `merged`)
 
@@ -1351,20 +1351,20 @@ git worktree add -b autokit/issue-12345 .autokit/worktrees/issue-12345 origin/<b
 
 - PR ready 化時点 (E06) では `--auto` 予約しない
 - `ci_waiting` で `gh pr checks` を `ci.poll_interval_ms` でポーリング
-- CI OK + supervise accept ゼロ + `auto_merge=true` + head_sha 再観測一致 + `mergeable=MERGEABLE` をすべて満たした時点ではじめて auto-merge 予約 (E14)
+- CI OK + supervise accept ゼロ + `auto_merge=true` + head_sha 再観測一致 + internal `mergeable=MERGEABLE` をすべて満たした時点ではじめて auto-merge 予約 (E14)
 - CI OK + `auto_merge=false`: 手動 merge 待ち (E15)
 - `merging` では PR state=MERGED のみポーリング
 - CI failure 検知時 fix → 再 push → review / supervise 再評価 → ci_waiting 再評価。fix.origin="ci" でも review 再走を skip しない (E18 → E13 → E07-E10)
 
 #### 7.6.2 ci_waiting フェーズ
 
-1. `gh pr view --json state,mergedAt,headRefOid,mergeable` + `gh pr checks` を `merge.poll_interval_ms` / `ci.poll_interval_ms` でポーリング
+1. `gh pr view --json state,mergedAt,headRefOid,mergeable,mergeStateStatus` + `gh pr checks` を `merge.poll_interval_ms` / `ci.poll_interval_ms` でポーリング
 2. **CI 全 check OK 観測:**
    1. supervisor accept ゼロ を再確認 (race 防止)
    2. `gh pr view --json headRefOid` を再取得 → tasks.yaml `pr.head_sha` と一致確認 (site=`pre_reservation_check`)
       - 不一致 → E16 (`failure.code=merge_sha_mismatch`)
-   3. `mergeable=MERGEABLE` 確認
-      - `BLOCKED` → E17 (`failure.code=branch_protection`)
+   3. `mergeStateStatus=BLOCKED` を internal `mergeable=BLOCKED` として扱い、それ以外で `mergeable=MERGEABLE` を確認
+      - internal `BLOCKED` → E17 (`failure.code=branch_protection`)
    4. `config.auto_merge=true`:
       - `gh pr merge <pr_number> --auto --rebase --match-head-commit <pr.head_sha>` 予約
       - **予約直後に再度 `gh pr view --json headRefOid` を観測 (site=`post_reservation_recheck`、race window 検知)。不一致なら即 `gh pr merge --disable-auto` 実行 + supervise accept_ids invalidate (新 round 強制) + E16**
@@ -1386,12 +1386,12 @@ git worktree add -b autokit/issue-12345 .autokit/worktrees/issue-12345 origin/<b
 
 #### 7.6.3 merging フェーズ
 
-1. `gh pr view --json state,mergedAt,headRefOid,mergeable` を `merge.poll_interval_ms` 間隔でポーリング
+1. `gh pr view --json state,mergedAt,headRefOid,mergeable,mergeStateStatus` を `merge.poll_interval_ms` 間隔でポーリング
 2. **PR state=MERGED 観測:**
    1. `headRefOid` を tasks.yaml `pr.head_sha` と再比較 (site=`merged_oid_match`)。不一致なら E23 (`gh pr merge --disable-auto` 実行 + `failure.code=merge_sha_mismatch`)
    2. 一致なら state=`cleaning` (E22) → §7.6.5 へ
 3. **PR state=CLOSED (not merged) 観測** → E26 (`gh pr merge --disable-auto` 実行 + `failure.code=other`)
-4. **`mergeable=BLOCKED` 観測 (auto-merge 予約後の branch protection 変更):** E24 (`gh pr merge --disable-auto` + `failure.code=branch_protection`)
+4. **internal `mergeable=BLOCKED` 観測 (auto-merge 予約後の branch protection 変更):** E24 (`gh pr merge --disable-auto` + `autoMergeRequest=null` 2 回連続 barrier + `failure.code=branch_protection`)
 5. **`merge.timeout_ms` 経過:** E25 (`gh pr merge --disable-auto` + `failure.code=merge_timeout`)
 
 `merging → paused` の **全 edge** で `gh pr merge --disable-auto` を必ず実行する (auto-merge 予約が GitHub 側で残存 → ユーザー再 push で意図せず merge されるリスクを遮断)。
@@ -2397,7 +2397,7 @@ v0.1.0 GA 条件:
 
 #### 13.6.1 protected auto-merge fixture
 
-auto-merge reservation / `mergeable=BLOCKED` / reservation race の検証は branch protection がある別 fixture で行う。`cattyneo/agent-autokit-e2e-fixture-protected` は required check 1 件 (`bun test`) と branch protection を有効化し、E17 / E24 / `auto_merge_reserved` / `--disable-auto` / `autoMergeRequest=null` 2 回観測 barrier を検証する。unprotected fixture の OBS-01..OBS-11 は v0.1 MVP exit、protected fixture は auto-merge safety gate として S6/S7 の release gate に含める。
+auto-merge reservation / internal `mergeable=BLOCKED` / reservation race の検証は branch protection がある別 fixture で行う。GitHub live では review/status protection 下でも `mergeable=MERGEABLE` のまま `mergeStateStatus=BLOCKED` を返すため、core は `mergeStateStatus=BLOCKED` を internal `BLOCKED` に正規化する。`cattyneo/agent-autokit-e2e-fixture-protected` は required check 1 件 (`bun test`) と branch protection を有効化し、E17 / E24 / `auto_merge_reserved` / `--disable-auto` / `autoMergeRequest=null` 2 回観測 barrier を検証する。unprotected fixture の OBS-01..OBS-11 は v0.1 MVP exit、protected fixture は auto-merge safety gate として S6/S7 の release gate に含める。
 
 ### 13.7 配布 AC
 

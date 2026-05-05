@@ -171,19 +171,21 @@ function mockExecFile(commands: string[]): WorkflowExecFile {
         statusCheckRollup: [{ name: "test", status: "COMPLETED", conclusion: "SUCCESS" }],
       });
     }
-    if (line === "gh pr view 29 --json headRefOid,mergeable,autoMergeRequest") {
+    if (line === "gh pr view 29 --json headRefOid,mergeable,mergeStateStatus,autoMergeRequest") {
       return JSON.stringify({
         headRefOid: "remote-head",
         mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
         autoMergeRequest: null,
       });
     }
-    if (line === "gh pr view 29 --json state,mergedAt,headRefOid,mergeable") {
+    if (line === "gh pr view 29 --json state,mergedAt,headRefOid,mergeable,mergeStateStatus") {
       return JSON.stringify({
         state: "MERGED",
         mergedAt: "2026-05-05T01:00:00Z",
         headRefOid: "remote-head",
         mergeable: "MERGEABLE",
+        mergeStateStatus: "CLEAN",
       });
     }
     return "";

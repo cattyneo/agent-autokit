@@ -37,6 +37,7 @@ import {
   DEFAULT_CONFIG,
   loadTasksFile,
   parseConfigYaml,
+  parseGhMergeability,
   parseGhPrView,
   type RuntimePhase,
   type TaskEntry,
@@ -226,7 +227,7 @@ export async function runProductionWorkflow(
           repoRoot: options.cwd,
           runner: options.runner ?? defaultRunner(options.env),
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
-          github: createMergeDeps(execFile, options.cwd),
+          github: createMergeDeps(execFile, options.cwd, logger),
         });
         task = result.task;
         persistTask(tasksFilePath, tasksFile, task);
@@ -516,7 +517,7 @@ function createCiDeps(execFile: WorkflowExecFile, cwd: string, logger: AutokitLo
   };
 }
 
-function createMergeDeps(execFile: WorkflowExecFile, cwd: string) {
+function createMergeDeps(execFile: WorkflowExecFile, cwd: string, logger: AutokitLogger) {
   return {
     getPr: (prNumber: number) => {
       const parsed = asRecord(parseJson(execFile("gh", buildGhPrViewArgs(prNumber), { cwd })));
@@ -528,8 +529,13 @@ function createMergeDeps(execFile: WorkflowExecFile, cwd: string) {
         mergeable: view.mergeable,
       };
     },
+    getAutoMergeStatus: (prNumber: number) => {
+      const parsed = asRecord(parseJson(execFile("gh", buildGhPrViewMergeArgs(prNumber), { cwd })));
+      return { autoMergeRequest: parsed.autoMergeRequest ?? null };
+    },
     disableAutoMerge: (prNumber: number) => {
       execFile("gh", buildDisableAutoMergeArgs(prNumber), { cwd });
+      logger.auditOperation("auto_merge_disabled", { prNumber });
     },
     sleep: (ms: number) =>
       new Promise<void>((resolve) => {
@@ -604,7 +610,7 @@ function parseCiPr(execFile: WorkflowExecFile, cwd: string, prNumber: number): C
   const view = asRecord(parseJson(execFile("gh", buildGhPrViewMergeArgs(prNumber), { cwd })));
   return {
     headSha: view.headRefOid === undefined ? null : String(view.headRefOid),
-    mergeable: parseMergeable(view.mergeable),
+    mergeable: parseGhMergeability(view),
     autoMergeRequest: view.autoMergeRequest ?? null,
   };
 }
@@ -705,11 +711,4 @@ function parsePrState(value: unknown): "OPEN" | "MERGED" | "CLOSED" {
     return value;
   }
   throw new Error(`unexpected PR state: ${String(value)}`);
-}
-
-function parseMergeable(value: unknown): "MERGEABLE" | "BLOCKED" | "UNKNOWN" {
-  if (value === "MERGEABLE" || value === "BLOCKED" || value === "UNKNOWN") {
-    return value;
-  }
-  return "UNKNOWN";
 }

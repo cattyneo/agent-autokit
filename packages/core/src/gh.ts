@@ -9,11 +9,18 @@ export type GhPrViewJson = {
   state: "OPEN" | "MERGED" | "CLOSED";
   mergedAt: string | null;
   headRefOid: string | null;
-  mergeable: "MERGEABLE" | "BLOCKED" | "UNKNOWN";
+  mergeable?: unknown;
+  mergeStateStatus?: unknown;
 };
 
 export function buildGhPrViewArgs(prNumber: number): string[] {
-  return ["pr", "view", String(prNumber), "--json", "state,mergedAt,headRefOid,mergeable"];
+  return [
+    "pr",
+    "view",
+    String(prNumber),
+    "--json",
+    "state,mergedAt,headRefOid,mergeable,mergeStateStatus",
+  ];
 }
 
 export function buildGhPrViewHeadArgs(prNumber: number): string[] {
@@ -25,7 +32,13 @@ export function buildGhPrViewCiArgs(prNumber: number): string[] {
 }
 
 export function buildGhPrViewMergeArgs(prNumber: number): string[] {
-  return ["pr", "view", String(prNumber), "--json", "headRefOid,mergeable,autoMergeRequest"];
+  return [
+    "pr",
+    "view",
+    String(prNumber),
+    "--json",
+    "headRefOid,mergeable,mergeStateStatus,autoMergeRequest",
+  ];
 }
 
 export function buildGhPrListHeadArgs(branch: string): string[] {
@@ -88,6 +101,22 @@ export function parseGhPrView(value: GhPrViewJson): GhPrView {
     state: value.state,
     merged: value.state === "MERGED" || value.mergedAt !== null,
     headRefOid: value.headRefOid,
-    mergeable: value.mergeable,
+    mergeable: parseGhMergeability(value),
   };
+}
+
+export function parseGhMergeability(value: {
+  mergeable?: unknown;
+  mergeStateStatus?: unknown;
+}): "MERGEABLE" | "BLOCKED" | "UNKNOWN" {
+  if (value.mergeStateStatus === "BLOCKED" || value.mergeable === "BLOCKED") {
+    return "BLOCKED";
+  }
+  if (value.mergeable === "MERGEABLE") {
+    return "MERGEABLE";
+  }
+  if (value.mergeStateStatus === "CLEAN" || value.mergeStateStatus === "HAS_HOOKS") {
+    return "MERGEABLE";
+  }
+  return "UNKNOWN";
 }

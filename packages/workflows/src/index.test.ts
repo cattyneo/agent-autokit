@@ -829,7 +829,14 @@ describe("merge and cleaning workflow", () => {
       worktreeRoot: "/worktree",
     });
     assert.equal(mismatch.task.failure?.code, "merge_sha_mismatch");
-    assert.deepEqual(mismatchGithub.calls, ["getPr:51", "disable:51"]);
+    assert.deepEqual(mismatchGithub.calls, [
+      "getPr:51",
+      "disable:51",
+      "sleep:5000",
+      "getAutoMergeStatus:51",
+      "sleep:5000",
+      "getAutoMergeStatus:51",
+    ]);
 
     const blockedGithub = mockMergeDeps({
       prs: [{ state: "OPEN", merged: false, headSha: "head-sha", mergeable: "BLOCKED" }],
@@ -841,7 +848,14 @@ describe("merge and cleaning workflow", () => {
       worktreeRoot: "/worktree",
     });
     assert.equal(blocked.task.failure?.code, "branch_protection");
-    assert.deepEqual(blockedGithub.calls, ["getPr:51", "disable:51"]);
+    assert.deepEqual(blockedGithub.calls, [
+      "getPr:51",
+      "disable:51",
+      "sleep:5000",
+      "getAutoMergeStatus:51",
+      "sleep:5000",
+      "getAutoMergeStatus:51",
+    ]);
 
     const closedGithub = mockMergeDeps({
       prs: [{ state: "CLOSED", merged: false, headSha: "head-sha", mergeable: "UNKNOWN" }],
@@ -853,7 +867,14 @@ describe("merge and cleaning workflow", () => {
       worktreeRoot: "/worktree",
     });
     assert.equal(closed.task.failure?.code, "other");
-    assert.deepEqual(closedGithub.calls, ["getPr:51", "disable:51"]);
+    assert.deepEqual(closedGithub.calls, [
+      "getPr:51",
+      "disable:51",
+      "sleep:5000",
+      "getAutoMergeStatus:51",
+      "sleep:5000",
+      "getAutoMergeStatus:51",
+    ]);
 
     const timeoutGithub = mockMergeDeps({
       prs: [{ state: "OPEN", merged: false, headSha: "head-sha", mergeable: "UNKNOWN" }],
@@ -868,7 +889,15 @@ describe("merge and cleaning workflow", () => {
       nowMs: queueNow([0, 101]),
     });
     assert.equal(timeout.task.failure?.code, "merge_timeout");
-    assert.deepEqual(timeoutGithub.calls, ["getPr:51", "sleep:10", "disable:51"]);
+    assert.deepEqual(timeoutGithub.calls, [
+      "getPr:51",
+      "sleep:10",
+      "disable:51",
+      "sleep:10",
+      "getAutoMergeStatus:51",
+      "sleep:10",
+      "getAutoMergeStatus:51",
+    ]);
   });
 
   it("cleans merged branch and worktree with forward-resume flags", async () => {
@@ -1264,6 +1293,10 @@ function mockMergeDeps(input: { prs: MergePrObservation[] }): MergeDeps & { call
     },
     disableAutoMerge: (prNumber) => {
       calls.push(`disable:${prNumber}`);
+    },
+    getAutoMergeStatus: (prNumber) => {
+      calls.push(`getAutoMergeStatus:${prNumber}`);
+      return { autoMergeRequest: null };
     },
     sleep: (ms) => {
       calls.push(`sleep:${ms}`);

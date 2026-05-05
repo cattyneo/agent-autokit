@@ -142,8 +142,15 @@ export type MergePrObservation = {
   mergeable: "MERGEABLE" | "BLOCKED" | "UNKNOWN";
 };
 
+export type AutoMergeStatusObservation = {
+  autoMergeRequest?: unknown | null;
+};
+
 export type MergeDeps = {
   getPr: (prNumber: number) => Promise<MergePrObservation> | MergePrObservation;
+  getAutoMergeStatus: (
+    prNumber: number,
+  ) => Promise<AutoMergeStatusObservation> | AutoMergeStatusObservation;
   disableAutoMerge: (prNumber: number) => Promise<void> | void;
   sleep?: (ms: number) => Promise<void> | void;
 };
@@ -779,23 +786,23 @@ export async function runMergeWorkflow(
 
   for (;;) {
     if (currentMs(options) - startedAt >= config.merge.timeout_ms) {
-      await options.github.disableAutoMerge(prNumber);
+      await disableAutoMergeAndWait(prNumber, options);
       return { task: transitionTask(task, { type: "merge_timeout" }, config) };
     }
 
     const pr = await options.github.getPr(prNumber);
     if (pr.state === "MERGED" || pr.merged) {
       if (pr.headSha !== expectedHead) {
-        await options.github.disableAutoMerge(prNumber);
+        await disableAutoMergeAndWait(prNumber, options);
       }
       return { task: transitionTask(task, { type: "pr_merged", headSha: pr.headSha }, config) };
     }
     if (pr.state === "CLOSED") {
-      await options.github.disableAutoMerge(prNumber);
+      await disableAutoMergeAndWait(prNumber, options);
       return { task: transitionTask(task, { type: "pr_closed_unmerged" }, config) };
     }
     if (pr.mergeable === "BLOCKED") {
-      await options.github.disableAutoMerge(prNumber);
+      await disableAutoMergeAndWait(prNumber, options);
       return { task: transitionTask(task, { type: "merge_blocked" }, config) };
     }
     await sleepFor(config.merge.poll_interval_ms, options);
@@ -1309,6 +1316,19 @@ async function waitForAutoMergeDisabled(
   while (consecutiveNull < 2) {
     await sleepFor((options.config ?? DEFAULT_CONFIG).merge.poll_interval_ms, options);
     const observed = await options.github.getPr(prNumber, "auto_merge_disabled_barrier");
+    consecutiveNull = observed.autoMergeRequest == null ? consecutiveNull + 1 : 0;
+  }
+}
+
+async function disableAutoMergeAndWait(
+  prNumber: number,
+  options: MergeWorkflowOptions,
+): Promise<void> {
+  await options.github.disableAutoMerge(prNumber);
+  let consecutiveNull = 0;
+  while (consecutiveNull < 2) {
+    await sleepFor((options.config ?? DEFAULT_CONFIG).merge.poll_interval_ms, options);
+    const observed = await options.github.getAutoMergeStatus(prNumber);
     consecutiveNull = observed.autoMergeRequest == null ? consecutiveNull + 1 : 0;
   }
 }

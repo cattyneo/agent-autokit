@@ -23,7 +23,7 @@
 - 中断 / 再開: 429 + Ctrl+C + provider session_id + git/PR checkpoint
 - 配布: private 配布 (`bun pm pack` で release artifact tarball 生成、`npm pack --dry-run` は content / compatibility 検査、別経路は `bun link` のみ。`packages/cli/package.json` `private: true` 維持 → `npm publish` 系 (public / GitHub Packages / private registry すべて) は npm 公式仕様により拒否されるため使用しない)。v0.1 は `packages/cli/dist/**` に内部実装を bundle し、tarball install 時に private workspace package 解決を要求しない
 
-**v0.1.0 support matrix:** 対象 repo は `cattyneo/agent-autokit-e2e-fixture` と同等の構成 (GitHub repo + gh 認証、macOS runner 前提、単純な CI、unprotected immediate-merge smoke、既存 AGENTS/CLAUDE 衝突なし、private artifact install) に限定する。auto-merge reservation / `mergeable=BLOCKED` / `autoMergeRequest=null` barrier は protected fixture で別途検証するが、任意の branch protection 設計を持つ一般 repo への適用は v0.2 以降の support matrix 拡張で扱う。
+**v0.1.0 support matrix:** 対象 repo は `cattyneo/agent-autokit-e2e-fixture` と同等の構成 (GitHub repo + gh 認証、macOS runner 前提、単純な CI、unprotected immediate-merge smoke、既存 AGENTS/CLAUDE 衝突なし、private artifact install) に限定する。auto-merge reservation / internal `mergeable=BLOCKED` (`mergeStateStatus=BLOCKED`) / `autoMergeRequest=null` barrier は protected fixture で別途検証するが、任意の branch protection 設計を持つ一般 repo への適用は v0.2 以降の support matrix 拡張で扱う。
 
 **v0.2.0+ 候補:**
 - `remove / clear / uninstall / update / version`
@@ -340,7 +340,7 @@ agent-autokit/
 - [ ] D3: `core/state-machine.ts` (SPEC §5.1 遷移表 driven、`previous_state` 復帰、短絡 edge 含む) + `core/git.ts` + `core/gh.ts`
 - [ ] D3: `core/pr.ts` (PR create/ready/merge `--match-head-commit` / `--disable-auto` / `gh pr view --json headRefOid` で head_sha 取得)
 - [ ] D3: `core/reconcile.ts` (起動時 PR state=MERGED/CLOSED/headRefOid 同期 + `cleaning` state 残存時の cleanup 再試行 + **PR 未作成 active state の deterministic restart / `pre_pr_active_orphan` 正規化**)
-  - **PR 既作成済 (`merging`/`ci_waiting`/`reviewing`/`fixing`):** SPEC §6.2 step 3 に従い `gh pr view --json state,mergedAt,headRefOid,mergeable` 観測 (`merged` 判定は `state=MERGED` または `mergedAt != null` から導出) → MERGED+oid 一致なら `cleaning` 同期 → §7.6.5 / MERGED+oid 不一致 `merge_sha_mismatch` / CLOSED `paused`+`other` / OPEN+oid 乖離 `merge_sha_mismatch` / OPEN+整合 該当 phase 先頭から再実行
+  - **PR 既作成済 (`merging`/`ci_waiting`/`reviewing`/`fixing`):** SPEC §6.2 step 3 に従い `gh pr view --json state,mergedAt,headRefOid,mergeable,mergeStateStatus` 観測 (`merged` 判定は `state=MERGED` または `mergedAt != null` から導出、`mergeStateStatus=BLOCKED` は internal BLOCKED に正規化) → MERGED+oid 一致なら `cleaning` 同期 → §7.6.5 / MERGED+oid 不一致 `merge_sha_mismatch` / CLOSED `paused`+`other` / OPEN+oid 乖離 `merge_sha_mismatch` / OPEN+整合 該当 phase 先頭から再実行
   - **`cleaning` state task:** branch / worktree 残存を `gh api repos/<owner>/<repo>/branches/<branch>` / `lstat` で再確認 → 残存なら §7.6.5 step 2-3 を再実行 → 全成功 `merged` (E26a) / branch 失敗 `paused`+`branch_delete_failed` (E26b) / worktree 失敗 `paused`+`worktree_remove_failed` (E26c) / 残存なしなら直接 `merged` 同期
   - **PR 未作成 active state (`planning`/`planned`/`implementing`/`reviewing` 空 PR) の deterministic restart 優先順 (SPEC §6.2 step 3 / AC §13.1):**
     1. `state=planned` + `plan.state=verified` + `runtime_phase=null` → E05 (`planned` → `implementing` / `runtime_phase=implement`) に進む
@@ -474,11 +474,11 @@ agent-autokit/
   - 各 step 直後に atomic write、reconcile 表は implement と共通 (§7.3.1)、`rebase_done` で rebase 二重実行を防止
 	- [ ] D5a: `workflows/ci-wait.ts` (`AK-013`)
 	  - **ci_waiting** (SPEC §7.6.2): `gh pr checks` で CI 完了ポーリング
-	    - CI OK + auto_merge=true + supervise accept ゼロ + 1 回目 head_sha 再観測一致 + mergeable=MERGEABLE を全て満たす → `gh pr merge --auto --rebase --match-head-commit <pr.head_sha>` 予約 → **予約直後に 2 回目 `gh pr view --json headRefOid` 観測 (race window 検知)。不一致なら即 `gh pr merge --disable-auto` + supervise accept_ids invalidate (新 round 強制) + `paused` + `failure.code=merge_sha_mismatch`** (E16 / SPEC §7.6.2 step 2.4 / AC §13.4) → 一致なら `merging` (E14)
+	    - CI OK + auto_merge=true + supervise accept ゼロ + 1 回目 head_sha 再観測一致 + internal mergeable=MERGEABLE (`mergeStateStatus=BLOCKED` は internal BLOCKED に正規化) を全て満たす → `gh pr merge --auto --rebase --match-head-commit <pr.head_sha>` 予約 → **予約直後に 2 回目 `gh pr view --json headRefOid` 観測 (race window 検知)。不一致なら即 `gh pr merge --disable-auto` + supervise accept_ids invalidate (新 round 強制) + `paused` + `failure.code=merge_sha_mismatch`** (E16 / SPEC §7.6.2 step 2.4 / AC §13.4) → 一致なら `merging` (E14)
 	    - `--disable-auto` 実行後は `gh pr view --json autoMergeRequest` を `merge.poll_interval_ms` 間隔で poll し、`autoMergeRequest=null` を **2 回連続** 観測してから次の E14 評価を許可する (reservation 反映遅延 race barrier)
     - CI OK + auto_merge=false → `paused` + `failure.code=manual_merge_required` (E15、`--auto` 予約しない)
     - head_sha 1 回目観測不一致 → `paused` + `failure.code=merge_sha_mismatch` (E16、予約未発行のため `--disable-auto` 不要)
-    - mergeable=BLOCKED → `paused` + `failure.code=branch_protection` (E17、予約未発行のため `--disable-auto` 不要)
+    - internal mergeable=BLOCKED (`mergeStateStatus=BLOCKED`) → `paused` + `failure.code=branch_protection` (E17、予約未発行のため `--disable-auto` 不要)
     - CI failure → `fix.origin="ci"` 記録 → fix → 再 push → review/supervise → 再 ci_waiting。**予約未発行のため `--disable-auto` 不要** (E18→E13→E09/E10)
     - `ci_fix_round + 1 > ci.fix_max_rounds` → `failed` + `failure.code=ci_failure_max` (E19、`fix_max_rounds=N` で N 回 fix まで許容、N+1 回目 CI failure で停止、§5.1 閾値表記規約と一致)
     - CI timeout (`config.ci.timeout_ms` 経過):
@@ -488,7 +488,7 @@ agent-autokit/
   - **merging** (SPEC §7.6.3): PR state=MERGED 観測のみポーリング
     - MERGED + headRefOid 一致 → state=`cleaning` (E22) → §7.6.5 cleanup へ
     - MERGED + headRefOid 不一致 → `gh pr merge --disable-auto` + `paused` + `failure.code=merge_sha_mismatch` (E23)
-    - mergeable=BLOCKED 観測 (auto-merge 予約後の branch protection 変更) → `gh pr merge --disable-auto` + `paused` + `failure.code=branch_protection` (E24)
+    - internal mergeable=BLOCKED (`mergeStateStatus=BLOCKED`) 観測 (auto-merge 予約後の branch protection 変更) → `gh pr merge --disable-auto` + `autoMergeRequest=null` 2 回連続 barrier + `paused` + `failure.code=branch_protection` (E24)
     - merge timeout (`config.merge.timeout_ms` 経過) → `gh pr merge --disable-auto` + `paused` + `failure.code=merge_timeout` (E25)
     - PR state=CLOSED (not merged) → `gh pr merge --disable-auto` + `paused` + `failure.code=other` (E26)
   - **cleaning** (SPEC §7.6.5): PR は merge 済、cleanup の完了/未完了を独立 state で扱う
@@ -505,7 +505,7 @@ agent-autokit/
 - [ ] D6: 静的検査 (workflows / runner / agent から git/gh/push/PR 呼出禁止) を ESLint custom rule で
 
 **Exit:** モック runner で 1 Issue 完走。
-- 既知 reject 短絡: review-supervise から `ci_waiting` に直接遷移 (`merging` 直接短絡なし)、その後 CI OK + auto_merge=true + head_sha 一致 + mergeable=MERGEABLE で `merging` 到達 (E14) → MERGED 観測 → `cleaning` (E22) → cleanup → `merged` (E26a)
+- 既知 reject 短絡: review-supervise から `ci_waiting` に直接遷移 (`merging` 直接短絡なし)、その後 CI OK + auto_merge=true + head_sha 一致 + internal mergeable=MERGEABLE で `merging` 到達 (E14) → MERGED 観測 → `cleaning` (E22) → cleanup → `merged` (E26a)
 - finding_id が sanitize 後の正規化値から決定論的に採番される
 - PR コメントに dummy token / 絶対 path が含まれない (sanitize テスト)
 - merge SHA 不一致 fixture (1 回目観測) で `paused` + `failure.code=merge_sha_mismatch` (予約未発行)
@@ -567,7 +567,7 @@ agent-autokit/
   - 成功コマンド: `gh repo view cattyneo/agent-autokit-e2e-fixture --json nameWithOwner,isPrivate`, `gh issue view <issue> --repo cattyneo/agent-autokit-e2e-fixture --json title,labels`, `gh workflow list --repo cattyneo/agent-autokit-e2e-fixture`
 - [ ] D1a: protected auto-merge fixture provisioning (`cattyneo/agent-autokit-e2e-fixture-protected`、SPEC §13.6.1)
   - required check 1 件 (`bun test`) と branch protection を有効化
-  - E17 (`mergeable=BLOCKED`) / E24 (予約後 BLOCKED) / `auto_merge_reserved` / `--disable-auto` / `autoMergeRequest=null` 2 回連続観測 barrier の証跡を固定
+  - E17 (internal mergeable=BLOCKED) / E24 (予約後 BLOCKED) / `auto_merge_reserved` / `--disable-auto` / `autoMergeRequest=null` 2 回連続観測 barrier の証跡を固定
 - [ ] D1b: release verification environment provisioning (`AK-019` の前提整理、artifact 不要)
   - 別マシンまたは clean HOME の検証環境、必要な `gh` / `claude` / `codex` subscription login、Apple Silicon macOS / fallback OS の差分を evidence に固定
   - 成功コマンド: `node -v`, `bun -v`, `gh auth status`, `claude --version`, `codex --version`, `env | grep -E 'ANTHROPIC_API_KEY|OPENAI_API_KEY'` が空であること、fixture repo write/merge permission の確認
@@ -576,7 +576,7 @@ agent-autokit/
 - [ ] D2: 1 Issue smoke (MVP exit、SPEC §13.6 完走定義)
   - 観測項目: PR MERGED + state=`merged` + branch 削除 + worktree 削除
 - [ ] D2: protected fixture auto-merge safety smoke (SPEC §13.6.1)
-  - `mergeable=BLOCKED` で `branch_protection`、予約後の `--disable-auto` で `autoMergeRequest=null` 2 回連続観測、E24 で予約解除を観測
+  - internal mergeable=BLOCKED で `branch_protection`、予約後の `--disable-auto` で `autoMergeRequest=null` 2 回連続観測、E24 で予約解除を観測
 - [ ] D2: reconcile テスト
   - autokit を `merging` 中に kill → 再 `run` → MERGED 同期される (PR MERGED → `cleaning` → cleanup → `merged`)
   - autokit を `cleaning` 中に kill (branch 削除完了 / worktree 削除前) → 再 `run` → 残存 worktree のみ削除 → `merged`

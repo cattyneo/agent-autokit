@@ -61,7 +61,7 @@ flowchart LR
   filter --> outGh["buildGhEnv:<br/>+ GH_TOKEN<br/>+ GITHUB_TOKEN"]
   filter --> outRunner["buildRunnerEnv:<br/>(GH_TOKEN 系を除外)"]
 
-  filter -. drop .-> dropped[<br/>ANTHROPIC_API_KEY<br/>OPENAI_API_KEY<br/>CODEX_API_KEY<br/>その他全て<br/>]
+  filter -. drop .-> dropped["ANTHROPIC_API_KEY<br/>OPENAI_API_KEY<br/>CODEX_API_KEY<br/>その他全て"]
 ```
 
 `COMMON_EXACT_KEYS` (`PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `TERM`, `TZ`) と `LC_*` のみ自動継承。それ以外は **明示登録** が必要。
@@ -90,7 +90,7 @@ flowchart TB
   end
 
   claude -. read-only .-> R
-  codex -. read/write only<br/>worktree path .-> R
+  codex -. "read/write only (worktree path)" .-> R
 ```
 
 役割分離の不変条件:

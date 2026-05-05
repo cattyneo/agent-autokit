@@ -1,8 +1,13 @@
 # 05. ワークフロー
 
-> この章で解決すること: `autokit run` が内部で何をしているのか、各フェーズで誰（Claude / Codex）が動くのか、auto-merge ガードはどう働くのかを把握する。
+> この章で解決すること: `autokit run` がどの順序で何をするか、ユーザーから見える区切り（state / runtime_phase）はどう分かれるか、どこで停止しうるかを把握する。
 
-正典: [`docs/SPEC.md`](../SPEC.md) §5（state 遷移）/ §2.2（Phase × Provider）/ §4.5（レビュー Markdown）。本章はユーザーが「どこで何が起きうるか」を読むための要約。
+用語整理:
+
+- **runtime_phase（7 種）**: LLM を呼び出す単位 — `plan` / `plan_verify` / `plan_fix` / `implement` / `review` / `supervise` / `fix`
+- **workflow ステップ（9 種）**: state-machine の active state — runtime_phase 7 + GitHub 操作のみの `ci_wait` / `merge`
+
+正典: [`docs/SPEC.md`](../SPEC.md) §5（state 遷移）/ §2.2（Phase × Provider）/ §4.5（レビュー Markdown）。内部不変条件・遷移詳細は [dev-guide/03](../dev-guide/03-state-machine.md)、安全境界は [dev-guide/05](../dev-guide/05-safety.md)。本章はユーザーが「どこで何が起きうるか」を読むための振舞要約。
 
 ## 全体像
 
@@ -66,64 +71,38 @@
 
 ## フェーズ × Provider
 
-各 `runtime_phase` のデフォルト割り当て:
+`runtime_phase` ごとの provider / sandbox / 役割の正典は [04-configuration.md](./04-configuration.md) `phases.<phase>` セクション。`config.yaml` の `phases.<name>.provider` で個別上書きできる。
 
-| runtime_phase | provider | sandbox | 役割 |
-|---------------|----------|---------|------|
-| `plan` | Claude | read-only | issue 本文と現状から plan.md を起こす |
-| `plan_verify` | Codex | workspace-write | plan.md の妥当性を Codex 側で検証 |
-| `plan_fix` | Claude | read-only | plan_verify の指摘を反映 |
-| `implement` | Codex | workspace-write | worktree 上で実装し commit / push / PR draft |
-| `review` | Claude | read-only | PR diff を読み findings を出す |
-| `supervise` | Claude | read-only | findings を deduplicate / 取捨選択 |
-| `fix` | Codex | workspace-write | findings を反映する diff を書く |
-
-`config.yaml` の `phases.<name>.provider` で個別上書き可能。
-
-## state ↔ runtime_phase の対応
-
-`autokit run` のメインループ（`packages/cli/src/executor.ts`）が state を見て対応するワークフローを呼ぶ:
-
-| state | 呼ばれるワークフロー |
-|-------|---------------------|
-| `queued` / `planning` | `runPlanningWorkflow`（plan / plan_verify / plan_fix を内部反復） |
-| `planned` / `implementing` | `runImplementWorkflow`（worktree 確保 → Codex 実装 → push → PR draft） |
-| `reviewing` | `runReviewSuperviseWorkflow`（review → supervise → findings 確定） |
-| `fixing` | `runFixWorkflow`（findings 反映） |
-| `ci_waiting` | `runCiWaitWorkflow`（GitHub status check ポーリング） |
-| `merging` | `runMergeWorkflow`（auto-merge 予約 → 確定検知） |
-| `cleaning` | `runCleaningWorkflow`（branch / worktree / 監査） |
-
-メインループは最大 100 step までで、terminal（`merged` / `failed`）または waiting（`paused`）に達したら抜ける。
-
-## レビューループ
+## レビューループ（観測される振舞）
 
 - 1 ラウンド = `review` → `supervise` → 必要なら `fix`
-- 上限: `config.review.max_rounds`（デフォルト 3）
-- `warn_threshold`（デフォルト 2）以降のラウンドはログレベル warn でマーク
-- 各ラウンドの成果物は `.autokit/reviews/issue-{N}-review-{round}.md` に YAML frontmatter + JSON findings として永続化される
-- supervisor が「却下」した finding は次ラウンドに伝播するが sanitize 規則（[`docs/SPEC.md`](../SPEC.md) §4.6.2）に従って round 越え redact される
+- 上限: `config.review.max_rounds` 回。超過時は `paused` (`failure.code: review_max`)
+- `config.review.warn_threshold` 以降のラウンドは log level warn
+- 成果物: `.autokit/reviews/issue-{N}-review-{round}.md`（YAML frontmatter + JSON findings）
+- supervisor が却下した finding は sanitize 規則（[`docs/SPEC.md`](../SPEC.md) §4.6.2）の round 越え redact を経て次ラウンドへ伝播
 
-## CI / fix ループ
+ループの内部遷移条件・不変条件は [dev-guide/03](../dev-guide/03-state-machine.md) のレビューループ節を参照。
 
-- `ci_waiting` で `ci.poll_interval_ms` ごとに `gh pr view --json statusCheckRollup` を実行
-- 全 status が `COMPLETED` かつ `SUCCESS` / `SKIPPED` のみ → success → `merging`
-- 1 つでも失敗 → failure → `fixing`（`ci_fix_round++`）
-- `ci_fix_round` が `ci.fix_max_rounds`（デフォルト 3）に達したら `paused` (`ci_fix_exhausted` 系)
-- `ci.timeout_ms`（30 分）超過は `ci.timeout_action`（デフォルト `paused`）に従う
+## CI / fix ループ（観測される振舞）
 
-## auto-merge ガード（重要）
+- `ci_waiting` で `config.ci.poll_interval_ms` ごとに status check をポーリング
+- 全 status `COMPLETED` かつ `SUCCESS` / `SKIPPED` のみ → `merging`
+- 1 つでも失敗 → `fixing` で `ci_fix_round++`
+- `ci_fix_round` が `config.ci.fix_max_rounds` 到達 → `paused` (`failure.code: ci_failure_max`)
+- 経過時間が `config.ci.timeout_ms` 超過 → `config.ci.timeout_action` に従い `paused` (`failure.code: ci_timeout`) または `failed`
 
-`merging` フェーズでは GitHub の auto-merge 機能を使うが、**reserve するときに head SHA を必ず指定**する:
+`failure.code` 別の対処は [06-recovery.md](./06-recovery.md)。既定値の数値は [04-configuration.md](./04-configuration.md) の `ci.*` フィールド表。
 
-1. `gh pr view <N>` で現在の `headRefOid` を取得
-2. tasks.yaml に保存された `pr.head_sha` と照合
-3. 一致したら `gh pr merge --auto --squash --match-head-commit <SHA>` で予約
-4. 不一致なら `merge_sha_mismatch` failure で `paused`
+## auto-merge
 
-これにより「review 後に攻撃者が push した別 SHA を auto-merge してしまう」事故を防ぐ。
+`merging` で GitHub auto-merge を **head SHA を縛って** 予約する。
 
-`gh` 自体に auto-merge 予約後の head 変更時の挙動の差分があるため、念のため `merging` 中も poll し、最終的に `pr.merged === true` かつ `pr.headRefOid === task.pr.head_sha` を確認してから `cleaning` に移る。
+ユーザーから見える振舞:
+
+- レビュー後に PR へ追加 push が入っていた場合、auto-merge が拒否されて `paused` (`failure.code: merge_sha_mismatch`) になる
+- merge 後の cleanup が失敗しても `autokit cleanup --force-detach` が同じ head SHA gate を再評価してから merged 化する
+
+ガードの内部実装（`gh` 引数 / poll 戦略 / `pr.headRefOid` 照合）は [dev-guide/05](../dev-guide/05-safety.md) の auto-merge head SHA gate 節。
 
 ## cleaning フェーズ
 

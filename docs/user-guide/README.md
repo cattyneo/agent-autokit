@@ -27,7 +27,7 @@
 | 2 | [02-quickstart.md](./02-quickstart.md) | 1 issue を end-to-end で動かす E2E チュートリアル |
 | 3 | [03-commands.md](./03-commands.md) | 各コマンドの引数・オプション・終了コードを引きたい |
 | 4 | [04-configuration.md](./04-configuration.md) | `.autokit/` 構造・`config.yaml`・env 変数を確認したい |
-| 5 | [05-workflow.md](./05-workflow.md) | 9 フェーズの内部挙動と auto-merge ガードを理解したい |
+| 5 | [05-workflow.md](./05-workflow.md) | 9 ステップ（runtime_phase 7 + ci_wait + merge）の挙動を把握したい |
 | 6 | [06-recovery.md](./06-recovery.md) | 終了コード `75` が出た / `paused` から復旧したい |
 | 7 | [07-troubleshooting-faq.md](./07-troubleshooting-faq.md) | エラー・FAQ を引きたい |
 

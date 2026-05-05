@@ -6,10 +6,15 @@
 
 | 入口 | 対象 | 内容 |
 |------|------|------|
-| [`user-guide/`](./user-guide/README.md) | 動かす人 | install / コマンド / config / 復旧手順 |
-| [`dev-guide/`](./dev-guide/README.md) | コードを読む人・拡張したい人 | 設計意図 / アーキテクチャ / 状態機械 / prompt-contract / 安全設計 |
+| [`user-guide/`](./user-guide/README.md) | 動かす人 | install / コマンド / config / 観測される振舞 / 復旧手順 |
+| [`dev-guide/`](./dev-guide/README.md) | コードを読む人・拡張したい人 | 設計意図 / 内部アーキテクチャ / 状態機械の不変条件 / prompt-contract / 安全設計の境界 |
 
-両者は重複しない。コマンド使い方は `user-guide`、なぜそうなっているかは `dev-guide`。
+責務分担:
+
+- **user-guide** = 観測可能な振舞（コマンド・config キー・log 場所・終了コード・`failure.code` 名）の正典
+- **dev-guide** = 内部不変条件・遷移詳細・`gh` 引数・field 名・package 構造の正典
+
+同じ概念を両方で扱う場合、片側を正典として他方からは link 誘導する。冗長記述を見つけたら正典側へ集約する。
 
 ## 仕様正典
 

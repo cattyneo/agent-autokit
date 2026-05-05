@@ -9,7 +9,7 @@
 | 1 | **ローカル CLI runtime** | SaaS / GitHub App | subscription 認証を端末で完結。秘密情報が外部に出ない。個人の手元で完結する開発フロー前提 |
 | 2 | **Claude (read-only) と Codex (workspace-write) を分離** | 単一 runner / どちらか一方 | 「読む側」と「書く側」を sandbox 上分離 → 設計のミスで write 権限が漏れない。レビュー視点の中立性確保 |
 | 3 | **subscription 認証のみ** (`ANTHROPIC_API_KEY` 等は禁止) | API key 併用許容 | 課金経路の二重化を防ぐ。CLI ローカルの auth 状態を一元化 |
-| 4 | **9 フェーズの細分化** (`plan`/`plan_verify`/`plan_fix`/`implement`/`review`/`supervise`/`fix`/`ci_wait`/`merge`) | 「単一の implement→review→merge」 | フェーズごとに provider と prompt を切替可能。失敗時の再開単位を最小化 |
+| 4 | **9 ステップの細分化** = runtime_phase 7（`plan`/`plan_verify`/`plan_fix`/`implement`/`review`/`supervise`/`fix`） + GitHub 操作 2（`ci_wait`/`merge`） | 「単一の implement→review→merge」 | runtime_phase ごとに provider と prompt を切替可能。失敗時の再開単位を最小化 |
 | 4a | **`supervise` フェーズの分離** | review 結果をそのまま採用 | findings の取捨選択を別 prompt に分け、誤検知の伝播を抑える |
 | 5 | **`paused` を一級市民化、exit code `75`** | failed のみ | 人手復旧前提のシステムで「再開可能エラー」と「諦め」を区別。CI で「リトライ」できる |
 | 6 | **prompt-contract で出力を構造化** | 自由テキスト解釈 | runner の return を `completed`/`need_input`/`paused`/`failed` の構造に強制。誤解釈・幻想 commit を防ぐ |

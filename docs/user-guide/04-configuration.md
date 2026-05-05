@@ -62,7 +62,7 @@ auto_merge: true
 | `merge.timeout_ms` | `1800000` | 30 分 |
 | `merge.branch_delete_grace_ms` | `5000` | merge 確定→branch 削除の猶予 |
 | `merge.worktree_remove_retry_max` | `3` | worktree 削除リトライ上限 |
-| `label_filter` | `[]` | 追加で必須にする label。空なら `add --label` のみ参照 |
+| `label_filter` | `[]` | schema は受理するが v0.1.0 では未参照。label フィルタは `autokit add --label` のみ |
 | `runtime.max_untrusted_input_kb` | `256` | runner 入力サイズ上限 |
 
 ### `phases.<phase>` フィールド
@@ -198,7 +198,6 @@ state（取りうる値）:
 | `GH_TOKEN` / `GITHUB_TOKEN` | `gh` 認証（`buildGhEnv` 経由で runner にも渡る） |
 | `XDG_CONFIG_HOME` / `XDG_CACHE_HOME` | runner 認証ディレクトリ解決 |
 | `PATH` / `HOME` / `USER` / `LOGNAME` / `LANG` / `TERM` / `TZ` / `LC_*` | child process に最小限渡す |
-| `CODEX_HOME` | codex CLI の認証ディレクトリ上書き |
 
 ### autokit が **絶対に export していてはいけない** 変数
 

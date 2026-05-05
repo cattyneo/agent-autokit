@@ -53,9 +53,9 @@ flowchart LR
     cleaning
   end
 
-  active -.-> waiting: 中断
-  active -.-> terminal: 完了 / 諦め
-  waiting -.-> active: resume / retry
+  active -. "中断" .-> waiting
+  active -. "完了 / 諦め" .-> terminal
+  waiting -. "resume / retry" .-> active
 ```
 
 `autokit run` は active な task を 1 件取り、terminal/waiting に達するまで loop（最大 100 step）。
@@ -99,7 +99,7 @@ flowchart LR
   R[review<br/>Claude] --> S[supervise<br/>Claude]
   S --> D{findings>0?}
   D -- no --> CI([state=ci_waiting])
-  D -- yes --> Round{review_round<br/>< max?}
+  D -- yes --> Round{"review_round<br/>&lt; max?"}
   Round -- yes --> F[fix<br/>Codex]
   F --> R
   Round -- no --> CI
@@ -115,7 +115,7 @@ flowchart LR
   Poll --> S{全 COMPLETED かつ<br/>SUCCESS or SKIPPED?}
   S -- yes --> M([merging])
   S -- 進行中 --> CW
-  S -- no --> Round{ci_fix_round<br/>< max?}
+  S -- no --> Round{"ci_fix_round<br/>&lt; max?"}
   Round -- yes --> F[fixing]
   F --> Push[push & re-trigger CI]
   Push --> CW

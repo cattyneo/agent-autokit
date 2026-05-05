@@ -96,18 +96,21 @@ WARN	prompt contracts	.agents/prompts not found
 ## 初回 init
 
 ```bash
-autokit init -y
+autokit init
 ```
+
+`init` は確認プロンプトを持たないため `-y` 不要（指定しても no-op）。
 
 これで生成される主なもの:
 
 - `.autokit/config.yaml`（version: 1, parallel: 1, auto_merge: true）
 - `.autokit/tasks.yaml`（空）
 - `.autokit/audit-hmac-key`（監査ログ署名鍵、mode 0600、再生成厳禁）
-- `.autokit/init-audit.jsonl`
 - `.agents/{agents,skills,prompts}/`
 - `.claude/{agents,skills}` / `.codex/{agents,skills}` から `.agents/` への symlink
 - `AGENTS.md` / `CLAUDE.md` 末尾に `<!-- autokit:init:start -->` ブロック追記
+
+`.autokit/init-audit.jsonl` は **init が rollback されたときのみ** 残る監査ログ。正常完了時は削除される。
 
 dry-run で内容確認のみ:
 

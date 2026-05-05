@@ -65,7 +65,7 @@ flowchart TB
   ParseY -- syntax error --> Fail1["payload reject<br/>→ failed"]
   ParseY -- ok --> Obj["JS object"]
   Obj --> Vali["validatePromptContractPayload"]
-  Vali -- errors --> Fail2["status=failed<br/>summary=<violation>"]
+  Vali -- errors --> Fail2["status=failed<br/>summary=[violation]"]
   Vali -- ok --> Sw{status?}
   Sw -- completed --> ReqData["data 必須<br/>question 禁止"]
   Sw -- need_input --> ReqQ["question 必須<br/>data 任意"]

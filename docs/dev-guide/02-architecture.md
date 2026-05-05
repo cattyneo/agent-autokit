@@ -71,14 +71,14 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-  participant U as User
-  participant CLI as cli<br/>(executor.ts)
-  participant T as tasks.yaml
-  participant WF as workflows
-  participant R as runner<br/>(claude / codex)
-  participant CLIp as claude/codex<br/>子プロセス
-  participant GH as gh / git
-  participant TUI as tui
+  participant U as "User"
+  participant CLI as "cli (executor.ts)"
+  participant T as "tasks.yaml"
+  participant WF as "workflows"
+  participant R as "runner (claude / codex)"
+  participant CLIp as "claude/codex 子プロセス"
+  participant GH as "gh / git"
+  participant TUI as "tui"
 
   U->>CLI: autokit run
   CLI->>T: loadTasksFile

@@ -10,3 +10,7 @@ export function shouldPauseForHeadMismatch(
 export function buildAutoMergeArgs(prNumber: number, headSha: string): string[] {
   return ["pr", "merge", String(prNumber), "--auto", "--rebase", "--match-head-commit", headSha];
 }
+
+export function buildDisableAutoMergeArgs(prNumber: number): string[] {
+  return ["pr", "merge", String(prNumber), "--disable-auto"];
+}

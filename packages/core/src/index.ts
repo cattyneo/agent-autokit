@@ -18,11 +18,31 @@ export {
 export type { ChildEnv, ParentEnv, RunnerEnvOptions } from "./env-allowlist.js";
 export { buildGhEnv, buildRunnerEnv } from "./env-allowlist.js";
 export type { GhPrView, GhPrViewJson } from "./gh.js";
-export { buildGhPrCloseArgs, buildGhPrViewArgs, parseGhPrView } from "./gh.js";
+export {
+  buildGhIssueViewBodyArgs,
+  buildGhPrCloseArgs,
+  buildGhPrCreateDraftArgs,
+  buildGhPrListHeadArgs,
+  buildGhPrReadyArgs,
+  buildGhPrViewArgs,
+  buildGhPrViewCiArgs,
+  buildGhPrViewHeadArgs,
+  buildGhPrViewMergeArgs,
+  parseGhPrView,
+} from "./gh.js";
 export type { GitWorktreeRemoveOptions } from "./git.js";
 export {
+  buildGitAddAllArgs,
   buildGitBranchDeleteArgs,
+  buildGitCommitArgs,
+  buildGitFetchArgs,
+  buildGitPushSetUpstreamArgs,
+  buildGitRebaseArgs,
   buildGitRemoteBranchDeleteArgs,
+  buildGitRevParseHeadArgs,
+  buildGitWorktreeAddArgs,
+  buildGitWorktreeAddExistingBranchArgs,
+  buildGitWorktreePruneArgs,
   buildGitWorktreeRemoveArgs,
 } from "./git.js";
 export type {
@@ -50,7 +70,7 @@ export {
   ModelResolutionError,
   resolveModelsForPlanning,
 } from "./model-resolver.js";
-export { buildAutoMergeArgs, shouldPauseForHeadMismatch } from "./pr.js";
+export { buildAutoMergeArgs, buildDisableAutoMergeArgs, shouldPauseForHeadMismatch } from "./pr.js";
 export type {
   PullRequestObservation,
   ReconcileAction,

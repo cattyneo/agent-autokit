@@ -383,6 +383,18 @@ Issue #23 live adoption execution (2026-05-05 Asia/Tokyo, operator-approved):
 - Harness correction note: two pre-run Codex `plan_verify` attempts failed before the recorded B matrix because the new harness emitted an invalid strict JSON schema for an empty `findings` array. Those attempts were stopped, the schema was fixed, and they are not counted as provider adoption failures.
 - Current adoption decision: #23 A and #23 B primary runner adoption gates pass. AK-009 may treat Claude CLI `claude -p` as adopted after this PR merges. AK-010 may treat `codex exec` as adopted after this PR merges, while still implementing fail-closed handling for version drift, unknown auth mode strings, JSONL shape mismatch, approval prompts, and sandbox violations.
 
+## AK-018 Full Integration Smoke Evidence
+
+Issue #19 unprotected fixture smoke execution (2026-05-05 Asia/Tokyo):
+
+- API key guard: `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CODEX_API_KEY` were unset before live smoke.
+- Fixture: `cattyneo/agent-autokit-e2e-fixture`, Issue #1, PR #2.
+- Command shape: `autokit init -y`, `autokit add 1 --label agent-ready -y`, `autokit doctor`, `autokit run`, `autokit list --json`.
+- Result: `autokit run` exited `0`; fixture PR #2 was created and merged; cleanup removed `autokit/issue-1` and `.autokit/worktrees/issue-1`.
+- OBS verifier: `bun e2e/runners/full-run.ts --repo /tmp/autokit-issue63-smoke.AdRcFs/fixture --owner-repo cattyneo/agent-autokit-e2e-fixture --issue 1 --run-exit-code 0 --json`.
+- OBS result: OBS-01..OBS-11 all passed. Detailed artifact: `docs/artifacts/issue-19-full-integration-smoke-2026-05-05.json`.
+- Protected fixture live gate: split to #68 because E17/E24 require controlled branch protection and PR state mutation on `cattyneo/agent-autokit-e2e-fixture-protected`. Existing non-live coverage remains in `packages/workflows/src/index.test.ts` for E17, E16 disable-auto barrier, and E24 disable-auto.
+
 ## Full Matrix Execution Plan
 
 This section records the execution shape, preconditions, and stop criteria used for #23.

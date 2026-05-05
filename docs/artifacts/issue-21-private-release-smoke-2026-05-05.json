@@ -26,6 +26,16 @@
       "packedSize": "0.50MB",
       "unpackedSize": "2.60MB",
       "files": 18
+    },
+    "mainReleaseTarball": {
+      "command": "PATH=\"$HOME/.bun/bin:$PATH\" bun run build && PATH=\"$HOME/.bun/bin:$PATH\" /bin/bash scripts/check-assets-hygiene.sh && cd packages/cli && PATH=\"$HOME/.bun/bin:$PATH\" bun pm pack",
+      "path": "packages/cli/cattyneo-autokit-0.1.0.tgz",
+      "commit": "a60d1240eca41ae664b52d351189dff6c3d844c3",
+      "shasum": "9578ddee4c1b19f75672e5c5c6bb0824346cca7d",
+      "sha256": "b1384c27e13402ef7c838aacb7a2d4e3edd4721b9a8c2be5f396538d15ab6d2a",
+      "packedSize": "0.50MB",
+      "unpackedSize": "2.60MB",
+      "files": 18
     }
   },
   "npmInstallSmoke": {
@@ -61,6 +71,6 @@
   },
   "release": {
     "tag": "v0.1.0",
-    "status": "to be created after PR merge from the same tarball command on main"
+    "status": "mainReleaseTarball is the release attachment candidate; GitHub Release is created after this checksum sync is merged"
   }
 }

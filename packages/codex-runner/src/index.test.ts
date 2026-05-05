@@ -284,11 +284,40 @@ describe("codex-runner", () => {
     );
 
     assert.ok(observedSchema);
-    const schemaText = JSON.stringify(observedSchema);
-    assert.match(schemaText, /"result":\{"type":"string","enum":\["ok"\]\}/);
-    assert.match(schemaText, /"findings":\{"type":"array","items":\{/);
-    assert.match(schemaText, /"maxItems":0/);
-    assert.match(schemaText, /"result":\{"type":"string","enum":\["ng"\]\}/);
+    const dataSchema = (observedSchema.properties as Record<string, unknown> | undefined)?.data as
+      | { anyOf?: unknown }
+      | undefined;
+    assert.ok(Array.isArray(dataSchema?.anyOf));
+
+    const planVerifySchema = dataSchema.anyOf[0] as { anyOf?: unknown };
+    assert.ok(Array.isArray(planVerifySchema.anyOf));
+
+    const branches = planVerifySchema.anyOf;
+    const branchFor = (result: "ok" | "ng") =>
+      branches.find((branch) => {
+        if (branch === null || typeof branch !== "object") {
+          return false;
+        }
+        const properties = (branch as { properties?: Record<string, unknown> }).properties;
+        const resultSchema = properties?.result;
+        return (
+          resultSchema !== null &&
+          typeof resultSchema === "object" &&
+          Array.isArray((resultSchema as { enum?: unknown }).enum) &&
+          (resultSchema as { enum: unknown[] }).enum.length === 1 &&
+          (resultSchema as { enum: unknown[] }).enum[0] === result
+        );
+      }) as { properties?: Record<string, unknown> } | undefined;
+
+    const okBranch = branchFor("ok");
+    const ngBranch = branchFor("ng");
+    assert.ok(okBranch);
+    assert.ok(ngBranch);
+
+    const okFindings = okBranch.properties?.findings as { maxItems?: unknown } | undefined;
+    const ngFindings = ngBranch.properties?.findings as { maxItems?: unknown } | undefined;
+    assert.equal(okFindings?.maxItems, 0);
+    assert.equal(ngFindings?.maxItems, 20);
   });
 
   it("runs Codex through a mock subprocess, reads final output, and returns session id", async () => {

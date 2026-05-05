@@ -1,0 +1,156 @@
+{
+  "issue": 18,
+  "issueKey": "AK-017",
+  "generatedAt": "2026-05-05T00:40:08Z",
+  "operator": "cattyneo",
+  "scope": {
+    "unprotectedFixture": "cattyneo/agent-autokit-e2e-fixture",
+    "protectedFixture": "cattyneo/agent-autokit-e2e-fixture-protected",
+    "outOfScope": [
+      "autokit full integration smoke",
+      "live provider/API-key execution",
+      "high-count runner matrix",
+      "Codex SDK / Claude Agent SDK matrix"
+    ]
+  },
+  "commands": [
+    {
+      "command": "bash scripts/provision-fixture-repos.sh",
+      "result": "passed idempotence rerun after full default config/vitest setup; output included fixture_issue=1"
+    },
+    {
+      "command": "AUTOKIT_FIXTURE_REPO=not-the-fixture bash scripts/provision-fixture-repos.sh",
+      "result": "failed with exit 2 before GitHub mutation; nonstandard targets require AUTOKIT_FIXTURE_ALLOW_NONSTANDARD_TARGETS=1"
+    },
+    {
+      "command": "gh repo view cattyneo/agent-autokit-e2e-fixture --json nameWithOwner,isPrivate,visibility,defaultBranchRef,viewerPermission,url",
+      "result": "passed"
+    },
+    {
+      "command": "gh issue view 1 --repo cattyneo/agent-autokit-e2e-fixture --json number,title,state,labels,url",
+      "result": "passed"
+    },
+    {
+      "command": "gh workflow list --repo cattyneo/agent-autokit-e2e-fixture --json id,name,path,state",
+      "result": "passed"
+    },
+    {
+      "command": "gh api repos/cattyneo/agent-autokit-e2e-fixture/branches/main/protection",
+      "result": "expected 404 Branch not protected"
+    },
+    {
+      "command": "gh api repos/cattyneo/agent-autokit-e2e-fixture-protected/branches/main/protection",
+      "result": "passed"
+    },
+    {
+      "command": "gh run watch 25351483670 --repo cattyneo/agent-autokit-e2e-fixture --exit-status",
+      "result": "passed"
+    },
+    {
+      "command": "gh run list --repo cattyneo/agent-autokit-e2e-fixture-protected --workflow CI --limit 1 --json databaseId,workflowName,status,conclusion,headBranch,headSha,url",
+      "result": "passed with conclusion=success"
+    }
+  ],
+  "unprotectedFixture": {
+    "repo": {
+      "nameWithOwner": "cattyneo/agent-autokit-e2e-fixture",
+      "url": "https://github.com/cattyneo/agent-autokit-e2e-fixture",
+      "visibility": "PRIVATE",
+      "isPrivate": true,
+      "defaultBranch": "main",
+      "viewerPermission": "ADMIN"
+    },
+    "branchProtection": {
+      "main": "not protected",
+      "evidence": "gh api repos/cattyneo/agent-autokit-e2e-fixture/branches/main/protection returned 404 Branch not protected"
+    },
+    "workflow": {
+      "id": 271058362,
+      "name": "CI",
+      "path": ".github/workflows/ci.yml",
+      "state": "active",
+      "latestRun": {
+        "databaseId": 25351483670,
+        "workflowName": "CI",
+        "status": "completed",
+        "conclusion": "success",
+        "headBranch": "main",
+        "headSha": "07edb4e780a221fe91f50cdc4d8a0a2438bb9b2a",
+        "url": "https://github.com/cattyneo/agent-autokit-e2e-fixture/actions/runs/25351483670"
+      }
+    },
+    "issue": {
+      "number": 1,
+      "title": "Fix: off-by-one in pagination calc",
+      "state": "OPEN",
+      "url": "https://github.com/cattyneo/agent-autokit-e2e-fixture/issues/1",
+      "labels": ["bug", "agent-ready"]
+    },
+    "pinnedConfig": {
+      "path": ".autokit/config.yaml",
+      "sha": "d8e7b98a287716d72e6c8aa383a10f53d51b9b8b",
+      "review.max_rounds": 3,
+      "ci.fix_max_rounds": 3,
+      "runtime.max_untrusted_input_kb": 256,
+      "fullDefaultSurfacePinned": true
+    },
+    "vitestSetup": {
+      "packageJsonSha": "a9fabbebd4439b08404a460841fe4980816c2b5f",
+      "vitestConfigSha": "d0e55d349e71066461a6f53326c417cb8a8edea9"
+    },
+    "fixtureCode": {
+      "path": "src/pagination.ts",
+      "sha": "5ec25198d6470a5b6295e35da2c04d2c7a133dd4"
+    }
+  },
+  "protectedFixture": {
+    "repo": {
+      "nameWithOwner": "cattyneo/agent-autokit-e2e-fixture-protected",
+      "url": "https://github.com/cattyneo/agent-autokit-e2e-fixture-protected",
+      "visibility": "PRIVATE",
+      "isPrivate": true,
+      "defaultBranch": "main",
+      "viewerPermission": "ADMIN",
+      "allowAutoMerge": true
+    },
+    "workflow": {
+      "id": 271058373,
+      "name": "CI",
+      "path": ".github/workflows/ci.yml",
+      "state": "active",
+      "latestRun": {
+        "databaseId": 25351484983,
+        "workflowName": "CI",
+        "status": "completed",
+        "conclusion": "success",
+        "headBranch": "main",
+        "headSha": "45ff98dc3362362e1008d98f26bc4186f1e036a7",
+        "url": "https://github.com/cattyneo/agent-autokit-e2e-fixture-protected/actions/runs/25351484983"
+      }
+    },
+    "branchProtection": {
+      "branch": "main",
+      "requiredStatusChecks": {
+        "strict": true,
+        "contexts": ["test"]
+      },
+      "enforceAdmins": false,
+      "allowForcePushes": false,
+      "allowDeletions": false,
+      "requiredLinearHistory": false,
+      "requiredConversationResolution": false
+    },
+    "pinnedConfig": {
+      "path": ".autokit/config.yaml",
+      "sha": "d8e7b98a287716d72e6c8aa383a10f53d51b9b8b",
+      "review.max_rounds": 3,
+      "ci.fix_max_rounds": 3,
+      "runtime.max_untrusted_input_kb": 256,
+      "fullDefaultSurfacePinned": true
+    },
+    "vitestSetup": {
+      "packageJsonSha": "a9fabbebd4439b08404a460841fe4980816c2b5f",
+      "vitestConfigSha": "d0e55d349e71066461a6f53326c417cb8a8edea9"
+    }
+  }
+}

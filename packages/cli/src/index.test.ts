@@ -79,6 +79,10 @@ describe("cli task commands", () => {
     assert.equal(existsSync(join(root, ".autokit", "audit-hmac-key")), true);
     assert.equal(existsSync(join(root, ".agents", "prompts", "plan.md")), true);
     assert.equal(existsSync(join(root, ".agents", "skills", "autokit-question", "SKILL.md")), true);
+    assert.match(
+      readFileSync(join(root, ".agents", "skills", "autokit-question", "SKILL.md"), "utf8"),
+      /^---\nname: autokit-question\n/m,
+    );
     assert.equal(lstatSync(join(root, ".claude", "skills")).isSymbolicLink(), true);
     assert.match(readFileSync(join(root, "AGENTS.md"), "utf8"), new RegExp(INIT_MARKER_START));
     assert.equal(existsSync(join(root, ".autokit", ".backup")), false);
@@ -597,6 +601,8 @@ function makeCliHarness(
 }
 
 function writeTasks(root: string, tasks: TaskEntry[]): void {
+  mkdirSync(join(root, ".autokit"), { recursive: true });
+  writeFileSync(join(root, ".autokit", "audit-hmac-key"), "fixture-hmac-key", { mode: 0o600 });
   const tasksFile: TasksFile = { version: 1, generated_at: NOW, tasks };
   writeTasksFileAtomic(tasksPath(root), tasksFile);
 }

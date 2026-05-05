@@ -165,6 +165,11 @@ describe("codex-runner", () => {
           }),
           JSON.stringify({
             thread_id: "019df4ff-9c29-7d71-8321-9217c46e6d72",
+            type: "item.started",
+            item: { type: "command_execution" },
+          }),
+          JSON.stringify({
+            thread_id: "019df4ff-9c29-7d71-8321-9217c46e6d72",
             type: "item.completed",
             item: { type: "agent_message" },
           }),

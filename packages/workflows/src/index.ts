@@ -39,6 +39,7 @@ export type WorkflowOptions = {
   repoRoot: string;
   worktreeRoot?: string;
   timeoutMs?: number;
+  timeoutMsForPhase?: (phase: RuntimePhase) => number;
   config?: AutokitConfig;
   resolvedModels?: Record<string, string>;
   buildPrompt?: (input: WorkflowPromptInput) => string;
@@ -911,7 +912,7 @@ function buildAgentRunInput(
           ? (options.worktreeRoot ?? options.repoRoot)
           : options.repoRoot,
     },
-    timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: options.timeoutMsForPhase?.(phase) ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   };
 }
 

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -8,6 +9,7 @@ import {
   type AgentRunInput,
   type AgentRunOutput,
   type AutokitConfig,
+  type AutokitLogger,
   buildAutoMergeArgs,
   buildDisableAutoMergeArgs,
   buildGhEnv,
@@ -31,6 +33,7 @@ import {
   buildGitWorktreePruneArgs,
   buildGitWorktreeRemoveArgs,
   cloneTask,
+  createAutokitLogger,
   DEFAULT_CONFIG,
   loadTasksFile,
   parseConfigYaml,
@@ -83,131 +86,148 @@ export async function runProductionWorkflow(
     return [];
   }
 
-  const config = loadConfig(options.cwd);
-  const execFile = options.execFile ?? defaultExecFile(options.cwd, options.env);
-  const tasksFile = loadTasksFile(tasksFilePath);
-  let task = selectActiveTask(tasksFile.tasks);
-  if (task === undefined) {
-    return tasksFile.tasks;
-  }
+  let logger: AutokitLogger | undefined;
+  try {
+    const config = loadConfig(options.cwd);
+    logger = createWorkflowLogger(options.cwd, config, options.now);
+    const execFile = options.execFile ?? defaultExecFile(options.cwd, options.env);
+    const tasksFile = loadTasksFile(tasksFilePath);
+    let task = selectActiveTask(tasksFile.tasks);
+    if (task === undefined) {
+      return tasksFile.tasks;
+    }
 
-  const issueContext = createIssueContextLoader(task.issue, options.cwd, execFile);
-  const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
-  for (let step = 0; step < maxSteps; step += 1) {
-    if (isTerminalOrWaiting(task)) {
+    const issueContext = createIssueContextLoader(task.issue, options.cwd, execFile, logger);
+    const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
+    for (let step = 0; step < maxSteps; step += 1) {
+      if (isTerminalOrWaiting(task)) {
+        break;
+      }
+
+      if (task.state === "queued" || task.state === "planning") {
+        const result = await runPlanningWorkflow(task, {
+          config,
+          repoRoot: options.cwd,
+          timeoutMsForPhase: (phase) => phaseTimeoutMs(config, phase),
+          runner: options.runner ?? defaultRunner(options.env),
+          answerQuestion: options.answerQuestion,
+          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          buildPrompt: (input) => buildPrompt(options.cwd, input.task, input.phase, issueContext()),
+        });
+        if (result.planMarkdown !== undefined) {
+          writePlan(options.cwd, result.task, result.planMarkdown);
+        }
+        task = result.task;
+        persistTask(tasksFilePath, tasksFile, task);
+        continue;
+      }
+
+      if (task.state === "planned" || task.state === "implementing") {
+        ensureWorktree(options.cwd, task, config, execFile);
+        const result = await runImplementWorkflow(task, {
+          config,
+          repoRoot: options.cwd,
+          worktreeRoot: worktreePath(options.cwd, task),
+          timeoutMsForPhase: (phase) => phaseTimeoutMs(config, phase),
+          runner: options.runner ?? defaultRunner(options.env),
+          answerQuestion: options.answerQuestion,
+          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          buildPrompt: (input) => buildPrompt(options.cwd, input.task, input.phase, issueContext()),
+          git: createGitDeps(options.cwd, task, config, execFile),
+        });
+        task = result.task;
+        persistTask(tasksFilePath, tasksFile, task);
+        continue;
+      }
+
+      if (task.state === "reviewing") {
+        const result = await runReviewSuperviseWorkflow(task, {
+          config,
+          repoRoot: options.cwd,
+          worktreeRoot: worktreePath(options.cwd, task),
+          timeoutMsForPhase: (phase) => phaseTimeoutMs(config, phase),
+          runner: options.runner ?? defaultRunner(options.env),
+          answerQuestion: options.answerQuestion,
+          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          buildPrompt: (input) =>
+            buildPrompt(
+              options.cwd,
+              input.task,
+              input.phase,
+              issueContext(),
+              input.currentFindings,
+            ),
+        });
+        writeReviewArtifact(options.cwd, result.task, result.findings);
+        task = result.task;
+        persistTask(tasksFilePath, tasksFile, task);
+        continue;
+      }
+
+      if (task.state === "fixing") {
+        ensureWorktree(options.cwd, task, config, execFile);
+        const result = await runFixWorkflow(task, {
+          config,
+          repoRoot: options.cwd,
+          worktreeRoot: worktreePath(options.cwd, task),
+          timeoutMsForPhase: (phase) => phaseTimeoutMs(config, phase),
+          runner: options.runner ?? defaultRunner(options.env),
+          answerQuestion: options.answerQuestion,
+          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          buildPrompt: (input) => buildPrompt(options.cwd, input.task, input.phase, issueContext()),
+          git: createGitDeps(options.cwd, task, config, execFile),
+        });
+        task = result.task;
+        persistTask(tasksFilePath, tasksFile, task);
+        continue;
+      }
+
+      if (task.state === "ci_waiting") {
+        const result = await runCiWaitWorkflow(task, {
+          config,
+          repoRoot: options.cwd,
+          runner: options.runner ?? defaultRunner(options.env),
+          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          github: createCiDeps(execFile, options.cwd, logger),
+        });
+        task = result.task;
+        persistTask(tasksFilePath, tasksFile, task);
+        continue;
+      }
+
+      if (task.state === "merging") {
+        const result = await runMergeWorkflow(task, {
+          config,
+          repoRoot: options.cwd,
+          runner: options.runner ?? defaultRunner(options.env),
+          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          github: createMergeDeps(execFile, options.cwd),
+        });
+        task = result.task;
+        persistTask(tasksFilePath, tasksFile, task);
+        continue;
+      }
+
+      if (task.state === "cleaning") {
+        const result = await runCleaningWorkflow(task, {
+          config,
+          repoRoot: options.cwd,
+          runner: options.runner ?? defaultRunner(options.env),
+          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          cleanup: createCleanupDeps(execFile, options.cwd, logger),
+        });
+        task = result.task;
+        persistTask(tasksFilePath, tasksFile, task);
+        continue;
+      }
+
       break;
     }
 
-    if (task.state === "queued" || task.state === "planning") {
-      const result = await runPlanningWorkflow(task, {
-        config,
-        repoRoot: options.cwd,
-        runner: options.runner ?? defaultRunner(options.env),
-        answerQuestion: options.answerQuestion,
-        persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
-        buildPrompt: (input) => buildPrompt(options.cwd, input.task, input.phase, issueContext()),
-      });
-      if (result.planMarkdown !== undefined) {
-        writePlan(options.cwd, result.task, result.planMarkdown);
-      }
-      task = result.task;
-      persistTask(tasksFilePath, tasksFile, task);
-      continue;
-    }
-
-    if (task.state === "planned" || task.state === "implementing") {
-      ensureWorktree(options.cwd, task, config, execFile);
-      const result = await runImplementWorkflow(task, {
-        config,
-        repoRoot: options.cwd,
-        worktreeRoot: worktreePath(options.cwd, task),
-        runner: options.runner ?? defaultRunner(options.env),
-        answerQuestion: options.answerQuestion,
-        persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
-        buildPrompt: (input) => buildPrompt(options.cwd, input.task, input.phase, issueContext()),
-        git: createGitDeps(options.cwd, task, config, execFile),
-      });
-      task = result.task;
-      persistTask(tasksFilePath, tasksFile, task);
-      continue;
-    }
-
-    if (task.state === "reviewing") {
-      const result = await runReviewSuperviseWorkflow(task, {
-        config,
-        repoRoot: options.cwd,
-        worktreeRoot: worktreePath(options.cwd, task),
-        runner: options.runner ?? defaultRunner(options.env),
-        answerQuestion: options.answerQuestion,
-        persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
-        buildPrompt: (input) =>
-          buildPrompt(options.cwd, input.task, input.phase, issueContext(), input.currentFindings),
-      });
-      task = result.task;
-      persistTask(tasksFilePath, tasksFile, task);
-      continue;
-    }
-
-    if (task.state === "fixing") {
-      ensureWorktree(options.cwd, task, config, execFile);
-      const result = await runFixWorkflow(task, {
-        config,
-        repoRoot: options.cwd,
-        worktreeRoot: worktreePath(options.cwd, task),
-        runner: options.runner ?? defaultRunner(options.env),
-        answerQuestion: options.answerQuestion,
-        persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
-        buildPrompt: (input) => buildPrompt(options.cwd, input.task, input.phase, issueContext()),
-        git: createGitDeps(options.cwd, task, config, execFile),
-      });
-      task = result.task;
-      persistTask(tasksFilePath, tasksFile, task);
-      continue;
-    }
-
-    if (task.state === "ci_waiting") {
-      const result = await runCiWaitWorkflow(task, {
-        config,
-        repoRoot: options.cwd,
-        runner: options.runner ?? defaultRunner(options.env),
-        persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
-        github: createCiDeps(execFile, options.cwd),
-      });
-      task = result.task;
-      persistTask(tasksFilePath, tasksFile, task);
-      continue;
-    }
-
-    if (task.state === "merging") {
-      const result = await runMergeWorkflow(task, {
-        config,
-        repoRoot: options.cwd,
-        runner: options.runner ?? defaultRunner(options.env),
-        persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
-        github: createMergeDeps(execFile, options.cwd),
-      });
-      task = result.task;
-      persistTask(tasksFilePath, tasksFile, task);
-      continue;
-    }
-
-    if (task.state === "cleaning") {
-      const result = await runCleaningWorkflow(task, {
-        config,
-        repoRoot: options.cwd,
-        runner: options.runner ?? defaultRunner(options.env),
-        persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
-        cleanup: createCleanupDeps(execFile, options.cwd),
-      });
-      task = result.task;
-      persistTask(tasksFilePath, tasksFile, task);
-      continue;
-    }
-
-    break;
+    return tasksFile.tasks;
+  } finally {
+    logger?.close();
   }
-
-  return tasksFile.tasks;
 }
 
 function assertApiKeyEnvUnset(env: NodeJS.ProcessEnv): void {
@@ -242,8 +262,39 @@ function loadConfig(cwd: string): AutokitConfig {
   return parseConfigYaml(readFileSync(configPath, "utf8"));
 }
 
+function createWorkflowLogger(
+  cwd: string,
+  config: AutokitConfig,
+  now?: () => string,
+): AutokitLogger {
+  return createAutokitLogger({
+    logDir: join(cwd, ".autokit", "logs"),
+    config,
+    now: now === undefined ? undefined : () => new Date(now()),
+  });
+}
+
 function selectActiveTask(tasks: TaskEntry[]): TaskEntry | undefined {
   return tasks.find((task) => task.state !== "merged" && task.state !== "failed");
+}
+
+function phaseTimeoutMs(config: AutokitConfig, phase: RuntimePhase): number {
+  switch (phase) {
+    case "plan":
+      return config.runner_timeout.plan_ms;
+    case "plan_verify":
+      return config.runner_timeout.plan_verify_ms ?? config.runner_timeout.default_ms;
+    case "plan_fix":
+      return config.runner_timeout.plan_fix_ms ?? config.runner_timeout.default_ms;
+    case "implement":
+      return config.runner_timeout.implement_ms;
+    case "review":
+      return config.runner_timeout.review_ms;
+    case "supervise":
+      return config.runner_timeout.supervise_ms ?? config.runner_timeout.default_ms;
+    case "fix":
+      return config.runner_timeout.fix_ms ?? config.runner_timeout.default_ms;
+  }
 }
 
 function isTerminalOrWaiting(task: TaskEntry): boolean {
@@ -264,6 +315,30 @@ function writePlan(cwd: string, task: TaskEntry, planMarkdown: string): void {
   const planPath = join(cwd, task.plan.path);
   mkdirSync(dirname(planPath), { recursive: true });
   writeFileSync(planPath, planMarkdown, { mode: 0o600 });
+}
+
+function writeReviewArtifact(cwd: string, task: TaskEntry, findings: unknown[]): void {
+  const round = Math.max(1, task.review_round);
+  const path = join(cwd, ".autokit", "reviews", `issue-${task.issue}-review-${round}.md`);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(
+    path,
+    [
+      "---",
+      `issue: ${task.issue}`,
+      `review_round: ${round}`,
+      `finding_count: ${findings.length}`,
+      "---",
+      "",
+      "# Review",
+      "",
+      "```json",
+      JSON.stringify(findings, null, 2),
+      "```",
+      "",
+    ].join("\n"),
+    { mode: 0o600 },
+  );
 }
 
 function tasksPath(cwd: string): string {
@@ -394,15 +469,20 @@ function createGitDeps(
   };
 }
 
-function createCiDeps(execFile: WorkflowExecFile, cwd: string) {
+function createCiDeps(execFile: WorkflowExecFile, cwd: string, logger: AutokitLogger) {
   return {
     getChecks: (prNumber: number): CiCheckObservation => parseCiChecks(execFile, cwd, prNumber),
     getPr: (prNumber: number): CiWaitPrObservation => parseCiPr(execFile, cwd, prNumber),
     reserveAutoMerge: (input: { prNumber: number; headSha: string }) => {
       execFile("gh", buildAutoMergeArgs(input.prNumber, input.headSha), { cwd });
+      logger.auditOperation("auto_merge_reserved", {
+        prNumber: input.prNumber,
+        headSha: input.headSha,
+      });
     },
     disableAutoMerge: (prNumber: number) => {
       execFile("gh", buildDisableAutoMergeArgs(prNumber), { cwd });
+      logger.auditOperation("auto_merge_disabled", { prNumber });
     },
     sleep: (ms: number) =>
       new Promise<void>((resolve) => {
@@ -433,10 +513,18 @@ function createMergeDeps(execFile: WorkflowExecFile, cwd: string) {
   };
 }
 
-function createCleanupDeps(execFile: WorkflowExecFile, cwd: string) {
+function createCleanupDeps(execFile: WorkflowExecFile, cwd: string, logger: AutokitLogger) {
   return {
-    deleteRemoteBranch: (branch: string) =>
-      commandResult(() => execFile("git", buildGitRemoteBranchDeleteArgs(branch), { cwd })),
+    deleteRemoteBranch: (branch: string) => {
+      const result = commandResult(() =>
+        execFile("git", buildGitRemoteBranchDeleteArgs(branch), { cwd }),
+      );
+      if (result.ok || isRemoteBranchAlreadyGone(result.message)) {
+        logger.auditOperation("branch_deleted", { branch });
+        return { ok: true as const };
+      }
+      return result;
+    },
     removeWorktree: (path: string, options: { force: boolean }) =>
       commandResult(() => execFile("git", buildGitWorktreeRemoveArgs(path, options), { cwd })),
     pruneWorktrees: () =>
@@ -455,6 +543,10 @@ function commandResult(run: () => unknown): { ok: true } | { ok: false; message:
   } catch (error) {
     return { ok: false, message: String(error) };
   }
+}
+
+function isRemoteBranchAlreadyGone(message: string): boolean {
+  return message.includes("remote ref does not exist");
 }
 
 function parseCiChecks(
@@ -496,6 +588,7 @@ function createIssueContextLoader(
   issue: number,
   cwd: string,
   execFile: WorkflowExecFile,
+  logger: AutokitLogger,
 ): () => string {
   let cached: string | undefined;
   return () => {
@@ -503,8 +596,18 @@ function createIssueContextLoader(
       return cached;
     }
     cached = execFile("gh", buildGhIssueViewBodyArgs(issue), { cwd });
+    logger.auditOperation("sanitize_pass_hmac", {
+      issue,
+      source: "issue_context",
+      sanitize_hmac: createSanitizeHmac(cwd, cached),
+    });
     return cached;
   };
+}
+
+function createSanitizeHmac(cwd: string, text: string): string {
+  const key = readFileSync(join(cwd, ".autokit", "audit-hmac-key"));
+  return createHmac("sha256", key).update(text).digest("hex");
 }
 
 function buildPrompt(
@@ -516,7 +619,10 @@ function buildPrompt(
 ): string {
   const planPath = join(cwd, task.plan.path);
   const plan = existsSync(planPath) ? readFileSync(planPath, "utf8") : "";
+  const phasePrompt = readPhasePrompt(cwd, phase);
   return [
+    phasePrompt,
+    "",
     `Issue #${task.issue}: ${task.title}`,
     `runtime_phase: ${phase}`,
     "Return structured output for the configured prompt_contract only.",
@@ -531,6 +637,30 @@ function buildPrompt(
       ? ""
       : `Current findings JSON:\n${JSON.stringify(currentFindings)}`,
   ].join("\n");
+}
+
+function readPhasePrompt(cwd: string, phase: RuntimePhase): string {
+  const promptPath = join(cwd, ".agents", "prompts", `${promptFileNameForPhase(phase)}.md`);
+  return existsSync(promptPath) ? readFileSync(promptPath, "utf8").trim() : "";
+}
+
+function promptFileNameForPhase(phase: RuntimePhase): string {
+  switch (phase) {
+    case "plan":
+      return "plan";
+    case "plan_verify":
+      return "plan-verify";
+    case "plan_fix":
+      return "plan-fix";
+    case "implement":
+      return "implement";
+    case "review":
+      return "review";
+    case "supervise":
+      return "supervise";
+    case "fix":
+      return "fix";
+  }
 }
 
 function parseJson(text: string): unknown {

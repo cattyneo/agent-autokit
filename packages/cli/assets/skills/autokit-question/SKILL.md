@@ -1,3 +1,8 @@
+---
+name: autokit-question
+description: Use when an autokit phase cannot continue safely without bounded operator input.
+---
+
 # autokit-question
 
 Use this skill whenever a phase cannot proceed without operator input.

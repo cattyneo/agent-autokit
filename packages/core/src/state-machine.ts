@@ -78,9 +78,13 @@ export function transitionTask(
       }
       task.plan.plan_verify_round += 1;
       task.runtime_phase = "plan_fix";
+      task.provider_sessions.plan_verify.codex_session_id = null;
+      task.provider_sessions.plan_fix.claude_session_id = null;
+      resetPhaseAttempt(task);
       return task;
     case "plan_fix_completed":
       task.runtime_phase = "plan_verify";
+      resetPhaseAttempt(task);
       return task;
     case "implement_started":
       task.state = "implementing";

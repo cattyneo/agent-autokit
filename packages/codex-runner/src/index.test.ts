@@ -237,6 +237,60 @@ describe("codex-runner", () => {
     );
   });
 
+  it("emits a plan_verify output schema that keeps ok findings empty", async () => {
+    let observedSchema: Record<string, unknown> | undefined;
+    let outputText = "";
+    const spawn: SpawnCodexProcess = (_command, args) => {
+      const child = new FakeChild();
+      queueMicrotask(() => {
+        if (args.join(" ") === "login status") {
+          child.stdout.end("Logged in with ChatGPT\n");
+          child.emit("close", 0);
+          return;
+        }
+        outputText = JSON.stringify({
+          status: "completed",
+          summary: "verified",
+          data: { result: "ok", findings: [] },
+          question: null,
+        });
+        child.stdout.end(
+          JSON.stringify({
+            thread_id: "019df4ff-9c29-7d71-8321-9217c46e6d72",
+            type: "turn.completed",
+          }),
+        );
+        child.emit("close", 0);
+      });
+      return child.asChildProcess();
+    };
+
+    await runCodex(
+      {
+        ...baseInput,
+        phase: "plan_verify",
+        promptContract: "plan-verify",
+        permissions: { ...baseInput.permissions, mode: "readonly", workspaceScope: "repo" },
+      },
+      {
+        parentEnv: { PATH: "/bin" },
+        spawn,
+        createRunFiles: (_contract, schema) => {
+          observedSchema = schema;
+          return { ...runFiles, cleanup: () => {} };
+        },
+        readOutputFile: () => outputText,
+      },
+    );
+
+    assert.ok(observedSchema);
+    const schemaText = JSON.stringify(observedSchema);
+    assert.match(schemaText, /"result":\{"type":"string","enum":\["ok"\]\}/);
+    assert.match(schemaText, /"findings":\{"type":"array","items":\{/);
+    assert.match(schemaText, /"maxItems":0/);
+    assert.match(schemaText, /"result":\{"type":"string","enum":\["ng"\]\}/);
+  });
+
   it("runs Codex through a mock subprocess, reads final output, and returns session id", async () => {
     let observedArgs: string[] | undefined;
     let observedEnv: Record<string, string> | undefined;

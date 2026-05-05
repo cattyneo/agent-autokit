@@ -437,19 +437,18 @@ function dataJsonSchemaForCodex(contract: PromptContractId): Record<string, unkn
         risks: stringArraySchema(20),
       });
     case "plan-verify":
-      return objectSchema({
-        result: { type: "string", enum: ["ok", "ng"] },
-        findings: {
-          type: "array",
-          items: objectSchema({
-            severity: { type: "string", enum: ["blocker", "major", "minor"] },
-            title: { type: "string", maxLength: 16 * 1024 },
-            rationale: { type: "string", maxLength: 16 * 1024 },
-            required_change: { type: "string", maxLength: 16 * 1024 },
+      return {
+        anyOf: [
+          objectSchema({
+            result: { type: "string", enum: ["ok"] },
+            findings: planVerifyFindingsArraySchema(0),
           }),
-          maxItems: 20,
-        },
-      });
+          objectSchema({
+            result: { type: "string", enum: ["ng"] },
+            findings: planVerifyFindingsArraySchema(20),
+          }),
+        ],
+      };
     case "plan-fix":
       return objectSchema({
         plan_markdown: { type: "string", maxLength: 64 * 1024 },
@@ -517,6 +516,19 @@ function testEvidenceArraySchema(): Record<string, unknown> {
       summary: { type: "string", maxLength: 16 * 1024 },
     }),
     maxItems: 20,
+  };
+}
+
+function planVerifyFindingsArraySchema(maxItems: number): Record<string, unknown> {
+  return {
+    type: "array",
+    items: objectSchema({
+      severity: { type: "string", enum: ["blocker", "major", "minor"] },
+      title: { type: "string", maxLength: 16 * 1024 },
+      rationale: { type: "string", maxLength: 16 * 1024 },
+      required_change: { type: "string", maxLength: 16 * 1024 },
+    }),
+    maxItems,
   };
 }
 

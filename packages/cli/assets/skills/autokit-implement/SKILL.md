@@ -1,3 +1,8 @@
+---
+name: autokit-implement
+description: Use for autokit implement and fix phases that must edit issue-scoped code and return the configured prompt contract.
+---
+
 # autokit-implement
 
 Use this skill for `implement` and `fix` phases.

@@ -699,6 +699,7 @@ function isRecognizedCodexEventType(value: unknown): value is string {
   return (
     value === "thread.started" ||
     value === "turn.started" ||
+    value === "item.started" ||
     value === "item.completed" ||
     value === "turn.completed" ||
     value === "turn.failed" ||

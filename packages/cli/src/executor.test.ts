@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -22,6 +22,7 @@ describe("production workflow executor", () => {
   it("drives a queued task through PR creation, auto-merge reservation, and cleanup", async () => {
     const root = makeTempDir();
     writeFastConfig(root);
+    writePromptAssets(root);
     writeTasks(root, [task(58)]);
     const calls: AgentRunInput[] = [];
     const commands: string[] = [];
@@ -48,10 +49,28 @@ describe("production workflow executor", () => {
         ["claude", "review", "worktree"],
       ],
     );
+    assert.deepEqual(
+      calls.map((call) => [call.phase, call.timeoutMs]),
+      [
+        ["plan", 111],
+        ["plan_verify", 222],
+        ["implement", 333],
+        ["review", 444],
+      ],
+    );
     assert.ok(commands.includes("gh pr merge 29 --auto --rebase --match-head-commit remote-head"));
     assert.ok(commands.includes("git push origin --delete autokit/issue-58"));
     assert.ok(commands.includes("git worktree remove .autokit/worktrees/issue-58"));
     assert.equal(loadTasksFile(tasksPath(root)).tasks[0].state, "merged");
+    assert.equal(existsSync(join(root, ".autokit", "reviews", "issue-58-review-1.md")), true);
+    const logText = readFileSync(join(root, ".autokit", "logs", "2026-05-05.log"), "utf8");
+    assert.match(logText, /"kind":"sanitize_pass_hmac"/);
+    assert.match(logText, /"sanitize_hmac":"[a-f0-9]{64}"/);
+    assert.match(logText, /"kind":"auto_merge_reserved"/);
+    assert.match(logText, /"kind":"branch_deleted"/);
+    assert.doesNotMatch(logText, /Wire production autokit run/);
+    assert.match(calls[1].prompt, /# plan-verify/);
+    assert.match(calls[1].prompt, /Do not execute shell commands/);
   });
 
   it("fails closed before any runner dispatch when API key env is exported", async () => {
@@ -75,6 +94,39 @@ describe("production workflow executor", () => {
       /ANTHROPIC_API_KEY must not be exported/,
     );
     assert.equal(calls.length, 0);
+  });
+
+  it("does not mark remote branch deletion as complete for non-gone git errors", async () => {
+    const root = makeTempDir();
+    writeFastConfig(root);
+    const cleaningTask = {
+      ...task(58),
+      state: "cleaning" as const,
+      pr: { ...task(58).pr, number: 29, head_sha: "remote-head" },
+    };
+    writeTasks(root, [cleaningTask]);
+    const commands: string[] = [];
+
+    const tasks = await runProductionWorkflow({
+      cwd: root,
+      env: {},
+      execFile: (command, args) => {
+        const line = `${command} ${args.join(" ")}`;
+        commands.push(line);
+        if (line === "git push origin --delete autokit/issue-58") {
+          throw new Error("Repository not found.");
+        }
+        return "";
+      },
+      runner: async () => ({ status: "completed", summary: "unexpected" }),
+      maxSteps: 3,
+      now: () => NOW,
+    });
+
+    assert.equal(tasks[0].state, "paused");
+    assert.equal(tasks[0].failure?.code, "branch_delete_failed");
+    assert.equal(tasks[0].cleaning_progress.branch_deleted_done, false);
+    assert.ok(commands.includes("git push origin --delete autokit/issue-58"));
   });
 });
 
@@ -180,6 +232,8 @@ function task(issue: number): TaskEntry {
 }
 
 function writeTasks(root: string, tasks: TaskEntry[]): void {
+  mkdirSync(join(root, ".autokit"), { recursive: true });
+  writeFileSync(join(root, ".autokit", "audit-hmac-key"), "fixture-hmac-key", { mode: 0o600 });
   const tasksFile: TasksFile = { version: 1, generated_at: NOW, tasks };
   writeTasksFileAtomic(tasksPath(root), tasksFile);
 }
@@ -198,7 +252,24 @@ merge:
   poll_interval_ms: 1
   timeout_ms: 1000
   branch_delete_grace_ms: 1
+runner_timeout:
+  plan_ms: 111
+  plan_verify_ms: 222
+  implement_ms: 333
+  review_ms: 444
+  supervise_ms: 555
+  default_ms: 666
 `,
+    { mode: 0o600 },
+  );
+}
+
+function writePromptAssets(root: string): void {
+  const promptDir = join(root, ".agents", "prompts");
+  mkdirSync(promptDir, { recursive: true });
+  writeFileSync(
+    join(promptDir, "plan-verify.md"),
+    "# plan-verify\n\nDo not execute shell commands.\n",
     { mode: 0o600 },
   );
 }

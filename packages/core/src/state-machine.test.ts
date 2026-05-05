@@ -16,13 +16,21 @@ describe("core state machine", () => {
 
     task = transitionTask(task, { type: "plan_completed" });
     assert.equal(task.runtime_phase, "plan_verify");
+    task.provider_sessions.plan_verify.codex_session_id = "codex-old-plan-verify";
+    task.provider_sessions.plan_fix.claude_session_id = "claude-old-plan-fix";
+    task.runtime.phase_attempt = 2;
 
     task = transitionTask(task, { type: "plan_verify_rejected" }, DEFAULT_CONFIG);
     assert.equal(task.runtime_phase, "plan_fix");
     assert.equal(task.plan.plan_verify_round, 1);
+    assert.equal(task.provider_sessions.plan_verify.codex_session_id, null);
+    assert.equal(task.provider_sessions.plan_fix.claude_session_id, null);
+    assert.equal(task.runtime.phase_attempt, 0);
+    task.runtime.phase_attempt = 2;
 
     task = transitionTask(task, { type: "plan_fix_completed" });
     assert.equal(task.runtime_phase, "plan_verify");
+    assert.equal(task.runtime.phase_attempt, 0);
 
     task = transitionTask(task, { type: "plan_verify_accepted" });
     assert.equal(task.state, "planned");

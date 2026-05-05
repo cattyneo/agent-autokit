@@ -1,3 +1,8 @@
+---
+name: autokit-review
+description: Use for autokit review phases that must return scoped findings aligned with the configured prompt contract.
+---
+
 # autokit-review
 
 Use this skill for `review` phases.

@@ -68,6 +68,13 @@ autokit list --json
 
 `autokit run` は、対象 work が完了 / merge 済みなら `0`、branch protection / rate limit / runner question など human action が必要な resumable state なら `75` で終了します。
 
+## ドキュメント
+
+- [`docs/`](./docs/README.md) — ドキュメント入口
+  - [`docs/user-guide/`](./docs/user-guide/README.md) — インストール・コマンド・設定・復旧
+  - [`docs/dev-guide/`](./docs/dev-guide/README.md) — 設計意図・アーキテクチャ・状態機械・prompt-contract・安全設計
+  - [`docs/SPEC.md`](./docs/SPEC.md) — 形式仕様（正典）
+
 ## Release Verification
 
 release 前に次を実行します。

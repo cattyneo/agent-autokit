@@ -1245,8 +1245,8 @@ git worktree add -b autokit/issue-12345 .autokit/worktrees/issue-12345 origin/<b
 `planning` state 内で `runtime_phase` を `plan` → `plan_verify` → (NG なら) `plan_fix` → `plan_verify` → ... と subphase 遷移させる (§5.1 E02a-E02d / E04)。subphase 移行も §5.1 の正規 edge。
 
 1. **`runtime_phase=plan`** (planner / Claude): Issue body を入力にプラン Markdown を構造化出力 (`status=completed` + plan body)
-2. core が plan ファイル書込 + `provider_sessions.plan.claude_session_id` 保存
-3. **`runtime_phase=plan_verify`** (plan-verifier / Codex) に移行 (E02a): plan を検証 → 構造化結果 (`status=completed` + verify_result: ok|ng + 指摘)
+2. core が `provider_sessions.plan.claude_session_id` を保存し、同一 planning workflow 内では planner の in-memory plan body を次 subphase に渡す。workflow 完了時に plan ファイルへ永続化し、resume / 後続 phase では plan ファイルを fallback SoT として読む。
+3. **`runtime_phase=plan_verify`** (plan-verifier / Codex) に移行 (E02a): planner 直後の in-memory plan body、または resume 時の plan ファイルを検証 → 構造化結果 (`status=completed` + verify_result: ok|ng + 指摘)
 4. OK: `plan.state=verified` 永続化 → state=`planned` (E02b)
 5. NG + `plan_verify_round + 1 <= plan.max_rounds`: **`runtime_phase=plan_fix`** (planner / Claude) に移行 (E02c)、`plan_verify_round++`、planner が指摘反映済みの更新 plan body を返し、core が plan ファイルを更新
 6. step 5 完了後: 再び **`runtime_phase=plan_verify`** に移行 (E02d) → 3 へ

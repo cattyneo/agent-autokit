@@ -1,0 +1,151 @@
+{
+  "issue": 19,
+  "issueKey": "AK-018",
+  "generatedAt": "2026-05-05T06:16:00Z",
+  "operator": "cattyneo",
+  "scope": {
+    "unprotectedFixture": "cattyneo/agent-autokit-e2e-fixture",
+    "protectedFixture": "cattyneo/agent-autokit-e2e-fixture-protected",
+    "protectedGateSplitIssue": "https://github.com/cattyneo/agent-autokit/issues/68",
+    "outOfScope": [
+      "high-count runner matrix",
+      "Codex SDK / Claude Agent SDK matrix",
+      "API-key live execution",
+      "release artifact creation"
+    ]
+  },
+  "guards": {
+    "apiKeyEnv": "ANTHROPIC_API_KEY / OPENAI_API_KEY / CODEX_API_KEY were unset before live smoke",
+    "authFiles": "~/.codex/auth.json and $CODEX_HOME/auth.json contents were not inspected, copied, logged, or included in artifacts",
+    "liveMatrix": "single fixture smoke only; no high-count matrix"
+  },
+  "commands": [
+    {
+      "command": "gh pr list --repo cattyneo/agent-autokit-e2e-fixture --state all --limit 5 --json number,title,state,headRefName,url",
+      "result": "passed; no existing fixture PR before smoke"
+    },
+    {
+      "command": "gh api repos/cattyneo/agent-autokit-e2e-fixture/branches/autokit/issue-1",
+      "result": "expected 404 Branch not found before smoke"
+    },
+    {
+      "command": "env | rg '^(ANTHROPIC_API_KEY|OPENAI_API_KEY|CODEX_API_KEY)='",
+      "result": "no output"
+    },
+    {
+      "command": "autokit init -y && autokit add 1 --label agent-ready -y && autokit doctor && autokit run && autokit list --json",
+      "cwd": "/tmp/autokit-issue63-smoke.AdRcFs/fixture",
+      "result": "passed; autokit run exit code 0"
+    },
+    {
+      "command": "bun e2e/runners/full-run.ts --repo /tmp/autokit-issue63-smoke.AdRcFs/fixture --owner-repo cattyneo/agent-autokit-e2e-fixture --issue 1 --run-exit-code 0 --json",
+      "result": "passed; OBS-01..OBS-11 all true"
+    },
+    {
+      "command": "gh pr view 2 --repo cattyneo/agent-autokit-e2e-fixture --json number,state,mergedAt,headRefName,headRefOid,mergeCommit,url",
+      "result": "passed; PR #2 state MERGED"
+    },
+    {
+      "command": "gh api repos/cattyneo/agent-autokit-e2e-fixture/branches/autokit/issue-1",
+      "result": "expected 404 Branch not found after cleanup"
+    }
+  ],
+  "unprotectedSmoke": {
+    "smokeRoot": "/tmp/autokit-issue63-smoke.AdRcFs",
+    "fixtureRepo": "cattyneo/agent-autokit-e2e-fixture",
+    "fixtureIssue": 1,
+    "fixturePullRequest": {
+      "number": 2,
+      "url": "https://github.com/cattyneo/agent-autokit-e2e-fixture/pull/2",
+      "state": "MERGED",
+      "headRefName": "autokit/issue-1",
+      "headRefOid": "b0614393b11e033e9dfc84d5f4f4650debfedcf9",
+      "mergeCommit": "ab5c45a4fec499e148929e7205a20369369a71d7",
+      "mergedAt": "2026-05-05T06:10:32Z"
+    },
+    "task": {
+      "state": "merged",
+      "reviewRound": 0,
+      "ciFixRound": 0,
+      "failure": null,
+      "completedAt": "2026-05-05T06:10:36.787Z"
+    },
+    "observations": [
+      {
+        "id": "OBS-01",
+        "label": "autokit run exit code",
+        "passed": true,
+        "evidence": "0"
+      },
+      {
+        "id": "OBS-02",
+        "label": "final task state",
+        "passed": true,
+        "evidence": "merged"
+      },
+      {
+        "id": "OBS-03",
+        "label": "GitHub PR state",
+        "passed": true,
+        "evidence": "MERGED"
+      },
+      {
+        "id": "OBS-04",
+        "label": "review rounds within max and no final accepted findings",
+        "passed": true,
+        "evidence": "review_round=0, max=3, last_accept_count=0"
+      },
+      {
+        "id": "OBS-05",
+        "label": "CI fix round",
+        "passed": true,
+        "evidence": "0"
+      },
+      {
+        "id": "OBS-06",
+        "label": "required audit kinds",
+        "passed": true,
+        "evidence": "auto_merge_reserved=1, branch_deleted=1"
+      },
+      {
+        "id": "OBS-07",
+        "label": "forbidden failure audit kinds",
+        "passed": true,
+        "evidence": "none"
+      },
+      {
+        "id": "OBS-08",
+        "label": "review file",
+        "passed": true,
+        "evidence": ".autokit/reviews/issue-1-review-1.md"
+      },
+      {
+        "id": "OBS-09",
+        "label": "sanitize HMAC audit",
+        "passed": true,
+        "evidence": "sanitize_hmac_count=1"
+      },
+      {
+        "id": "OBS-10",
+        "label": "remote branch deleted",
+        "passed": true,
+        "evidence": "gh: Branch not found (HTTP 404)"
+      },
+      {
+        "id": "OBS-11",
+        "label": "local worktree removed",
+        "passed": true,
+        "evidence": ".autokit/worktrees/issue-1"
+      }
+    ]
+  },
+  "protectedGate": {
+    "status": "split",
+    "reason": "E17/E24 live validation requires controlled branch protection and PR state mutation on the protected fixture; split to #68 to avoid hiding a higher-risk live gate inside the unprotected OBS verifier PR.",
+    "issue": "https://github.com/cattyneo/agent-autokit/issues/68",
+    "existingEvidence": [
+      "docs/artifacts/issue-18-fixture-provisioning-2026-05-05.json records protected fixture provisioning and branch protection snapshot.",
+      "packages/workflows/src/index.test.ts covers E17 branch_protection, E16 disable-auto barrier, and E24 merge-time branch_protection with disable-auto."
+    ]
+  }
+}

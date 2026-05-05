@@ -154,4 +154,4 @@ rm .autokit/lock
 ## 関連
 
 - コマンド単位の引数: [03-commands.md](./03-commands.md)
-- 失敗 code の正典: [`docs/SPEC.md`](../SPEC.md) §4.2.1.1 / §5.2
+- 失敗 code の正典: [`docs/SPEC.md`](../../docs/SPEC.md) §4.2.1.1 / §5.2

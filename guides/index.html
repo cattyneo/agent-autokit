@@ -120,10 +120,16 @@
           namespace: 'agent-autokit-docs'
         },
         // サブディレクトリで _navbar.md / _coverpage.md を探しにいって 404 ログが出るのを抑止。
-        // _sidebar.md だけは user-guide/ と dev-guide/ で別系統を使い分けるため alias から除外。
+        // _sidebar.md だけは user/ と dev/ で別系統を使い分けるため alias から除外。
+        // 2026-05-05: docsify サイトを /guides/ に切り出し。旧 /user-guide /dev-guide /guides/user
+        // /guides/dev で来ても新 /user /dev へ流す。
         alias: {
           '/.*/_navbar.md': '/_navbar.md',
-          '/.*/_coverpage.md': '/_coverpage.md'
+          '/.*/_coverpage.md': '/_coverpage.md',
+          '/user-guide/(.*)': '/user/$1',
+          '/dev-guide/(.*)': '/dev/$1',
+          '/guides/user/(.*)': '/user/$1',
+          '/guides/dev/(.*)': '/dev/$1'
         },
         // docsify-copy-code: コード例 (CLI / yaml) を 1 click でコピーするための UI 追加。
         // ガイドは bash/yaml ブロックが多いため、読者の実行コスト削減目的で残す。

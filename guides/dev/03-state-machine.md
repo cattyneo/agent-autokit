@@ -28,7 +28,7 @@ stateDiagram-v2
   failed --> [*]
 ```
 
-正典は [SPEC §5.1 state 遷移表](../SPEC.md)。
+正典は [SPEC §5.1 state 遷移表](../../docs/SPEC.md)。
 
 ## state 分類
 
@@ -129,7 +129,7 @@ flowchart LR
 
 `paused` は中断箇所を `runtime_phase` に保持。`autokit run` 再実行時は **同じ runtime_phase から再入** する（`failure.code` がそれを許す場合）。
 
-正典: [SPEC §5.1.3 paused → resume 復帰先](../SPEC.md)。
+正典: [SPEC §5.1.3 paused → resume 復帰先](../../docs/SPEC.md)。
 
 | 直前の runtime_phase | 復帰先 state |
 |---------------------|------------|
@@ -139,7 +139,7 @@ flowchart LR
 | `fix` | `fixing` |
 | (CI 待ち / merge 中の paused) | それぞれ `ci_waiting` / `merging` |
 
-`runtime_phase` は terminal state（`merged` / `failed`）では `null` に落ちる（[SPEC §5.1.2](../SPEC.md)）。
+`runtime_phase` は terminal state（`merged` / `failed`）では `null` に落ちる（[SPEC §5.1.2](../../docs/SPEC.md)）。
 
 ## state を増やすときの設計指針
 

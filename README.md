@@ -70,22 +70,27 @@ autokit list --json
 
 ## ドキュメント
 
-- [`docs/`](./docs/README.md) — ドキュメント入口
-  - [`docs/user-guide/`](./docs/user-guide/README.md) — インストール・コマンド・設定・復旧
-  - [`docs/dev-guide/`](./docs/dev-guide/README.md) — 設計意図・アーキテクチャ・状態機械・prompt-contract・安全設計
+- [`guides/`](./guides/README.md) — ドキュメント入口 (docsify Web サイト)
+  - [`guides/user/`](./guides/user/README.md) — インストール・コマンド・設定・復旧
+  - [`guides/dev/`](./guides/dev/README.md) — 設計意図・アーキテクチャ・状態機械・prompt-contract・安全設計
+- [`docs/`](./docs/README.md) — 仕様置き場
   - [`docs/SPEC.md`](./docs/SPEC.md) — 形式仕様（正典）
+  - [`docs/PLAN.md`](./docs/PLAN.md) — ロードマップ
+  - `docs/references/` — Phase1〜3 計画 / spike / release 検証環境
+  - `docs/archive/` — Codex CLI 移行の閉結証跡
+  - `docs/artifacts/` — issue 検証 evidence (JSON)
 
 ### Web 表示（docsify）
 
-`docs/` は docsify サイトとしても閲覧できます（mermaid 図がブラウザでレンダリング、user-guide / dev-guide サイドバー切替、検索付き）。
+`/guides/` を docsify サイトとして配信します（mermaid 図がブラウザでレンダリング、user / dev サイドバー切替、検索付き）。SPEC / PLAN は相対リンクで `../docs/SPEC.md` を直接表示できます (リポジトリルートが配信ルートのとき)。
 
 ```bash
-# ローカル
-npx docsify-cli serve docs
-# → http://localhost:3000
+# ローカル (リポジトリルートから)
+npx docsify-cli serve .
+# → http://localhost:3000/guides/
 ```
 
-GitHub Pages 公開時は `Settings → Pages → Branch: main, Folder: /docs` を設定すると `https://<owner>.github.io/agent-autokit/` で配信できます。
+GitHub Pages 公開時は `Settings → Pages → Branch: main, Folder: / (root)` を設定し、`https://<owner>.github.io/agent-autokit/guides/` を docsify ホームとして使用します (folder=/guides にすると docs/SPEC.md など配信外になり in-page SPEC 表示が壊れるため避ける)。
 
 ## Release Verification
 

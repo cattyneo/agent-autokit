@@ -1,0 +1,13 @@
+- [ホーム](/)
+- **ガイド**
+  - [User Guide](/user/)
+  - [Dev Guide](/dev/)
+- **仕様 (in-page)**
+  - [SPEC](../docs/SPEC.md)
+  - [PLAN](../docs/PLAN.md)
+- **仕様 (GitHub)**
+  - [SPEC (GitHub)](https://github.com/cattyneo/agent-autokit/blob/main/docs/SPEC.md ":target=_blank")
+  - [PLAN (GitHub)](https://github.com/cattyneo/agent-autokit/blob/main/docs/PLAN.md ":target=_blank")
+- **補助資料 (GitHub)**
+  - [References](https://github.com/cattyneo/agent-autokit/tree/main/docs/references ":target=_blank")
+  - [Archive](https://github.com/cattyneo/agent-autokit/tree/main/docs/archive ":target=_blank")

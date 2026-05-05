@@ -6,5 +6,5 @@
 - 開発者視点: 設計意図 / 状態機械 / prompt-contract / 安全境界
 - 仕様正典は SPEC.md（必要に応じて GitHub で参照）
 
-[User Guide](/user-guide/)
-[Dev Guide](/dev-guide/)
+[User Guide](/user/)
+[Dev Guide](/dev/)

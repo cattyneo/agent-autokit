@@ -16,7 +16,7 @@
   },
   "guards": {
     "apiKeyEnv": "ANTHROPIC_API_KEY / OPENAI_API_KEY / CODEX_API_KEY were unset before live smoke",
-    "authFiles": "~/.codex/auth.json and $CODEX_HOME/auth.json were not read",
+    "authFiles": "~/.codex/auth.json and $CODEX_HOME/auth.json contents were not inspected, copied, logged, or included in artifacts",
     "liveMatrix": "single fixture smoke only; no high-count matrix"
   },
   "commands": [

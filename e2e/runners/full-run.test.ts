@@ -68,10 +68,50 @@ describe("full integration smoke evidence", () => {
       false,
     );
   });
+
+  it("fails closed on any failure audit kind", async () => {
+    const repo = await createSmokeRepo({ extraAuditKind: "prompt_contract_violation" });
+    const result = verifyUnprotectedSmoke({
+      repoPath: repo,
+      ownerRepo: "cattyneo/agent-autokit-e2e-fixture",
+      issue: 1,
+      runExitCode: 0,
+      gh: fakeGh({
+        prMerged: true,
+        branchMode: "missing",
+      }),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(
+      result.observations.find((observation) => observation.id === "OBS-07")?.passed,
+      false,
+    );
+  });
+
+  it("requires HTTP 404 evidence for remote branch deletion", async () => {
+    const repo = await createSmokeRepo();
+    const result = verifyUnprotectedSmoke({
+      repoPath: repo,
+      ownerRepo: "cattyneo/agent-autokit-e2e-fixture",
+      issue: 1,
+      runExitCode: 0,
+      gh: fakeGh({
+        prMerged: true,
+        branchMode: "auth-error",
+      }),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(
+      result.observations.find((observation) => observation.id === "OBS-10")?.passed,
+      false,
+    );
+  });
 });
 
 async function createSmokeRepo(
-  options: { omitBranchDeletedAudit?: boolean } = {},
+  options: { omitBranchDeletedAudit?: boolean; extraAuditKind?: string } = {},
 ): Promise<string> {
   const repo = await mkdtemp(join(tmpdir(), "autokit-full-run-test-"));
   mkdirSync(join(repo, ".autokit", "logs"), { recursive: true });
@@ -110,6 +150,9 @@ async function createSmokeRepo(
       options.omitBranchDeletedAudit
         ? null
         : JSON.stringify({ level: "info", event: "audit", kind: "branch_deleted" }),
+      options.extraAuditKind
+        ? JSON.stringify({ level: "info", event: "audit", kind: options.extraAuditKind })
+        : null,
     ]
       .filter(Boolean)
       .join("\n"),
@@ -148,7 +191,12 @@ function mergedTask(): TaskEntry {
   };
 }
 
-function fakeGh(options: { prMerged: boolean; branchExists: boolean }): GhJsonRunner {
+function fakeGh(options: {
+  prMerged: boolean;
+  branchExists?: boolean;
+  branchMode?: "missing" | "exists" | "auth-error";
+}): GhJsonRunner {
+  const branchMode = options.branchMode ?? (options.branchExists ? "exists" : "missing");
   return (args) => {
     if (args[0] === "pr" && args[1] === "view") {
       return {
@@ -160,9 +208,13 @@ function fakeGh(options: { prMerged: boolean; branchExists: boolean }): GhJsonRu
       };
     }
     if (args[0] === "api") {
-      return options.branchExists
-        ? { ok: true, stdout: { name: "autokit/issue-1" }, status: 0 }
-        : { ok: false, stderr: "Branch not found", status: 1 };
+      if (branchMode === "exists") {
+        return { ok: true, stdout: { name: "autokit/issue-1" }, status: 0 };
+      }
+      if (branchMode === "auth-error") {
+        return { ok: false, stderr: "gh: Bad credentials (HTTP 401)", status: 1 };
+      }
+      return { ok: false, stderr: "gh: Branch not found (HTTP 404)", status: 1 };
     }
     throw new Error(`unexpected gh args: ${args.join(" ")}`);
   };

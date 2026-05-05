@@ -3,7 +3,12 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { buildGhEnv } from "../../packages/core/src/env-allowlist.ts";
-import { loadTasksFile, parseConfigYaml, type TaskEntry } from "../../packages/core/src/index.ts";
+import {
+  failureCodes,
+  loadTasksFile,
+  parseConfigYaml,
+  type TaskEntry,
+} from "../../packages/core/src/index.ts";
 
 export type ObsId =
   | "OBS-01"
@@ -61,16 +66,7 @@ type PullRequestView = {
   headRefOid?: string | null;
 };
 
-const FAILURE_HISTORY_KINDS = new Set([
-  "rate_limited",
-  "ci_failure_max",
-  "merge_sha_mismatch",
-  "manual_merge_required",
-  "branch_protection",
-  "ci_timeout",
-  "merge_timeout",
-  "other",
-]);
+const FAILURE_AUDIT_KINDS = new Set<string>(failureCodes);
 
 export function verifyUnprotectedSmoke(
   input: VerifyUnprotectedSmokeInput,
@@ -169,7 +165,7 @@ export function verifyUnprotectedSmoke(
     {
       id: "OBS-10",
       label: "remote branch deleted",
-      passed: !branchView.ok && branchView.status === 1,
+      passed: isHttp404(branchView),
       evidence: branchView.stderr ?? JSON.stringify(branchView.stdout ?? null),
     },
     {
@@ -228,7 +224,7 @@ function countAuditKind(logs: Array<Record<string, unknown>>, kind: string): num
 function forbiddenAuditKinds(logs: Array<Record<string, unknown>>): string[] {
   return logs
     .map((entry) => entry.kind)
-    .filter((kind): kind is string => typeof kind === "string" && FAILURE_HISTORY_KINDS.has(kind));
+    .filter((kind): kind is string => typeof kind === "string" && FAILURE_AUDIT_KINDS.has(kind));
 }
 
 function runGhJson(args: string[]): GhJsonResult {
@@ -245,6 +241,20 @@ function runGhJson(args: string[]): GhJsonResult {
     stdout: result.stdout.trim() ? (JSON.parse(result.stdout) as unknown) : null,
     status: 0,
   };
+}
+
+function isHttp404(result: GhJsonResult): boolean {
+  if (result.ok) {
+    return false;
+  }
+  if (typeof result.stderr === "string" && result.stderr.includes("HTTP 404")) {
+    return true;
+  }
+  if (result.stdout !== null && typeof result.stdout === "object") {
+    const status = (result.stdout as { status?: unknown }).status;
+    return status === "404" || status === 404;
+  }
+  return false;
 }
 
 function parseCliArgs(argv: string[]): VerifyUnprotectedSmokeInput & { json: boolean } {

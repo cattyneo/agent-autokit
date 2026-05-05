@@ -1,5 +1,7 @@
 # agent-autokit ドキュメント
 
+> このページは docsify Web 表示時のホームでもある。GitHub 直読でも同じ内容。Web 版起動: `npx docsify-cli serve docs`
+
 `agent-autokit` のドキュメントは「使う側」と「読む側」の 2 系統に分離。
 
 ## 系統
@@ -27,4 +29,4 @@
 
 ## 内部開発者向け規約
 
-リポジトリのルート [`AGENTS.md`](../AGENTS.md) を参照。
+リポジトリのルート [`AGENTS.md`](https://github.com/cattyneo/agent-autokit/blob/main/AGENTS.md ":target=_blank") を参照。

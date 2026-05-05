@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>agent-autokit ドキュメント</title>
+    <meta name="description" content="agent-autokit user-guide and developer-guide" />
+    <link rel="icon" href="data:," />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/docsify@4.13.1/lib/themes/vue.css"
+      integrity="sha384-jCK82M2ExfkqAO/MYBKMjP1qC4AvZ4/Duf2gVWOy3RPn26uz+KW5I+9S39za1Fqv"
+      crossorigin="anonymous"
+    />
+    <style>
+      .markdown-section .mermaid { background: transparent; text-align: center; margin: 1.2em 0; }
+      .markdown-section .mermaid svg { max-width: 100%; height: auto; }
+      .markdown-section .mermaid-error {
+        background: #fff3f3;
+        border-left: 4px solid #d33;
+        padding: 0.8em 1em;
+        white-space: pre-wrap;
+        font-size: 0.85em;
+        font-family: var(--code-font-family, monospace);
+        overflow-x: auto;
+      }
+      .markdown-section .mermaid-error strong { color: #c00; }
+    </style>
+  </head>
+  <body class="loading">
+    <div id="app">読み込み中…</div>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/mermaid@10.9.5/dist/mermaid.min.js"
+      integrity="sha384-enVdc7lTHDGtpROV85t9+VqPC2EyyB0hsRD0MrvQnHUsHmTHIz2D8SPP4EnBkstH"
+      crossorigin="anonymous"
+    ></script>
+    <script>
+      // securityLevel: 'strict' で DOMPurify による node-label sanitize を強制。
+      // mermaid v10 の strict は許可された HTML 要素 (br など htmlLabels 経由) は通すため、
+      // 本リポの flowchart 内 <br/> ノードラベルはそのまま render される。
+      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'default' });
+
+      // docsify v4 が code block を <pre data-lang="LANG"><code class="lang-LANG">...</code></pre>
+      // でレンダする実装に依存する。data-lang は v4 contract、class="lang-..." は marked が出力する
+      // 公式属性で v4/v5 共通。selector を併記しておけば docsify upgrade で属性が変わっても
+      // 片方が残れば render は維持される。
+      const MERMAID_PRE_SELECTOR = '.markdown-section pre[data-lang="mermaid"]';
+      const MERMAID_CODE_SELECTOR = '.markdown-section pre > code.lang-mermaid';
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+      }
+
+      function showMermaidError(target, text, err) {
+        const msg = err && err.message ? err.message : String(err);
+        const div = document.createElement('div');
+        div.className = 'mermaid-error';
+        div.innerHTML =
+          '<strong>mermaid render エラー:</strong> ' +
+          escapeHtml(msg) +
+          '\n\n' +
+          escapeHtml(text);
+        target.replaceWith(div);
+        console.error('[docsify mermaid]', msg, '\n', text);
+      }
+
+      async function renderMermaidBlocks() {
+        const targets = [];
+        document.querySelectorAll(MERMAID_PRE_SELECTOR).forEach((pre) => {
+          const code = pre.querySelector('code');
+          targets.push({ host: pre, text: code ? code.textContent : pre.textContent });
+        });
+        document.querySelectorAll(MERMAID_CODE_SELECTOR).forEach((code) => {
+          const pre = code.closest('pre');
+          if (!pre || pre.matches(MERMAID_PRE_SELECTOR)) return;
+          targets.push({ host: pre, text: code.textContent });
+        });
+
+        const containers = targets.map(({ host, text }) => {
+          const div = document.createElement('div');
+          div.className = 'mermaid';
+          div.dataset.mermaidSrc = text;
+          div.textContent = text;
+          host.replaceWith(div);
+          return div;
+        });
+
+        if (containers.length === 0) return;
+
+        try {
+          await mermaid.run({ nodes: containers });
+        } catch (err) {
+          containers.forEach((node) => {
+            if (!node.isConnected) return;
+            if (node.querySelector('svg')) return;
+            showMermaidError(node, node.dataset.mermaidSrc || '', err);
+          });
+        }
+      }
+
+      window.$docsify = {
+        name: 'agent-autokit',
+        repo: 'cattyneo/agent-autokit',
+        homepage: 'README.md',
+        loadSidebar: true,
+        loadNavbar: true,
+        coverpage: true,
+        auto2top: true,
+        relativePath: true,
+        maxLevel: 4,
+        subMaxLevel: 2,
+        routerMode: 'hash',
+        search: {
+          depth: 3,
+          maxAge: 86400000,
+          paths: 'auto',
+          placeholder: '検索…',
+          noData: 'ヒットなし',
+          namespace: 'agent-autokit-docs'
+        },
+        // サブディレクトリで _navbar.md / _coverpage.md を探しにいって 404 ログが出るのを抑止。
+        // _sidebar.md だけは user-guide/ と dev-guide/ で別系統を使い分けるため alias から除外。
+        alias: {
+          '/.*/_navbar.md': '/_navbar.md',
+          '/.*/_coverpage.md': '/_coverpage.md'
+        },
+        // docsify-copy-code: コード例 (CLI / yaml) を 1 click でコピーするための UI 追加。
+        // ガイドは bash/yaml ブロックが多いため、読者の実行コスト削減目的で残す。
+        copyCode: {
+          buttonText: 'コピー',
+          errorText: '失敗',
+          successText: 'コピー済み'
+        },
+        plugins: [
+          function (hook) {
+            hook.doneEach(function (_html, next) {
+              renderMermaidBlocks().finally(next);
+            });
+          }
+        ]
+      };
+    </script>
+
+    <script
+      src="https://cdn.jsdelivr.net/npm/docsify@4.13.1/lib/docsify.min.js"
+      integrity="sha384-KaHhgnx/OTLoJ4J33SSJsF4x1pk4I7q3s5ZOfIDHJYl6IG7Oyn2vNDsHiWJe46fD"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/docsify@4.13.1/lib/plugins/search.min.js"
+      integrity="sha384-LthJPBJ4RGco78kBY+EmKz5rmISZ5vrtAu3+l2ALQ2mrZHOe6Wyf6knyKjeC4cL6"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/docsify-copy-code@3.0.2/dist/docsify-copy-code.min.js"
+      integrity="sha384-xvU4Qmx14Fe/3hDKuOUUQ8eOzoa7OVTL0vp3amTSv2KY8lCjlrga7DoqecFFOT7j"
+      crossorigin="anonymous"
+    ></script>
+  </body>
+</html>

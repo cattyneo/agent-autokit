@@ -1,0 +1,13 @@
+- [← Top](/)
+- **Dev Guide**
+  - [README](/dev-guide/)
+  - [01 Design Intent](/dev-guide/01-design-intent.md)
+  - [02 Architecture](/dev-guide/02-architecture.md)
+  - [03 State Machine](/dev-guide/03-state-machine.md)
+  - [04 Prompt Contract](/dev-guide/04-prompt-contract.md)
+  - [05 Safety](/dev-guide/05-safety.md)
+  - [06 Glossary](/dev-guide/06-glossary.md)
+- **User Guide へ**
+  - [User Guide README](/user-guide/)
+- **仕様**
+  - [SPEC (GitHub)](https://github.com/cattyneo/agent-autokit/blob/main/docs/SPEC.md ":target=_blank")

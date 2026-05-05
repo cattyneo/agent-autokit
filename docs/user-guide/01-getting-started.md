@@ -38,7 +38,7 @@
 unset ANTHROPIC_API_KEY OPENAI_API_KEY CODEX_API_KEY
 ```
 
-`~/.codex/auth.json` や `$CODEX_HOME/auth.json` を読むのも禁止（[`AGENTS.md`](../../AGENTS.md) の Safety 節）。
+`~/.codex/auth.json` や `$CODEX_HOME/auth.json` を読むのも禁止（[`AGENTS.md`](https://github.com/cattyneo/agent-autokit/blob/main/AGENTS.md ":target=_blank") の Safety 節）。
 
 ## インストール
 

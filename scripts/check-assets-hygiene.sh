@@ -18,6 +18,9 @@ fi
 pack_output="$(cd "$ROOT_DIR/packages/cli" && bun pm pack --dry-run 2>&1)"
 printf '%s\n' "$pack_output"
 
+npm_pack_output="$(cd "$ROOT_DIR/packages/cli" && npm --cache "${AUTOKIT_NPM_CACHE:-/tmp/autokit-npm-cache}" pack --dry-run 2>&1)"
+printf '%s\n' "$npm_pack_output"
+
 violations=0
 while IFS= read -r entry; do
   case "$entry" in
@@ -26,11 +29,24 @@ while IFS= read -r entry; do
       violations=$((violations + 1))
       ;;
   esac
-done <<< "$pack_output"
+done <<< "$pack_output"$'\n'"$npm_pack_output"
 
 if [ "$violations" -gt 0 ]; then
   exit 1
 fi
 
-echo "assets hygiene passed"
+publish_js=("$ROOT_DIR/packages/cli/dist/bin.js")
 
+if grep --line-number --fixed-strings "workspace:" "$CLI_PACKAGE" "${publish_js[@]}" >/tmp/autokit-workspace-grep.txt 2>/dev/null; then
+  cat /tmp/autokit-workspace-grep.txt
+  echo "::error::publish candidate contains workspace: specifier"
+  exit 1
+fi
+
+if grep --line-number -E "@cattyneo/autokit-(core|workflows|claude-runner|codex-runner|tui)" "$CLI_PACKAGE" "${publish_js[@]}" >/tmp/autokit-private-import-grep.txt 2>/dev/null; then
+  cat /tmp/autokit-private-import-grep.txt
+  echo "::error::publish candidate contains unresolved private workspace import"
+  exit 1
+fi
+
+echo "assets hygiene passed"

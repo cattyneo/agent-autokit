@@ -557,6 +557,7 @@ failure:
 | `network_required` | paused | `permissions.codex.allow_network=false` で network 必須操作要求 (test framework 取得等、§9.7.2) |
 | `manual_merge_required` | paused | CI OK + `auto_merge=false` 観測 |
 | `pre_pr_active_orphan` | paused | クラッシュ後 PR 未作成の active state (`planning`/`planned`/`implementing`) で復帰先決定不能 |
+| `effort_unsupported` | failed | provider / model / effort の組み合わせが未サポートで、`effort.unsupported_policy=fail` |
 | `other` | failed / paused | 上記いずれにも該当しない例外 |
 
 `code` 列挙は固定 (拡張時は本表 + §10.2.2 audit kind + AC を同時更新)。`message` は autokit 要約のみ。
@@ -1898,6 +1899,7 @@ audit イベントは info level で必ず記録する。**`paused` 遷移時の
 | `auto_merge_reserved` | ci_waiting で `--auto` 予約発行 (E14) |
 | `branch_deleted` | merged 後 grace period 経過 + remote branch 削除完了 |
 | `retry_pr_closed` | retry の事前処理 PR close 完了 (§6.2) |
+| `effort_downgrade` | workflow phase start で未サポート effort を `effort.unsupported_policy=downgrade` により下位 effort へ解決 |
 
 ##### 10.2.2.2 failure 系 audit kind (`failure.code` 1:1)
 
@@ -1929,6 +1931,7 @@ audit イベントは info level で必ず記録する。**`paused` 遷移時の
 - `network_required`
 - `manual_merge_required`
 - `pre_pr_active_orphan`
+- `effort_unsupported`
 - `other`
 
 `failure.code` 列挙 (§4.2.1.1) を拡張する場合、本表 + AC §13 を **同 PR で同時更新** する責務 (PLAN 重要原則 10 として追加)。
@@ -2354,7 +2357,7 @@ v0.1.0 GA 条件:
 - [ ] **`~/.codex/auth.json` / `$CODEX_HOME/auth.json` / `.codex/auth*` の値が logs / backup / artifacts / Issue body / review artifact / PR comment に混入しない**
 - [ ] **`codex exec --json` event parse / session id 保存 / final JSON schema validation / resume / sandbox / approval / ChatGPT-managed auth 判別は MIG-004 pinned evidence で確認済みの contract のみ AK-010 実装に使われ、未確認 CLI 機能は必須要件として固定されない**
 - [ ] **audit kind が `failure.code` と 1:1 対応: paused/failed 遷移時に同名 audit kind が info で発火し、event 本体に `failure: {phase, code, message, ts}` field を含む** (§10.2.2.2)
-- [ ] **操作系 audit kind (§10.2.2.1 の 14 種: resume / resumed / lock_seized / init_rollback / init_rollback_failed / retry_resumed / runner_idle / audit_hmac_key_rotated / queue_corruption_recovered / sanitize_pass_hmac / auto_merge_disabled / auto_merge_reserved / branch_deleted / retry_pr_closed) が info または指定 level で必ず記録**
+- [ ] **操作系 audit kind (§10.2.2.1 の 15 種: resume / resumed / lock_seized / init_rollback / init_rollback_failed / retry_resumed / runner_idle / audit_hmac_key_rotated / queue_corruption_recovered / sanitize_pass_hmac / auto_merge_disabled / auto_merge_reserved / branch_deleted / retry_pr_closed / effort_downgrade) が info または指定 level で必ず記録**
 - [ ] **log rotation 中も audit event を silent drop しない: ローテ手順 (flush → fsync → close → rename → open) の境界で event drop なし、rename 失敗時は旧 file 継続 + WARN 記録** (§10.3.1)
 - [ ] **log size (`max_file_size_mb` / `max_total_size_mb`) 超過でローテ / 削除**
 

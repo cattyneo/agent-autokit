@@ -17,6 +17,7 @@ import pino from "pino";
 
 import type { AutokitConfig } from "./config.ts";
 import { type FailureCode, failureCodes } from "./failure-codes.ts";
+import { sanitizeLogString } from "./redaction.ts";
 
 export type { FailureCode };
 export { failureCodes };
@@ -38,6 +39,7 @@ export const operationalAuditKinds = [
   "auto_merge_reserved",
   "branch_deleted",
   "retry_pr_closed",
+  "effort_downgrade",
 ] as const;
 
 export type FailureAuditKind = (typeof failureAuditKinds)[number];
@@ -371,44 +373,6 @@ function sanitizeLogValue(value: unknown, config: AutokitConfig, debug: boolean)
     );
   }
   return value;
-}
-
-function sanitizeLogString(value: string, config: AutokitConfig, debug: boolean): string {
-  let sanitized = redactEnvLineValues(value);
-  for (const pattern of builtInRedactPatterns(config)) {
-    sanitized = sanitized.replace(pattern, "<REDACTED>");
-  }
-  return debug ? truncateDebugString(sanitized) : sanitized;
-}
-
-function redactEnvLineValues(value: string): string {
-  return value.replace(
-    /((?:^|[\s(:,])\.env(?:\.[\w.-]+)?:\d+\s+[A-Za-z_][A-Za-z0-9_]*=)[^\s),]+/g,
-    "$1<REDACTED>",
-  );
-}
-
-function builtInRedactPatterns(config: AutokitConfig): RegExp[] {
-  return [
-    /ghp_[A-Za-z0-9]{20,}/g,
-    /github_pat_[A-Za-z0-9_]{20,}/g,
-    /sk-[A-Za-z0-9]{20,}/g,
-    /Bearer\s+[A-Za-z0-9._:-]+/gi,
-    /Authorization:\s*Bearer\s+[A-Za-z0-9._:-]+/gi,
-    /ssh-rsa\s+[A-Za-z0-9+/=]+/g,
-    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-    /xox[baprs]-[A-Za-z0-9-]+/g,
-    /aws_access_key_id\s*=\s*\S+/gi,
-    /aws_secret_access_key\s*=\s*\S+/gi,
-    ...config.logging.redact_patterns.map((pattern) => new RegExp(pattern, "g")),
-  ];
-}
-
-function truncateDebugString(value: string): string {
-  if (value.length <= 200) {
-    return value;
-  }
-  return `${value.slice(0, 200)}...truncated ${value.length - 200} chars`;
 }
 
 function sanitizeErrorMessage(error: unknown): string {

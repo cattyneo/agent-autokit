@@ -25,6 +25,7 @@ export const failureCodes = [
   "network_required",
   "manual_merge_required",
   "pre_pr_active_orphan",
+  "effort_unsupported",
   "other",
 ] as const;
 

@@ -336,6 +336,40 @@ describe("cli task commands", () => {
     assert.equal(loaded.runtime_phase, null);
   });
 
+  it("loads all legacy session fixtures through the CLI resume parse gate", async () => {
+    const fixtureRoot = join(process.cwd(), "e2e", "fixtures", "legacy-tasks-yaml");
+    for (const file of readdirSync(fixtureRoot).filter((entry) => entry.endsWith(".yaml"))) {
+      const fixture = parseLegacySessionFixture(readFileSync(join(fixtureRoot, file), "utf8"));
+      const root = makeTempDir();
+      mkdirSync(join(root, ".autokit"), { recursive: true });
+      const legacyTask = structuredClone(
+        task({ issue: 88, state: "paused", runtimePhase: fixture.phase }),
+      ) as unknown as Record<string, unknown>;
+      const runtime = legacyTask.runtime as Record<string, unknown>;
+      delete runtime.resolved_effort;
+      delete runtime.phase_self_correct_done;
+      delete runtime.phase_override;
+      legacyTask.provider_sessions = fixture.provider_sessions;
+      writeFileSync(
+        tasksPath(root),
+        JSON.stringify({ version: 1, generated_at: NOW, tasks: [legacyTask] }),
+        { mode: 0o600 },
+      );
+      const harness = makeCliHarness(root);
+
+      assert.equal(await runCli(["resume", "88"], harness.deps), TEMPFAIL_EXIT_CODE, file);
+      const loaded = loadTasksFile(tasksPath(root)).tasks[0];
+      assert.equal(
+        loaded.provider_sessions[fixture.phase].last_provider,
+        fixture.expected_last_provider,
+        file,
+      );
+      assert.equal(loaded.runtime.resolved_effort, null, file);
+      assert.equal(loaded.runtime.phase_self_correct_done, null, file);
+      assert.equal(loaded.runtime.phase_override, null, file);
+    }
+  });
+
   it("fails production run before runner dispatch when API key env is exported", async () => {
     const root = makeTempDir();
     writeTasks(root, [task({ issue: 9, state: "queued" })]);
@@ -581,6 +615,41 @@ function retryCleanupPausedTask(issue: number): TaskEntry {
       ts: NOW,
     }),
   };
+}
+
+function parseLegacySessionFixture(source: string): {
+  phase: AgentPhase;
+  expected_last_provider: "claude" | "codex";
+  provider_sessions: Partial<Record<AgentPhase, Partial<TaskEntry["provider_sessions"]["plan"]>>>;
+} {
+  const phase = matchFixtureValue(source, "phase") as AgentPhase;
+  const expectedLastProvider = matchFixtureValue(source, "expected_last_provider") as
+    | "claude"
+    | "codex";
+  const providerSession: Partial<TaskEntry["provider_sessions"]["plan"]> = {};
+  const claudeSessionId = source.match(/claude_session_id:\s*(\S+)/)?.[1];
+  const codexSessionId = source.match(/codex_session_id:\s*(\S+)/)?.[1];
+  if (claudeSessionId !== undefined) {
+    providerSession.claude_session_id = claudeSessionId;
+  }
+  if (codexSessionId !== undefined) {
+    providerSession.codex_session_id = codexSessionId;
+  }
+  return {
+    phase,
+    expected_last_provider: expectedLastProvider,
+    provider_sessions: { [phase]: providerSession },
+  };
+}
+
+type AgentPhase = Exclude<NonNullable<TaskEntry["runtime_phase"]>, "ci_wait" | "merge">;
+
+function matchFixtureValue(source: string, key: string): string {
+  const value = source.match(new RegExp(`^${key}:\\s*(\\S+)`, "m"))?.[1];
+  if (value === undefined) {
+    throw new Error(`missing ${key} in legacy session fixture`);
+  }
+  return value;
 }
 
 function makeCliHarness(

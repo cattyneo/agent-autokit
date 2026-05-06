@@ -216,11 +216,11 @@ migration 関数 (`packages/core/src/tasks.ts` 内 preprocess) の責務:
 3. 反対側の `*_session_id?` は `undefined` 維持
 4. 完全な空 (両 null) は `last_provider: null` または phase entry 全体 `null` で透過する。schema は fresh task の既存 null session id object と旧 yaml の空 session の両方を受理する
 
-旧 yaml (`{ claude_session_id }` 単独) を持つ既存タスクで `autokit resume` した際、本 migration により schema 検証通過 + session 復元先 provider 判定が確定する。**後方互換 AC「旧 tasks.yaml の zod default 適用 + 既存 e2e 全緑」は preprocess migration を含めて検証**。
+旧 yaml (`{ claude_session_id }` 単独) を持つ既存タスクで `autokit resume` した際、本 migration により schema 検証通過 + 後続 Issue で使う session 復元先 provider 情報が確定する。Issue 1.2 / #88 では v0.1 default provider の resume 動作を維持し、`last_provider` / reverse-provider session を使った provider selection は Issue 1.3 / #89 の owner とする。**後方互換 AC「旧 tasks.yaml の zod default 適用 + 既存 e2e 全緑」は preprocess migration を含めて検証**。
 
 #### 4.3.2 resume / metadata persistence owner
 
-`provider_sessions` 統合は schema 追加だけで完了しない。Phase 1 では workflow 側の `resumeForPhase` / runner metadata persistence (`applyRunnerMetadata` 相当) も同じ owner で更新し、全 7 phase × 2 provider の session を次の規則で扱う:
+`provider_sessions` 統合は schema 追加だけで完了しない。Issue 1.2 / #88 は schema・migration・reverse-provider session の保持までを owner とし、workflow 側の `resumeForPhase` / runner metadata persistence (`applyRunnerMetadata` 相当) は Issue 1.3 / #89 で更新する。Issue 1.3 では全 7 phase × 2 provider の session を次の規則で扱う:
 
 - phase 開始時は effective provider を `provider_sessions.<phase>.last_provider` に保存する
 - runner が返した session id は provider 別 field (`claude_session_id` / `codex_session_id`) に保存し、反対 provider の既存 session id は消さない

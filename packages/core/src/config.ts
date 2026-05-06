@@ -174,7 +174,7 @@ const configSchema = z
         review_idle_ms: positiveInteger.optional(),
         supervise_idle_ms: positiveInteger.optional(),
         fix_idle_ms: positiveInteger.optional(),
-        default_idle_ms: positiveInteger.optional(),
+        default_idle_ms: positiveInteger.default(300_000),
       })
       .prefault({}),
     logging: z
@@ -244,13 +244,13 @@ export const DEFAULT_CONFIG: AutokitConfig = configSchema.parse({});
 export function resolveRunnerTimeout(
   config: AutokitConfig,
   phase: RuntimePhase,
-  resolvedEffort?: Pick<ResolvedEffort, "timeout_ms"> | null,
+  resolvedEffort?: ResolvedEffort | null,
 ): number {
   const explicitTimeout = phaseTimeoutValue(config, phase);
   if (explicitTimeout !== undefined) {
     return explicitTimeout;
   }
-  if (resolvedEffort?.timeout_ms !== undefined) {
+  if (resolvedEffort?.phase === phase) {
     return resolvedEffort.timeout_ms;
   }
   return config.runner_timeout.default_ms ?? defaultRunnerTimeoutMs[phase];

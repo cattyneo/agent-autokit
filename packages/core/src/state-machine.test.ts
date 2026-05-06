@@ -200,13 +200,37 @@ describe("core state machine", () => {
     assert.ok(failed.failure);
 
     const reset = transitionTask(
-      { ...failed, failure_history: [failed.failure], review_round: 2 },
+      {
+        ...failed,
+        failure_history: [failed.failure],
+        review_round: 2,
+        runtime: {
+          ...failed.runtime,
+          resolved_effort: {
+            phase: "plan",
+            provider: "claude",
+            effort: "high",
+            downgraded_from: null,
+            timeout_ms: 3_600_000,
+          },
+          phase_self_correct_done: true,
+          phase_override: {
+            phase: "implement",
+            provider: "codex",
+            effort: "medium",
+            expires_at_run_id: "run-1",
+          },
+        },
+      },
       { type: "retry_reset" },
     );
     assert.equal(reset.state, "queued");
     assert.equal(reset.runtime_phase, null);
     assert.equal(reset.failure, null);
     assert.deepEqual(reset.failure_history, []);
+    assert.equal(reset.runtime.resolved_effort, null);
+    assert.equal(reset.runtime.phase_self_correct_done, null);
+    assert.equal(reset.runtime.phase_override, null);
 
     assert.equal(isAgentRuntimePhase("plan"), true);
     assert.equal(isAgentRuntimePhase("ci_wait"), false);

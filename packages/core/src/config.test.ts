@@ -32,7 +32,7 @@ describe("core config schema", () => {
     assert.equal(config.runner_timeout.plan_ms, undefined);
     assert.equal(config.runner_timeout.default_ms, undefined);
     assert.equal(config.runner_timeout.plan_verify_ms, undefined);
-    assert.equal(config.runner_timeout.default_idle_ms, undefined);
+    assert.equal(config.runner_timeout.default_idle_ms, 300_000);
     assert.equal(resolveRunnerTimeout(config, "plan"), 600_000);
     assert.equal(resolveRunnerTimeout(config, "plan_verify"), 600_000);
     assert.equal(config.init.backup_blacklist.includes(".autokit/audit-hmac-key"), true);
@@ -241,6 +241,16 @@ runner_timeout:
         timeout_ms: 4321,
       }),
       4321,
+    );
+    assert.equal(
+      resolveRunnerTimeout(parseConfigYaml("version: 1\n"), "plan", {
+        phase: "implement",
+        provider: "codex",
+        effort: "high",
+        downgraded_from: null,
+        timeout_ms: 4321,
+      }),
+      600_000,
     );
   });
 

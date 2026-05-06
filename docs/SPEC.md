@@ -1166,7 +1166,7 @@ post-PR failure (`review_max` / `ci_failure_max` / `runner_timeout` / `phase_att
 - `review_findings` / `reject_history`
 - `failure` / `failure_history`
 - `runtime_phase` → null
-- `runtime.{phase_attempt, previous_state, interrupted_at, last_event_id}`
+- `runtime.{phase_attempt, previous_state, interrupted_at, last_event_id, resolved_effort, phase_self_correct_done, phase_override}`
 - `review_round` / `ci_fix_round`
 - `fix.{origin, started_at}` → null
 - `runtime.resolved_model.*` (再 `queued → planning` 遷移時に再解決)

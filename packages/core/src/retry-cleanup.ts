@@ -177,6 +177,9 @@ function clearRetryFields(task: TaskEntry): void {
   task.runtime.previous_state = null;
   task.runtime.interrupted_at = null;
   task.runtime.last_event_id = null;
+  task.runtime.resolved_effort = null;
+  task.runtime.phase_self_correct_done = null;
+  task.runtime.phase_override = null;
   for (const phase of Object.keys(task.runtime.resolved_model) as Array<
     keyof typeof task.runtime.resolved_model
   >) {

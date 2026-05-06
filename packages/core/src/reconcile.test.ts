@@ -118,6 +118,31 @@ describe("core reconcile", () => {
     };
     assert.equal(reconcileTask(beforeWithSession, {}).action, "resume_session");
 
+    const planWithDefaultProviderSession = {
+      ...baseTask("planning", "plan"),
+      git: {
+        ...baseTask().git,
+        checkpoints: {
+          ...baseTask().git.checkpoints,
+          plan: { ...baseTask().git.checkpoints.plan, before_sha: "before" },
+        },
+      },
+      provider_sessions: {
+        ...baseTask().provider_sessions,
+        plan: { ...baseTask().provider_sessions.plan, claude_session_id: "claude-plan" },
+      },
+    };
+    assert.equal(reconcileTask(planWithDefaultProviderSession, {}).action, "resume_session");
+
+    const planWithReverseProviderOnlySession = {
+      ...planWithDefaultProviderSession,
+      provider_sessions: {
+        ...baseTask().provider_sessions,
+        plan: { ...baseTask().provider_sessions.plan, codex_session_id: "codex-plan" },
+      },
+    };
+    assert.equal(reconcileTask(planWithReverseProviderOnlySession, {}).action, "restart_phase");
+
     assert.equal(
       reconcileTask(baseTask("implementing", "implement"), {}).task.failure?.code,
       "pre_pr_active_orphan",

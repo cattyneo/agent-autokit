@@ -192,6 +192,9 @@ export function transitionTask(
       task.failure = null;
       task.failure_history = [];
       task.runtime.phase_attempt = 0;
+      task.runtime.resolved_effort = null;
+      task.runtime.phase_self_correct_done = null;
+      task.runtime.phase_override = null;
       return task;
   }
 }

@@ -39,7 +39,13 @@ export {
   runtimePhases,
   serializeConfigYaml,
 } from "./config.js";
-export type { PhaseOverride } from "./effort-resolver.js";
+export type {
+  EffortDowngradeAuditCandidate,
+  EffortResolutionInput,
+  EffortResolutionResult,
+  PhaseOverride,
+} from "./effort-resolver.js";
+export { resolveEffort } from "./effort-resolver.js";
 export type { ChildEnv, ParentEnv, RunnerEnvOptions } from "./env-allowlist.js";
 export { buildGhEnv, buildRunnerEnv } from "./env-allowlist.js";
 export type { GhPrView, GhPrViewJson } from "./gh.js";
@@ -104,12 +110,15 @@ export type {
   ReconcileResult,
 } from "./reconcile.js";
 export { reconcileTask } from "./reconcile.js";
+export type { RedactionPathContext } from "./redaction.js";
+export { sanitizeLogString } from "./redaction.js";
 export type { RetryCleanupDeps } from "./retry-cleanup.js";
 export { retryCleanupTask } from "./retry-cleanup.js";
 export type {
   AgentRunInput,
   AgentRunOutput,
   AgentRunStatus,
+  EffectivePermission,
   PromptContractData,
   PromptContractQuestion,
   PromptContractValidationResult,

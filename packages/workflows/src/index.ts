@@ -7,14 +7,25 @@ import {
   type AutokitConfig,
   cloneTask,
   DEFAULT_CONFIG,
+  derive_claude_perm,
+  derive_codex_perm,
+  type EffectivePermission,
+  type EffortLevel,
   type FailureCode,
   failureCodes,
   makeFailure,
+  type OperationalAuditKind,
+  type Phase,
   type PromptContractData,
+  type Provider,
   promptContractForPhase,
   type RuntimePhase,
+  resolveEffort,
+  resolveRunnerTimeout,
+  sanitizeLogString,
   type TaskEntry,
   transitionTask,
+  validateCapabilitySelection,
 } from "@cattyneo/autokit-core";
 
 export const WORKFLOWS_PACKAGE = "@cattyneo/autokit-workflows";
@@ -46,7 +57,9 @@ export type WorkflowOptions = {
   buildPrompt?: (input: WorkflowPromptInput) => string;
   answerQuestion?: (input: WorkflowQuestionInput) => Promise<string> | string;
   persistTask?: (task: TaskEntry) => Promise<void> | void;
+  auditOperation?: (kind: OperationalAuditKind, fields: Record<string, unknown>) => void;
   now?: () => string;
+  homeDir?: string;
 };
 
 export type WorkflowResult = {
@@ -245,10 +258,6 @@ type FixData = {
   notes: string;
 };
 
-const DEFAULT_TIMEOUT_MS = 60_000;
-const CLAUDE_PHASES = new Set<RuntimePhase>(["plan", "plan_fix", "review", "supervise"]);
-const CODEX_PHASES = new Set<RuntimePhase>(["plan_verify", "implement", "fix"]);
-
 export async function runPlanningWorkflow(
   inputTask: TaskEntry,
   options: WorkflowOptions,
@@ -391,7 +400,7 @@ export async function runReviewSuperviseWorkflow(
       rejectedIds: [],
     };
   }
-  findings = assignFindingIds(reviewData.value.findings);
+  findings = assignFindingIds(sanitizeReviewFindings(reviewData.value.findings, options));
   task = transitionTask(task, { type: "review_completed" }, config);
 
   if (findings.length === 0 || everyFindingAlreadyRejected(task, findings)) {
@@ -420,7 +429,8 @@ export async function runReviewSuperviseWorkflow(
     };
   }
 
-  const validationErrors = validateSupervisorDecision(superviseData.value, findings, task);
+  const superviseDecision = sanitizeSuperviseData(superviseData.value, options);
+  const validationErrors = validateSupervisorDecision(superviseDecision, findings, task);
   if (validationErrors.length > 0) {
     return {
       task: failPromptContract(task, "supervise", validationErrors.join("; "), options),
@@ -433,20 +443,20 @@ export async function runReviewSuperviseWorkflow(
   const decisionRound = task.review_round + 1;
   task.review_findings.push({
     round: decisionRound,
-    accept_ids: [...superviseData.value.accept_ids],
-    reject_ids: [...superviseData.value.reject_ids],
-    reject_reasons: { ...superviseData.value.reject_reasons },
+    accept_ids: [...superviseDecision.accept_ids],
+    reject_ids: [...superviseDecision.reject_ids],
+    reject_reasons: { ...superviseDecision.reject_reasons },
   });
-  upsertRejectHistory(task, findings, superviseData.value, decisionRound);
+  upsertRejectHistory(task, findings, superviseDecision, decisionRound);
 
-  if (superviseData.value.accept_ids.length > 0) {
+  if (superviseDecision.accept_ids.length > 0) {
     task = transitionTask(task, { type: "supervise_accept", origin: "review" }, config);
     return {
       task,
       findings,
-      acceptedIds: superviseData.value.accept_ids,
-      rejectedIds: superviseData.value.reject_ids,
-      fixPrompt: superviseData.value.fix_prompt,
+      acceptedIds: superviseDecision.accept_ids,
+      rejectedIds: superviseDecision.reject_ids,
+      fixPrompt: superviseDecision.fix_prompt,
     };
   }
 
@@ -455,7 +465,7 @@ export async function runReviewSuperviseWorkflow(
     task,
     findings,
     acceptedIds: [],
-    rejectedIds: superviseData.value.reject_ids,
+    rejectedIds: superviseDecision.reject_ids,
   };
 }
 
@@ -886,24 +896,24 @@ export function computeFindingId(finding: ReviewFinding): string {
 
 function buildAgentRunInput(
   task: TaskEntry,
-  phase: RuntimePhase,
+  phase: Phase,
   options: WorkflowOptions,
   currentFindings?: ReviewFindingWithId[],
   planMarkdown?: string,
   questionResponse?: AgentRunInput["questionResponse"],
 ): AgentRunInput {
-  if (!CLAUDE_PHASES.has(phase) && !CODEX_PHASES.has(phase)) {
-    throw new Error(`unsupported workflow runner phase: ${phase}`);
-  }
-  const provider = phase === "plan_verify" ? "codex" : "claude";
-  const providerForPhase = CODEX_PHASES.has(phase) ? "codex" : provider;
+  const config = options.config ?? DEFAULT_CONFIG;
+  const provider = effectiveProviderForPhase(task, phase, config);
+  const capability = validateCapabilitySelection({ phase, provider });
+  const effectivePermission = effectivePermissionFor(capability.phase, provider);
   const workspaceScope =
     phase === "review" || phase === "supervise" || phase === "implement" || phase === "fix"
       ? "worktree"
       : "repo";
   const mode = phase === "implement" || phase === "fix" ? "workspace-write" : "readonly";
+  const resolvedEffort = requireResolvedEffort(task, phase);
   return {
-    provider: providerForPhase,
+    provider,
     phase,
     cwd:
       workspaceScope === "worktree" ? (options.worktreeRoot ?? options.repoRoot) : options.repoRoot,
@@ -912,7 +922,9 @@ function buildAgentRunInput(
       defaultPrompt(task, phase),
     promptContract: promptContractForPhase(phase),
     model: task.runtime.resolved_model[phase] ?? "auto",
-    resume: resumeForPhase(task, phase),
+    effort: resolvedEffort,
+    effective_permission: effectivePermission,
+    resume: resumeForPhase(task, phase, provider),
     questionResponse,
     permissions: {
       mode,
@@ -923,7 +935,7 @@ function buildAgentRunInput(
           ? (options.worktreeRoot ?? options.repoRoot)
           : options.repoRoot,
     },
-    timeoutMs: options.timeoutMsForPhase?.(phase) ?? options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: options.timeoutMsForPhase?.(phase) ?? options.timeoutMs ?? resolvedEffort.timeout_ms,
   };
 }
 
@@ -935,26 +947,63 @@ function defaultPrompt(task: TaskEntry, phase: RuntimePhase): string {
   ].join("\n");
 }
 
-function resumeForPhase(task: TaskEntry, phase: RuntimePhase): AgentRunInput["resume"] | undefined {
+function resumeForPhase(
+  task: TaskEntry,
+  phase: Phase,
+  provider: Provider,
+): AgentRunInput["resume"] | undefined {
   const session = task.provider_sessions[phase];
-  switch (phase) {
-    case "plan":
-      return session.claude_session_id ? { claudeSessionId: session.claude_session_id } : undefined;
-    case "plan_verify":
-      return session.codex_session_id ? { codexSessionId: session.codex_session_id } : undefined;
-    case "plan_fix":
-      return session.claude_session_id ? { claudeSessionId: session.claude_session_id } : undefined;
-    case "review":
-      return session.claude_session_id ? { claudeSessionId: session.claude_session_id } : undefined;
-    case "supervise":
-      return session.claude_session_id ? { claudeSessionId: session.claude_session_id } : undefined;
-    case "implement":
-      return session.codex_session_id ? { codexSessionId: session.codex_session_id } : undefined;
-    case "fix":
-      return session.codex_session_id ? { codexSessionId: session.codex_session_id } : undefined;
-    default:
-      return undefined;
+  if (provider === "claude") {
+    return session.claude_session_id ? { claudeSessionId: session.claude_session_id } : undefined;
   }
+  return session.codex_session_id ? { codexSessionId: session.codex_session_id } : undefined;
+}
+
+function effectiveProviderForPhase(task: TaskEntry, phase: Phase, config: AutokitConfig): Provider {
+  if (
+    task.runtime.phase_override?.phase === phase &&
+    task.runtime.phase_override.provider !== undefined
+  ) {
+    return task.runtime.phase_override.provider;
+  }
+  return task.provider_sessions[phase].last_provider ?? config.phases[phase].provider;
+}
+
+function effectiveEffortForPhase(
+  task: TaskEntry,
+  phase: Phase,
+  config: AutokitConfig,
+): EffortLevel {
+  if (
+    task.runtime.phase_override?.phase === phase &&
+    task.runtime.phase_override.effort !== undefined
+  ) {
+    return task.runtime.phase_override.effort;
+  }
+  return config.phases[phase].effort ?? config.effort.default;
+}
+
+function effectivePermissionFor(phase: Phase, provider: Provider): EffectivePermission {
+  const row = validateCapabilitySelection({ phase, provider });
+  return provider === "claude"
+    ? {
+        permission_profile: row.permission_profile,
+        claude: derive_claude_perm(phase),
+      }
+    : {
+        permission_profile: row.permission_profile,
+        codex: derive_codex_perm(phase),
+      };
+}
+
+function requireResolvedEffort(
+  task: TaskEntry,
+  phase: Phase,
+): NonNullable<TaskEntry["runtime"]["resolved_effort"]> {
+  if (task.runtime.resolved_effort?.phase !== phase) {
+    throw new Error(`resolved effort missing for phase: ${phase}`);
+  }
+  return task.runtime.resolved_effort;
 }
 
 function applyRunnerMetadata(
@@ -979,7 +1028,7 @@ function applyRunnerMetadata(
 
 async function runPhase(
   task: TaskEntry,
-  phase: RuntimePhase,
+  phase: Phase,
   options: WorkflowOptions,
   currentFindings?: ReviewFindingWithId[],
   planMarkdown?: string,
@@ -988,6 +1037,10 @@ async function runPhase(
   let questionResponse: AgentRunInput["questionResponse"];
   for (let turn = 0; turn < 3; turn += 1) {
     try {
+      currentTask = await resolveAndPersistEffort(currentTask, phase, options);
+      if (currentTask.state === "failed" || currentTask.state === "paused") {
+        return { ok: false, task: currentTask };
+      }
       const output = await options.runner(
         buildAgentRunInput(
           currentTask,
@@ -1026,6 +1079,82 @@ async function runPhase(
       options,
     ),
   };
+}
+
+async function resolveAndPersistEffort(
+  task: TaskEntry,
+  phase: Phase,
+  options: WorkflowOptions,
+): Promise<TaskEntry> {
+  const config = options.config ?? DEFAULT_CONFIG;
+  const provider = effectiveProviderForPhase(task, phase, config);
+  const effort = effectiveEffortForPhase(task, phase, config);
+  const timeoutMs = resolveRunnerTimeout(config, phase, {
+    phase,
+    provider,
+    effort,
+    downgraded_from: null,
+    timeout_ms: timeoutMsForEffort(effort),
+  });
+  const result = resolveEffort({
+    phase,
+    provider,
+    effort,
+    model: task.runtime.resolved_model[phase] ?? config.phases[phase].model,
+    unsupported_policy: config.effort.unsupported_policy,
+    timeout_ms: timeoutMs,
+  });
+  if (!result.ok) {
+    return failWorkflow(task, phase, result.failure.code, result.failure.message, options).task;
+  }
+  const currentSession = task.provider_sessions[phase];
+  if (
+    resolvedEffortEquals(task.runtime.resolved_effort, result.resolved) &&
+    currentSession.last_provider === provider
+  ) {
+    return task;
+  }
+
+  const next = cloneTask(task);
+  next.runtime.resolved_effort = result.resolved;
+  next.provider_sessions[phase].last_provider = provider;
+  await persistTask(next, options);
+  if (result.audit !== null) {
+    options.auditOperation?.(result.audit.kind, {
+      phase: result.audit.phase,
+      provider: result.audit.provider,
+      model: result.audit.model,
+      from: result.audit.from,
+      to: result.audit.to,
+    });
+  }
+  return next;
+}
+
+function resolvedEffortEquals(
+  actual: TaskEntry["runtime"]["resolved_effort"],
+  expected: NonNullable<TaskEntry["runtime"]["resolved_effort"]>,
+): boolean {
+  return (
+    actual !== null &&
+    actual.phase === expected.phase &&
+    actual.provider === expected.provider &&
+    actual.effort === expected.effort &&
+    actual.downgraded_from === expected.downgraded_from &&
+    actual.timeout_ms === expected.timeout_ms
+  );
+}
+
+function timeoutMsForEffort(effort: EffortLevel): number {
+  switch (effort) {
+    case "low":
+      return 1_200_000;
+    case "high":
+      return 3_600_000;
+    case "auto":
+    case "medium":
+      return 1_800_000;
+  }
 }
 
 function handleNonCompletedOutput(
@@ -1102,10 +1231,11 @@ function failWorkflow(
   message: string,
   options: WorkflowOptions,
 ): WorkflowResult {
+  const sanitizedMessage = sanitizeWorkflowString(message, options);
   return {
     task: transitionTask(task, {
       type: "fail",
-      failure: makeFailure({ phase, code, message, ts: options.now?.() }),
+      failure: makeFailure({ phase, code, message: sanitizedMessage, ts: options.now?.() }),
     }),
   };
 }
@@ -1117,9 +1247,17 @@ function pauseWorkflow(
   message: string,
   options: WorkflowOptions,
 ): TaskEntry {
+  const sanitizedMessage = sanitizeWorkflowString(message, options);
   return transitionTask(task, {
     type: "pause",
-    failure: makeFailure({ phase, code, message, ts: options.now?.() }),
+    failure: makeFailure({ phase, code, message: sanitizedMessage, ts: options.now?.() }),
+  });
+}
+
+function sanitizeWorkflowString(value: string, options: WorkflowOptions): string {
+  return sanitizeLogString(value, options.config ?? DEFAULT_CONFIG, false, {
+    homeDir: options.homeDir ?? process.env.HOME,
+    repoRoot: options.repoRoot,
   });
 }
 
@@ -1159,6 +1297,33 @@ function validateSupervisorDecision(
     errors.push("fix_prompt is required when accept_ids is non-empty");
   }
   return errors;
+}
+
+function sanitizeReviewFindings(
+  findings: ReviewFinding[],
+  options: WorkflowOptions,
+): ReviewFinding[] {
+  return findings.map((finding) => ({
+    ...finding,
+    file: sanitizeWorkflowString(finding.file, options),
+    title: sanitizeWorkflowString(finding.title, options),
+    rationale: sanitizeWorkflowString(finding.rationale, options),
+    suggested_fix: sanitizeWorkflowString(finding.suggested_fix, options),
+  }));
+}
+
+function sanitizeSuperviseData(data: SuperviseData, options: WorkflowOptions): SuperviseData {
+  return {
+    ...data,
+    reject_reasons: Object.fromEntries(
+      Object.entries(data.reject_reasons).map(([id, reason]) => [
+        id,
+        sanitizeWorkflowString(reason, options),
+      ]),
+    ),
+    fix_prompt:
+      data.fix_prompt === undefined ? undefined : sanitizeWorkflowString(data.fix_prompt, options),
+  };
 }
 
 function upsertRejectHistory(

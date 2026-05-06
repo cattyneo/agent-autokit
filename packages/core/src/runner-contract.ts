@@ -2,12 +2,21 @@ import { posix } from "node:path";
 
 import { parseDocument } from "yaml";
 
+import type { ClaudePermission, CodexPermission, PermissionProfile } from "./capability.js";
+
 import {
   type PromptContractId,
   type Provider,
   phasePromptContracts,
   type RuntimePhase,
 } from "./config.js";
+import type { ResolvedEffort } from "./effort-resolver.js";
+
+export type EffectivePermission = {
+  permission_profile: PermissionProfile;
+  claude?: ClaudePermission;
+  codex?: CodexPermission;
+};
 
 export type AgentRunStatus = "completed" | "need_input" | "paused" | "rate_limited" | "failed";
 
@@ -18,6 +27,8 @@ export type AgentRunInput = {
   prompt: string;
   promptContract: PromptContractId;
   model: "auto" | string;
+  effort?: ResolvedEffort;
+  effective_permission?: EffectivePermission;
   resume?: {
     claudeSessionId?: string;
     codexSessionId?: string;

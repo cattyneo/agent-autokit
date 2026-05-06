@@ -81,6 +81,21 @@ describe("planning workflow", () => {
       ],
     );
     assert.equal(calls[0].permissions.workspaceScope, "repo");
+    assert.deepEqual(calls[0].effort, {
+      phase: "plan",
+      provider: "claude",
+      effort: "medium",
+      downgraded_from: null,
+      timeout_ms: 1_800_000,
+    });
+    assert.deepEqual(calls[0].effective_permission, {
+      permission_profile: "readonly_repo",
+      claude: {
+        allowed_tools: ["Read", "Grep", "Glob"],
+        denied_tools: ["Bash", "Edit", "Write", "WebFetch", "WebSearch"],
+        hook: "readonly_path_guard",
+      },
+    });
     assert.equal(result.task.provider_sessions.plan.claude_session_id, "plan-session");
     assert.equal(result.task.provider_sessions.plan_verify.codex_session_id, "verify-session-2");
   });
@@ -202,6 +217,62 @@ describe("planning workflow", () => {
 });
 
 describe("implement and fix workflow", () => {
+  it("fails or downgrades unsupported effort at workflow boundary", async () => {
+    const unsupportedConfig = parseConfig({
+      effort: { unsupported_policy: "fail" },
+      phases: { implement: { provider: "codex", effort: "high", model: "gpt-5.4-mini" } },
+    });
+    const failed = await runImplementWorkflow(implementReadyTask(), {
+      runner: queueRunner([], []),
+      git: mockGitDeps(["base-sha"], []),
+      repoRoot: "/repo/root",
+      worktreeRoot: "/repo/root/.autokit/worktrees/issue-13",
+      homeDir: "/Users/tester",
+      config: unsupportedConfig,
+      now: () => "2026-05-05T10:00:00+09:00",
+    });
+
+    assert.equal(failed.task.state, "failed");
+    assert.equal(failed.task.failure?.code, "effort_unsupported");
+    assert.match(
+      failed.task.failure?.message ?? "",
+      /effort=high provider=codex model=gpt-5.4-mini/,
+    );
+    assert.doesNotMatch(failed.task.failure?.message ?? "", /\/Users\/tester|\/repo\/root/);
+
+    const calls: AgentRunInput[] = [];
+    const audits: string[] = [];
+    const downgraded = await runImplementWorkflow(implementReadyTask(), {
+      runner: queueRunner(calls, [
+        completed("codex", {
+          changed_files: [],
+          tests_run: [],
+          docs_updated: false,
+          notes: "ok",
+        }),
+      ]),
+      git: mockGitDeps(["base-sha", "agent-sha"], ["commit-sha"], {
+        prNumber: 51,
+        prHeadSha: "remote-head",
+      }),
+      repoRoot: "/repo/root",
+      worktreeRoot: "/repo/root/.autokit/worktrees/issue-13",
+      config: parseConfig({
+        effort: { unsupported_policy: "downgrade" },
+        phases: { implement: { provider: "codex", effort: "high", model: "gpt-5.4-mini" } },
+        runner_timeout: { implement_ms: 900_000 },
+      }),
+      auditOperation: (kind, fields) => audits.push(`${kind}:${fields.from}->${fields.to}`),
+    });
+
+    assert.equal(downgraded.task.runtime.resolved_effort?.effort, "medium");
+    assert.equal(downgraded.task.runtime.resolved_effort?.downgraded_from, "high");
+    assert.equal(calls[0].effort?.effort, "medium");
+    assert.equal(calls[0].effort?.timeout_ms, 900_000);
+    assert.equal(calls[0].timeoutMs, 900_000);
+    assert.deepEqual(audits, ["effort_downgrade:high->medium"]);
+  });
+
   it("runs implement through ordered checkpoints and opens a ready PR", async () => {
     const calls: AgentRunInput[] = [];
     const persisted: string[] = [];
@@ -277,6 +348,7 @@ describe("implement and fix workflow", () => {
     ]);
     assert.deepEqual(persisted, [
       "before=base-sha agent=null commit=null push=null pr=null head=null after=null",
+      "before=base-sha agent=null commit=null push=null pr=null head=null after=null",
       "before=base-sha agent=agent-sha commit=null push=null pr=null head=null after=null",
       "before=base-sha agent=agent-sha commit=commit-sha push=null pr=null head=null after=null",
       "before=base-sha agent=agent-sha commit=commit-sha push=commit-sha pr=null head=null after=null",
@@ -331,6 +403,48 @@ describe("implement and fix workflow", () => {
     });
 
     assert.deepEqual(calls[0].resume, { codexSessionId: "codex-implement-session" });
+  });
+
+  it("resumes reverse-provider sessions using last_provider and preserves opposite session ids", async () => {
+    const calls: AgentRunInput[] = [];
+    const task = {
+      ...baseTask(),
+      state: "planning" as const,
+      runtime_phase: "plan" as const,
+      git: {
+        ...baseTask().git,
+        checkpoints: {
+          ...baseTask().git.checkpoints,
+          plan: { ...baseTask().git.checkpoints.plan, before_sha: "before" },
+        },
+      },
+      provider_sessions: {
+        ...baseTask().provider_sessions,
+        plan: {
+          claude_session_id: "claude-plan-old",
+          codex_session_id: "codex-plan",
+          last_provider: "codex" as const,
+        },
+      },
+    };
+
+    const result = await runPlanningWorkflow(task, {
+      runner: queueRunner(calls, [
+        completed(
+          "codex",
+          { plan_markdown: "## Plan", assumptions: [], risks: [] },
+          "codex-plan-new",
+        ),
+        completed("codex", { result: "ok", findings: [] }),
+      ]),
+      repoRoot: "/repo",
+    });
+
+    assert.equal(calls[0].provider, "codex");
+    assert.deepEqual(calls[0].resume, { codexSessionId: "codex-plan" });
+    assert.equal(result.task.provider_sessions.plan.codex_session_id, "codex-plan-new");
+    assert.equal(result.task.provider_sessions.plan.claude_session_id, "claude-plan-old");
+    assert.equal(result.task.provider_sessions.plan.last_provider, "codex");
   });
 
   it("continues implement from commit_done without rerunning the agent", async () => {
@@ -1201,6 +1315,51 @@ describe("review and supervise workflow", () => {
     assert.match(result.task.failure?.message ?? "", /known rejected/);
   });
 
+  it("redacts persisted review findings and supervisor decisions", async () => {
+    const finding = reviewFinding({
+      file: "/repo/root/packages/core/src/index.ts",
+      title: `Token ghp_${"a".repeat(24)}`,
+      rationale: "/Users/tester/.codex/auth.json is mentioned.",
+      suggested_fix: "/repo/root/.env:4 SECRET=raw-secret",
+    });
+    const id = computeFindingId({
+      ...finding,
+      file: "<repo>/packages/core/src/index.ts",
+      title: "Token <REDACTED>",
+    });
+
+    const result = await runReviewSuperviseWorkflow(reviewingTask(), {
+      runner: queueRunner(
+        [],
+        [
+          completed("claude", { findings: [finding] }),
+          completed("claude", {
+            accept_ids: [],
+            reject_ids: [id],
+            reject_reasons: {
+              [id]: `reject sk-${"b".repeat(24)} at /Users/tester/.codex/auth.json`,
+            },
+          }),
+        ],
+      ),
+      repoRoot: "/repo/root",
+      worktreeRoot: "/repo/root/.autokit/worktrees/issue-13",
+      homeDir: "/Users/tester",
+    });
+
+    assert.equal(result.task.state, "ci_waiting");
+    assert.equal(result.findings[0].file, "<repo>/packages/core/src/index.ts");
+    assert.equal(result.findings[0].title, "token <redacted>");
+    assert.doesNotMatch(result.findings[0].rationale, /\/Users\/tester|ghp_|sk-|raw-secret/);
+    assert.match(result.findings[0].rationale, /~\/\.codex\/auth\.json/);
+    assert.equal(result.findings[0].suggested_fix, "<repo>/.env:4 SECRET=<REDACTED>");
+    assert.equal(
+      result.task.review_findings[0].reject_reasons[id],
+      "reject <REDACTED> at ~/.codex/auth.json",
+    );
+    assert.equal(result.task.reject_history[0].reason, "reject <REDACTED> at ~/.codex/auth.json");
+  });
+
   it("uses deterministic finding ids from normalized file and title", () => {
     const finding = reviewFinding({
       file: "./packages\\core/src/index.ts",
@@ -1227,6 +1386,18 @@ function baseTask() {
     labels: ["agent-ready"],
     now: "2026-05-05T09:00:00+09:00",
   });
+}
+
+function implementReadyTask(): TaskEntry {
+  const task = baseTask();
+  return {
+    ...task,
+    state: "planned" as const,
+    runtime_phase: null,
+    branch: "autokit/issue-13",
+    worktree_path: ".autokit/worktrees/issue-13",
+    plan: { ...task.plan, state: "verified" as const },
+  };
 }
 
 function reviewingTask() {

@@ -7,6 +7,7 @@ import {
   capabilityProviders,
   DEFAULT_CONFIG,
   parseConfigYaml,
+  resolveRunnerTimeout,
   runtimePhases,
 } from "./index.ts";
 
@@ -20,14 +21,20 @@ describe("core config schema", () => {
     assert.equal(config.auto_merge, true);
     assert.equal(config.runtime.max_untrusted_input_kb, 256);
     assert.equal(config.phases.plan.provider, "claude");
+    assert.equal(config.phases.plan.effort, undefined);
     assert.equal(config.phases.plan_verify.provider, "codex");
     assert.equal(config.phases.plan_verify.prompt_contract, "plan-verify");
+    assert.equal(config.effort.default, "medium");
+    assert.equal(config.effort.unsupported_policy, "fail");
     assert.equal(config.permissions.claude.auto_mode, "optional");
     assert.equal(config.permissions.codex.allow_network, false);
     assert.equal(config.permissions.codex.home_isolation, "shared");
-    assert.equal(config.runner_timeout.default_ms, 600_000);
+    assert.equal(config.runner_timeout.plan_ms, undefined);
+    assert.equal(config.runner_timeout.default_ms, undefined);
     assert.equal(config.runner_timeout.plan_verify_ms, undefined);
     assert.equal(config.runner_timeout.default_idle_ms, 300_000);
+    assert.equal(resolveRunnerTimeout(config, "plan"), 600_000);
+    assert.equal(resolveRunnerTimeout(config, "plan_verify"), 600_000);
     assert.equal(config.init.backup_blacklist.includes(".autokit/audit-hmac-key"), true);
   });
 
@@ -57,10 +64,14 @@ label_filter:
   - agent-ready
 runtime:
   max_untrusted_input_kb: 128
+effort:
+  default: low
+  unsupported_policy: downgrade
 phases:
   plan:
     provider: claude
     model: claude-custom
+    effort: high
     prompt_contract: plan
   plan_verify:
     provider: codex
@@ -127,9 +138,14 @@ init:
     assert.equal(config.ci.timeout_action, "failed");
     assert.deepEqual(config.label_filter, ["agent-ready"]);
     assert.equal(config.phases.plan.model, "claude-custom");
+    assert.equal(config.phases.plan.effort, "high");
+    assert.equal(config.effort.default, "low");
+    assert.equal(config.effort.unsupported_policy, "downgrade");
     assert.equal(config.permissions.claude.workspace_scope, "repo");
     assert.equal(config.permissions.codex.allow_network, true);
     assert.equal(config.runner_timeout.plan_verify_ms, 2);
+    assert.equal(resolveRunnerTimeout(config, "plan"), 1);
+    assert.equal(resolveRunnerTimeout(config, "supervise"), 6);
     assert.equal(config.logging.level, "debug");
     assert.deepEqual(config.init.backup_blacklist, [".custom-secret"]);
   });
@@ -168,6 +184,73 @@ runtime:
 extra: true
 `,
       "runtime.max_untrusted_input_kb",
+    );
+  });
+
+  it("accepts only the Phase 1 effort levels", () => {
+    for (const effort of ["auto", "low", "medium", "high"] as const) {
+      const config = parseConfigYaml(`
+version: 1
+effort:
+  default: ${effort}
+phases:
+  review:
+    effort: ${effort}
+`);
+
+      assert.equal(config.effort.default, effort);
+      assert.equal(config.phases.review.effort, effort);
+    }
+
+    assertConfigError(
+      `
+version: 1
+effort:
+  default: max
+`,
+      "effort.default",
+    );
+    assertConfigError(
+      `
+version: 1
+phases:
+  implement:
+    effort: xhigh
+`,
+      "phases.implement.effort",
+    );
+  });
+
+  it("resolves phase timeout as a number when phase timeouts are omitted", () => {
+    const config = parseConfigYaml(`
+version: 1
+runner_timeout:
+  default_ms: 1234
+`);
+
+    for (const phase of runtimePhases) {
+      assert.equal(typeof resolveRunnerTimeout(config, phase), "number");
+    }
+    assert.equal(resolveRunnerTimeout(config, "plan"), 1234);
+    assert.equal(
+      resolveRunnerTimeout(config, "plan", {
+        phase: "plan",
+        provider: "claude",
+        effort: "high",
+        downgraded_from: null,
+        timeout_ms: 4321,
+      }),
+      4321,
+    );
+    assert.equal(
+      resolveRunnerTimeout(parseConfigYaml("version: 1\n"), "plan", {
+        phase: "implement",
+        provider: "codex",
+        effort: "high",
+        downgraded_from: null,
+        timeout_ms: 4321,
+      }),
+      600_000,
     );
   });
 

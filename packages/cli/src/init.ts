@@ -21,15 +21,12 @@ import {
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_CONFIG } from "@cattyneo/autokit-core";
+import { DEFAULT_CONFIG, serializeConfigYaml } from "@cattyneo/autokit-core";
 
 export const INIT_MARKER_START = "<!-- autokit:init:start -->";
 export const INIT_MARKER_END = "<!-- autokit:init:end -->";
 
-const DEFAULT_CONFIG_YAML = `version: 1
-parallel: 1
-auto_merge: true
-`;
+const DEFAULT_CONFIG_YAML = serializeConfigYaml();
 
 const DEFAULT_TASKS_YAML = `version: 1
 generated_at: ""

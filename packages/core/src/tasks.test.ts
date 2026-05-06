@@ -1,13 +1,24 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { parse, stringify } from "yaml";
 
 import {
   createTaskEntry,
   loadTasksFile,
+  type TaskEntry,
   TaskFileParseError,
+  taskAgentPhases,
   writeTasksFileAtomic,
 } from "./tasks.ts";
 
@@ -27,10 +38,244 @@ describe("core tasks file", () => {
     assert.equal(task.plan.state, "pending");
     assert.equal(task.git.checkpoints.implement.pr_created, null);
     assert.equal(task.provider_sessions.fix.codex_session_id, null);
+    assert.equal(task.provider_sessions.fix.claude_session_id, null);
+    assert.equal(task.provider_sessions.fix.last_provider, null);
     assert.equal(task.runtime.resolved_model.review, null);
+    assert.equal(task.runtime.resolved_effort, null);
+    assert.equal(task.runtime.phase_self_correct_done, null);
+    assert.equal(task.runtime.phase_override, null);
     assert.deepEqual(task.review_findings, []);
     assert.equal(task.cleaning_progress.worktree_remove_attempts, 0);
     assert.deepEqual(task.cached.labels_at_add, ["agent-ready"]);
+  });
+
+  it("round-trips new runtime fields and provider session shape", () => {
+    const root = makeTempDir();
+    const path = join(root, "tasks.yaml");
+    const task = createTaskEntry({
+      issue: 88,
+      slug: "taskentry-runtime",
+      title: "TaskEntry runtime",
+      labels: [],
+      now: "2026-05-07T10:00:00+09:00",
+    });
+    task.provider_sessions.plan = {
+      claude_session_id: "claude-plan",
+      codex_session_id: "codex-plan",
+      last_provider: "codex",
+    };
+    task.provider_sessions.implement = {
+      claude_session_id: "claude-implement",
+      codex_session_id: "codex-implement",
+      last_provider: "claude",
+    };
+    task.runtime.resolved_effort = {
+      phase: "implement",
+      provider: "codex",
+      effort: "high",
+      downgraded_from: null,
+      timeout_ms: 3_600_000,
+    };
+    task.runtime.phase_self_correct_done = false;
+    task.runtime.phase_override = {
+      phase: "review",
+      provider: "claude",
+      effort: "medium",
+      expires_at_run_id: "run-1",
+    };
+
+    writeTasksFileAtomic(path, {
+      version: 1,
+      generated_at: "2026-05-07T10:00:00+09:00",
+      tasks: [task],
+    });
+
+    const loaded = loadTasksFile(path).tasks[0];
+    assert.deepEqual(loaded.provider_sessions.plan, {
+      claude_session_id: "claude-plan",
+      codex_session_id: "codex-plan",
+      last_provider: "codex",
+    });
+    assert.deepEqual(loaded.provider_sessions.implement, {
+      claude_session_id: "claude-implement",
+      codex_session_id: "codex-implement",
+      last_provider: "claude",
+    });
+    assert.deepEqual(loaded.runtime.resolved_effort, {
+      phase: "implement",
+      provider: "codex",
+      effort: "high",
+      downgraded_from: null,
+      timeout_ms: 3_600_000,
+    });
+    assert.equal(loaded.runtime.phase_self_correct_done, false);
+    assert.deepEqual(loaded.runtime.phase_override, {
+      phase: "review",
+      provider: "claude",
+      effort: "medium",
+      expires_at_run_id: "run-1",
+    });
+  });
+
+  it("migrates legacy provider session fixtures to the v0.2 shape", () => {
+    const fixtureRoot = join(process.cwd(), "e2e", "fixtures", "legacy-tasks-yaml");
+    const fixtureFiles = readdirSync(fixtureRoot).filter((entry) => entry.endsWith(".yaml"));
+    assert.equal(fixtureFiles.length, taskAgentPhases.length * 2);
+    assert.deepEqual(
+      fixtureFiles.filter((entry) => entry.endsWith("-default-provider.yaml")).sort(),
+      taskAgentPhases.map((phase) => `${phase.replaceAll("_", "-")}-default-provider.yaml`).sort(),
+    );
+    assert.deepEqual(
+      fixtureFiles.filter((entry) => entry.endsWith("-both-sessions.yaml")).sort(),
+      taskAgentPhases.map((phase) => `${phase.replaceAll("_", "-")}-both-sessions.yaml`).sort(),
+    );
+
+    for (const file of fixtureFiles) {
+      const root = makeTempDir();
+      const path = join(root, "tasks.yaml");
+      const fixture = parse(readFileSync(join(fixtureRoot, file), "utf8")) as {
+        phase: (typeof taskAgentPhases)[number];
+        expected_last_provider: "claude" | "codex";
+        provider_sessions: Partial<
+          Record<(typeof taskAgentPhases)[number], Partial<TaskEntry["provider_sessions"]["plan"]>>
+        >;
+      };
+      const legacyTask = parse(
+        stringify(
+          createTaskEntry({
+            issue: 88,
+            slug: file.replace(/\.yaml$/, ""),
+            title: file,
+            labels: [],
+            now: "2026-05-07T10:00:00+09:00",
+          }),
+        ),
+      ) as Record<string, unknown>;
+      const runtime = legacyTask.runtime as Record<string, unknown>;
+      delete runtime.resolved_effort;
+      delete runtime.phase_self_correct_done;
+      delete runtime.phase_override;
+      legacyTask.provider_sessions = fixture.provider_sessions;
+
+      writeFileSync(
+        path,
+        stringify({
+          version: 1,
+          generated_at: "2026-05-07T10:00:00+09:00",
+          tasks: [legacyTask],
+        }),
+        { mode: 0o600 },
+      );
+
+      const loaded = loadTasksFile(path).tasks[0];
+      assert.equal(loaded.runtime.resolved_effort, null, file);
+      assert.equal(loaded.runtime.phase_self_correct_done, null, file);
+      assert.equal(loaded.runtime.phase_override, null, file);
+      assert.equal(
+        loaded.provider_sessions[fixture.phase].last_provider,
+        fixture.expected_last_provider,
+        file,
+      );
+      assert.equal(
+        loaded.provider_sessions[fixture.phase].claude_session_id,
+        fixture.provider_sessions[fixture.phase]?.claude_session_id ?? null,
+        file,
+      );
+      assert.equal(
+        loaded.provider_sessions[fixture.phase].codex_session_id,
+        fixture.provider_sessions[fixture.phase]?.codex_session_id ?? null,
+        file,
+      );
+    }
+  });
+
+  it("migrates legacy provider sessions when runtime additions are missing", () => {
+    const root = makeTempDir();
+    const path = join(root, "tasks.yaml");
+    const legacyTask = parse(
+      stringify(
+        createTaskEntry({
+          issue: 88,
+          slug: "missing-runtime-fields",
+          title: "missing runtime",
+          labels: [],
+          now: "2026-05-07T10:00:00+09:00",
+        }),
+      ),
+    ) as Record<string, unknown>;
+    const runtime = legacyTask.runtime as Record<string, unknown>;
+    delete runtime.resolved_effort;
+    delete runtime.phase_self_correct_done;
+    delete runtime.phase_override;
+    legacyTask.provider_sessions = {
+      plan: { claude_session_id: "claude-plan" },
+      implement: { claude_session_id: "claude-implement", codex_session_id: "codex-implement" },
+    };
+
+    writeFileSync(
+      path,
+      stringify({
+        version: 1,
+        generated_at: "2026-05-07T10:00:00+09:00",
+        tasks: [legacyTask],
+      }),
+      { mode: 0o600 },
+    );
+
+    const loaded = loadTasksFile(path).tasks[0];
+    assert.equal(loaded.runtime.resolved_effort, null);
+    assert.equal(loaded.runtime.phase_self_correct_done, null);
+    assert.equal(loaded.runtime.phase_override, null);
+    assert.deepEqual(loaded.provider_sessions.plan, {
+      claude_session_id: "claude-plan",
+      codex_session_id: null,
+      last_provider: "claude",
+    });
+    assert.deepEqual(loaded.provider_sessions.implement, {
+      claude_session_id: "claude-implement",
+      codex_session_id: "codex-implement",
+      last_provider: "codex",
+    });
+  });
+
+  it("accepts empty legacy sessions and normalizes last_provider to null", () => {
+    const root = makeTempDir();
+    const path = join(root, "tasks.yaml");
+    const task = createTaskEntry({
+      issue: 88,
+      slug: "empty-sessions",
+      title: "empty",
+      labels: [],
+      now: "2026-05-07T10:00:00+09:00",
+    });
+
+    writeFileSync(
+      path,
+      stringify({
+        version: 1,
+        generated_at: "2026-05-07T10:00:00+09:00",
+        tasks: [
+          {
+            ...task,
+            provider_sessions: {
+              plan: { claude_session_id: null },
+              plan_verify: { codex_session_id: null },
+              plan_fix: { claude_session_id: null },
+              implement: { codex_session_id: null },
+              review: null,
+              supervise: { claude_session_id: null },
+              fix: { codex_session_id: null },
+            },
+          },
+        ],
+      }),
+      { mode: 0o600 },
+    );
+
+    const loaded = loadTasksFile(path).tasks[0];
+    for (const phase of taskAgentPhases) {
+      assert.equal(loaded.provider_sessions[phase].last_provider, null);
+    }
   });
 
   it("round-trips supervisor reject reasons in review findings", () => {

@@ -1,4 +1,4 @@
-import { parseDocument } from "yaml";
+import { parseDocument, stringify } from "yaml";
 import * as z from "zod";
 
 import {
@@ -7,6 +7,7 @@ import {
   type Provider,
   validateCapabilitySelection,
 } from "./capability.js";
+import { effortLevels, type ResolvedEffort, unsupportedEffortPolicies } from "./effort-resolver.js";
 
 export const runtimePhases = capabilityPhases;
 
@@ -56,12 +57,24 @@ const positiveInteger = z.int().positive();
 const nonNegativeInteger = z.int().nonnegative();
 const modelNameSchema = z.string().trim().min(1);
 const providerSchema = z.enum(capabilityProviders);
+const effortLevelSchema = z.enum(effortLevels);
+
+const defaultRunnerTimeoutMs = {
+  plan: 600_000,
+  plan_verify: 600_000,
+  plan_fix: 600_000,
+  implement: 1_800_000,
+  review: 600_000,
+  supervise: 600_000,
+  fix: 600_000,
+} as const satisfies Record<RuntimePhase, number>;
 
 function phaseSchema(phase: RuntimePhase) {
   return z
     .strictObject({
       provider: providerSchema.default(defaultPhaseProviders[phase]),
       model: modelNameSchema.default("auto"),
+      effort: effortLevelSchema.optional(),
       prompt_contract: z.literal(phasePromptContracts[phase]).default(phasePromptContracts[phase]),
     })
     .prefault({});
@@ -107,6 +120,12 @@ const configSchema = z
         max_untrusted_input_kb: positiveInteger.default(256),
       })
       .prefault({}),
+    effort: z
+      .strictObject({
+        default: effortLevelSchema.default("medium"),
+        unsupported_policy: z.enum(unsupportedEffortPolicies).default("fail"),
+      })
+      .prefault({}),
     phases: z
       .strictObject({
         plan: phaseSchema("plan"),
@@ -140,14 +159,14 @@ const configSchema = z
       .prefault({}),
     runner_timeout: z
       .strictObject({
-        plan_ms: positiveInteger.default(600_000),
+        plan_ms: positiveInteger.optional(),
         plan_verify_ms: positiveInteger.optional(),
         plan_fix_ms: positiveInteger.optional(),
-        implement_ms: positiveInteger.default(1_800_000),
-        review_ms: positiveInteger.default(600_000),
+        implement_ms: positiveInteger.optional(),
+        review_ms: positiveInteger.optional(),
         supervise_ms: positiveInteger.optional(),
         fix_ms: positiveInteger.optional(),
-        default_ms: positiveInteger.default(600_000),
+        default_ms: positiveInteger.optional(),
         plan_idle_ms: positiveInteger.optional(),
         plan_verify_idle_ms: positiveInteger.optional(),
         plan_fix_idle_ms: positiveInteger.optional(),
@@ -208,6 +227,7 @@ const configSchema = z
 
 export type AutokitConfig = z.output<typeof configSchema>;
 export type PhaseConfig = AutokitConfig["phases"][RuntimePhase];
+export type { EffortLevel, ResolvedEffort, UnsupportedEffortPolicy } from "./effort-resolver.js";
 
 export class ConfigParseError extends Error {
   readonly issues: z.core.$ZodIssue[];
@@ -220,6 +240,40 @@ export class ConfigParseError extends Error {
 }
 
 export const DEFAULT_CONFIG: AutokitConfig = configSchema.parse({});
+
+export function resolveRunnerTimeout(
+  config: AutokitConfig,
+  phase: RuntimePhase,
+  resolvedEffort?: ResolvedEffort | null,
+): number {
+  const explicitTimeout = phaseTimeoutValue(config, phase);
+  if (explicitTimeout !== undefined) {
+    return explicitTimeout;
+  }
+  if (resolvedEffort?.phase === phase) {
+    return resolvedEffort.timeout_ms;
+  }
+  return config.runner_timeout.default_ms ?? defaultRunnerTimeoutMs[phase];
+}
+
+function phaseTimeoutValue(config: AutokitConfig, phase: RuntimePhase): number | undefined {
+  switch (phase) {
+    case "plan":
+      return config.runner_timeout.plan_ms;
+    case "plan_verify":
+      return config.runner_timeout.plan_verify_ms;
+    case "plan_fix":
+      return config.runner_timeout.plan_fix_ms;
+    case "implement":
+      return config.runner_timeout.implement_ms;
+    case "review":
+      return config.runner_timeout.review_ms;
+    case "supervise":
+      return config.runner_timeout.supervise_ms;
+    case "fix":
+      return config.runner_timeout.fix_ms;
+  }
+}
 
 export function parseConfigYaml(source: string): AutokitConfig {
   const document = parseDocument(source, {
@@ -248,4 +302,8 @@ export function parseConfig(value: unknown): AutokitConfig {
     throw new ConfigParseError("Invalid autokit config", result.error.issues);
   }
   return result.data;
+}
+
+export function serializeConfigYaml(config: AutokitConfig = DEFAULT_CONFIG): string {
+  return stringify(config);
 }

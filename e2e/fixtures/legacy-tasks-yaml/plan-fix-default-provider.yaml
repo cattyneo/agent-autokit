@@ -1,0 +1,5 @@
+phase: plan_fix
+expected_last_provider: claude
+provider_sessions:
+  plan_fix:
+    claude_session_id: legacy-plan-fix-claude

@@ -936,35 +936,22 @@ function defaultPrompt(task: TaskEntry, phase: RuntimePhase): string {
 }
 
 function resumeForPhase(task: TaskEntry, phase: RuntimePhase): AgentRunInput["resume"] | undefined {
+  const session = task.provider_sessions[phase];
   switch (phase) {
     case "plan":
-      return task.provider_sessions.plan.claude_session_id
-        ? { claudeSessionId: task.provider_sessions.plan.claude_session_id }
-        : undefined;
+      return session.claude_session_id ? { claudeSessionId: session.claude_session_id } : undefined;
     case "plan_verify":
-      return task.provider_sessions.plan_verify.codex_session_id
-        ? { codexSessionId: task.provider_sessions.plan_verify.codex_session_id }
-        : undefined;
+      return session.codex_session_id ? { codexSessionId: session.codex_session_id } : undefined;
     case "plan_fix":
-      return task.provider_sessions.plan_fix.claude_session_id
-        ? { claudeSessionId: task.provider_sessions.plan_fix.claude_session_id }
-        : undefined;
+      return session.claude_session_id ? { claudeSessionId: session.claude_session_id } : undefined;
     case "review":
-      return task.provider_sessions.review.claude_session_id
-        ? { claudeSessionId: task.provider_sessions.review.claude_session_id }
-        : undefined;
+      return session.claude_session_id ? { claudeSessionId: session.claude_session_id } : undefined;
     case "supervise":
-      return task.provider_sessions.supervise.claude_session_id
-        ? { claudeSessionId: task.provider_sessions.supervise.claude_session_id }
-        : undefined;
+      return session.claude_session_id ? { claudeSessionId: session.claude_session_id } : undefined;
     case "implement":
-      return task.provider_sessions.implement.codex_session_id
-        ? { codexSessionId: task.provider_sessions.implement.codex_session_id }
-        : undefined;
+      return session.codex_session_id ? { codexSessionId: session.codex_session_id } : undefined;
     case "fix":
-      return task.provider_sessions.fix.codex_session_id
-        ? { codexSessionId: task.provider_sessions.fix.codex_session_id }
-        : undefined;
+      return session.codex_session_id ? { codexSessionId: session.codex_session_id } : undefined;
     default:
       return undefined;
   }
@@ -980,23 +967,12 @@ function applyRunnerMetadata(
     next.runtime.resolved_model[phase] = output.resolvedModel;
   }
   if (output.session?.claudeSessionId !== undefined) {
-    if (phase === "plan")
-      next.provider_sessions.plan.claude_session_id = output.session.claudeSessionId;
-    if (phase === "plan_fix")
-      next.provider_sessions.plan_fix.claude_session_id = output.session.claudeSessionId;
-    if (phase === "review")
-      next.provider_sessions.review.claude_session_id = output.session.claudeSessionId;
-    if (phase === "supervise")
-      next.provider_sessions.supervise.claude_session_id = output.session.claudeSessionId;
+    next.provider_sessions[phase].claude_session_id = output.session.claudeSessionId;
+    next.provider_sessions[phase].last_provider = "claude";
   }
-  if (output.session?.codexSessionId !== undefined && phase === "plan_verify") {
-    next.provider_sessions.plan_verify.codex_session_id = output.session.codexSessionId;
-  }
-  if (output.session?.codexSessionId !== undefined && phase === "implement") {
-    next.provider_sessions.implement.codex_session_id = output.session.codexSessionId;
-  }
-  if (output.session?.codexSessionId !== undefined && phase === "fix") {
-    next.provider_sessions.fix.codex_session_id = output.session.codexSessionId;
+  if (output.session?.codexSessionId !== undefined) {
+    next.provider_sessions[phase].codex_session_id = output.session.codexSessionId;
+    next.provider_sessions[phase].last_provider = "codex";
   }
   return next;
 }

@@ -20,6 +20,9 @@ describe("core retry cleanup", () => {
     assert.equal(result.branch, null);
     assert.equal(result.worktree_path, null);
     assert.equal(result.runtime_phase, null);
+    assert.equal(result.runtime.resolved_effort, null);
+    assert.equal(result.runtime.phase_self_correct_done, null);
+    assert.equal(result.runtime.phase_override, null);
     assert.equal(result.retry.cleanup_progress, null);
     assert.deepEqual(calls, [
       "closePr",
@@ -129,5 +132,28 @@ function failedTask(): TaskEntry {
     worktree_path: ".autokit/worktrees/issue-8",
     pr: { number: 28, head_sha: "head", base_sha: "base", created_at: "now" },
     failure: { phase: "review", code: "review_max", message: "max", ts: "now" },
+    runtime: {
+      ...createTaskEntry({
+        issue: 8,
+        slug: "ak-007",
+        title: "AK-007",
+        labels: [],
+        now: "2026-05-04T10:00:00+09:00",
+      }).runtime,
+      resolved_effort: {
+        phase: "review",
+        provider: "claude",
+        effort: "high",
+        downgraded_from: null,
+        timeout_ms: 3_600_000,
+      },
+      phase_self_correct_done: true,
+      phase_override: {
+        phase: "fix",
+        provider: "codex",
+        effort: "medium",
+        expires_at_run_id: "run-1",
+      },
+    },
   };
 }

@@ -15,6 +15,8 @@ import { dirname } from "node:path";
 import { parseDocument, stringify } from "yaml";
 import * as z from "zod";
 
+import { capabilityPhases, capabilityProviders, type Phase, type Provider } from "./capability.js";
+import { effortLevels, type PhaseOverride, type ResolvedEffort } from "./effort-resolver.js";
 import { type FailureCode, failureCodes } from "./failure-codes.ts";
 import type { FailureRecord } from "./logger.ts";
 
@@ -44,11 +46,18 @@ export const taskRuntimePhases = [
   "ci_wait",
   "merge",
 ] as const;
+export const taskAgentPhases = capabilityPhases;
 
 export type TaskState = (typeof taskStates)[number];
 export type TaskRuntimePhase = (typeof taskRuntimePhases)[number];
+export type TaskAgentPhase = (typeof taskAgentPhases)[number];
 export type PlanState = "pending" | "verifying" | "verified" | "failed";
 export type FixOrigin = "review" | "ci";
+export type ProviderSession = {
+  claude_session_id: string | null;
+  codex_session_id: string | null;
+  last_provider: Provider | null;
+};
 
 export type SimpleCheckpoint = {
   before_sha: string | null;
@@ -112,13 +121,13 @@ export type TaskEntry = {
     };
   };
   provider_sessions: {
-    plan: { claude_session_id: string | null };
-    plan_verify: { codex_session_id: string | null };
-    plan_fix: { claude_session_id: string | null };
-    implement: { codex_session_id: string | null };
-    review: { claude_session_id: string | null };
-    supervise: { claude_session_id: string | null };
-    fix: { codex_session_id: string | null };
+    plan: ProviderSession;
+    plan_verify: ProviderSession;
+    plan_fix: ProviderSession;
+    implement: ProviderSession;
+    review: ProviderSession;
+    supervise: ProviderSession;
+    fix: ProviderSession;
   };
   fix: {
     origin: FixOrigin | null;
@@ -133,6 +142,9 @@ export type TaskEntry = {
     last_event_id: string | null;
     interrupted_at: string | null;
     previous_state: TaskState | null;
+    resolved_effort: ResolvedEffort | null;
+    phase_self_correct_done: boolean | null;
+    phase_override: PhaseOverride | null;
     resolved_model: Record<
       "plan" | "plan_verify" | "plan_fix" | "implement" | "review" | "supervise" | "fix",
       string | null
@@ -226,13 +238,13 @@ export function createTaskEntry(input: CreateTaskEntryInput): TaskEntry {
       },
     },
     provider_sessions: {
-      plan: { claude_session_id: null },
-      plan_verify: { codex_session_id: null },
-      plan_fix: { claude_session_id: null },
-      implement: { codex_session_id: null },
-      review: { claude_session_id: null },
-      supervise: { claude_session_id: null },
-      fix: { codex_session_id: null },
+      plan: emptyProviderSession(),
+      plan_verify: emptyProviderSession(),
+      plan_fix: emptyProviderSession(),
+      implement: emptyProviderSession(),
+      review: emptyProviderSession(),
+      supervise: emptyProviderSession(),
+      fix: emptyProviderSession(),
     },
     fix: { origin: null, started_at: null },
     retry: { cleanup_progress: null, started_at: null },
@@ -241,6 +253,9 @@ export function createTaskEntry(input: CreateTaskEntryInput): TaskEntry {
       last_event_id: null,
       interrupted_at: null,
       previous_state: null,
+      resolved_effort: null,
+      phase_self_correct_done: null,
+      phase_override: null,
       resolved_model: {
         plan: null,
         plan_verify: null,
@@ -341,7 +356,22 @@ function emptyImplementCheckpoint(): ImplementCheckpoint {
   };
 }
 
+export function emptyProviderSession(): ProviderSession {
+  return { claude_session_id: null, codex_session_id: null, last_provider: null };
+}
+
 const nullableStringSchema = z.string().nullable();
+const nullableStringPrefaultSchema = z.string().nullable().prefault(null);
+const nullableProviderPrefaultSchema = z.enum(capabilityProviders).nullable().prefault(null);
+const defaultPhaseProviders = {
+  plan: "claude",
+  plan_verify: "codex",
+  plan_fix: "claude",
+  implement: "codex",
+  review: "claude",
+  supervise: "claude",
+  fix: "codex",
+} as const satisfies Record<Phase, Provider>;
 
 const failureRecordSchema = z
   .object({
@@ -386,7 +416,34 @@ const retryCleanupProgressSchema = z
   })
   .strict();
 
-const taskEntrySchema = z
+const providerSessionSchema = z
+  .object({
+    claude_session_id: nullableStringPrefaultSchema,
+    codex_session_id: nullableStringPrefaultSchema,
+    last_provider: nullableProviderPrefaultSchema,
+  })
+  .strict();
+
+const resolvedEffortSchema = z
+  .object({
+    phase: z.enum(capabilityPhases),
+    provider: z.enum(capabilityProviders),
+    effort: z.enum(effortLevels),
+    downgraded_from: z.enum(effortLevels).nullable().prefault(null),
+    timeout_ms: z.number().int().positive(),
+  })
+  .strict();
+
+const phaseOverrideSchema = z
+  .object({
+    phase: z.enum(capabilityPhases),
+    provider: z.enum(capabilityProviders).optional(),
+    effort: z.enum(effortLevels).optional(),
+    expires_at_run_id: z.string().min(1),
+  })
+  .strict();
+
+const taskEntryShapeSchema = z
   .object({
     issue: z.number().int().positive(),
     slug: z.string(),
@@ -432,13 +489,13 @@ const taskEntrySchema = z
       .strict(),
     provider_sessions: z
       .object({
-        plan: z.object({ claude_session_id: nullableStringSchema }).strict(),
-        plan_verify: z.object({ codex_session_id: nullableStringSchema }).strict(),
-        plan_fix: z.object({ claude_session_id: nullableStringSchema }).strict(),
-        implement: z.object({ codex_session_id: nullableStringSchema }).strict(),
-        review: z.object({ claude_session_id: nullableStringSchema }).strict(),
-        supervise: z.object({ claude_session_id: nullableStringSchema }).strict(),
-        fix: z.object({ codex_session_id: nullableStringSchema }).strict(),
+        plan: providerSessionSchema,
+        plan_verify: providerSessionSchema,
+        plan_fix: providerSessionSchema,
+        implement: providerSessionSchema,
+        review: providerSessionSchema,
+        supervise: providerSessionSchema,
+        fix: providerSessionSchema,
       })
       .strict(),
     fix: z
@@ -459,6 +516,9 @@ const taskEntrySchema = z
         last_event_id: nullableStringSchema,
         interrupted_at: nullableStringSchema,
         previous_state: z.enum(taskStates).nullable(),
+        resolved_effort: resolvedEffortSchema.nullable().prefault(null),
+        phase_self_correct_done: z.boolean().nullable().prefault(null),
+        phase_override: phaseOverrideSchema.nullable().prefault(null),
         resolved_model: z
           .object({
             plan: nullableStringSchema,
@@ -514,6 +574,8 @@ const taskEntrySchema = z
   })
   .strict();
 
+const taskEntrySchema = z.preprocess(migrateTaskEntryInput, taskEntryShapeSchema);
+
 const tasksFileSchema = z
   .object({
     version: z.literal(1),
@@ -521,6 +583,53 @@ const tasksFileSchema = z
     tasks: z.array(taskEntrySchema),
   })
   .strict();
+
+function migrateTaskEntryInput(input: unknown): unknown {
+  if (!isRecord(input)) {
+    return input;
+  }
+  return {
+    ...input,
+    provider_sessions: migrateProviderSessions(input.provider_sessions),
+  };
+}
+
+function migrateProviderSessions(input: unknown): unknown {
+  if (!isRecord(input)) {
+    return input;
+  }
+
+  const migrated: Record<string, unknown> = { ...input };
+  for (const phase of taskAgentPhases) {
+    migrated[phase] = migrateProviderSession(phase, input[phase]);
+  }
+  return migrated;
+}
+
+function migrateProviderSession(phase: Phase, input: unknown): ProviderSession {
+  if (!isRecord(input)) {
+    return emptyProviderSession();
+  }
+
+  const claudeSessionId = stringOrNull(input.claude_session_id);
+  const codexSessionId = stringOrNull(input.codex_session_id);
+  const hasSession = claudeSessionId !== null || codexSessionId !== null;
+  const lastProvider = input.last_provider ?? (hasSession ? defaultPhaseProviders[phase] : null);
+
+  return {
+    claude_session_id: claudeSessionId,
+    codex_session_id: codexSessionId,
+    last_provider: lastProvider as Provider | null,
+  };
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function parseTasksFile(source: string): TasksFile {
   const document = parseDocument(source, { prettyErrors: false, stringKeys: true });

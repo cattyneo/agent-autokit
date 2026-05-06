@@ -1,0 +1,6 @@
+phase: review
+expected_last_provider: claude
+provider_sessions:
+  review:
+    claude_session_id: legacy-review-claude
+    codex_session_id: legacy-review-codex

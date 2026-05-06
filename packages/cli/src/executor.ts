@@ -40,6 +40,7 @@ import {
   parseGhMergeability,
   parseGhPrView,
   type RuntimePhase,
+  resolveRunnerTimeout,
   type TaskEntry,
   type TasksFile,
   writeTasksFileAtomic,
@@ -109,7 +110,7 @@ export async function runProductionWorkflow(
         const result = await runPlanningWorkflow(task, {
           config,
           repoRoot: options.cwd,
-          timeoutMsForPhase: (phase) => phaseTimeoutMs(config, phase),
+          timeoutMsForPhase: (phase) => resolveRunnerTimeout(config, phase),
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
@@ -137,7 +138,7 @@ export async function runProductionWorkflow(
           config,
           repoRoot: options.cwd,
           worktreeRoot: worktreePath(options.cwd, task),
-          timeoutMsForPhase: (phase) => phaseTimeoutMs(config, phase),
+          timeoutMsForPhase: (phase) => resolveRunnerTimeout(config, phase),
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
@@ -162,7 +163,7 @@ export async function runProductionWorkflow(
           config,
           repoRoot: options.cwd,
           worktreeRoot: worktreePath(options.cwd, task),
-          timeoutMsForPhase: (phase) => phaseTimeoutMs(config, phase),
+          timeoutMsForPhase: (phase) => resolveRunnerTimeout(config, phase),
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
@@ -188,7 +189,7 @@ export async function runProductionWorkflow(
           config,
           repoRoot: options.cwd,
           worktreeRoot: worktreePath(options.cwd, task),
-          timeoutMsForPhase: (phase) => phaseTimeoutMs(config, phase),
+          timeoutMsForPhase: (phase) => resolveRunnerTimeout(config, phase),
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
@@ -302,25 +303,6 @@ function createWorkflowLogger(
 
 function selectActiveTask(tasks: TaskEntry[]): TaskEntry | undefined {
   return tasks.find((task) => task.state !== "merged" && task.state !== "failed");
-}
-
-function phaseTimeoutMs(config: AutokitConfig, phase: RuntimePhase): number {
-  switch (phase) {
-    case "plan":
-      return config.runner_timeout.plan_ms;
-    case "plan_verify":
-      return config.runner_timeout.plan_verify_ms ?? config.runner_timeout.default_ms;
-    case "plan_fix":
-      return config.runner_timeout.plan_fix_ms ?? config.runner_timeout.default_ms;
-    case "implement":
-      return config.runner_timeout.implement_ms;
-    case "review":
-      return config.runner_timeout.review_ms;
-    case "supervise":
-      return config.runner_timeout.supervise_ms ?? config.runner_timeout.default_ms;
-    case "fix":
-      return config.runner_timeout.fix_ms ?? config.runner_timeout.default_ms;
-  }
 }
 
 function isTerminalOrWaiting(task: TaskEntry): boolean {

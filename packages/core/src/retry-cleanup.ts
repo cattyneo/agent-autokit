@@ -1,5 +1,10 @@
 import { transitionTask } from "./state-machine.ts";
-import { cloneTask, type RetryCleanupProgress, type TaskEntry } from "./tasks.ts";
+import {
+  cloneTask,
+  emptyProviderSession,
+  type RetryCleanupProgress,
+  type TaskEntry,
+} from "./tasks.ts";
 
 export type RetryCleanupDeps = {
   closePr?: (task: TaskEntry) => void;
@@ -146,13 +151,13 @@ function pauseQueueCorruption(task: TaskEntry, error: unknown): TaskEntry {
 
 function clearRetryFields(task: TaskEntry): void {
   task.provider_sessions = {
-    plan: { claude_session_id: null },
-    plan_verify: { codex_session_id: null },
-    plan_fix: { claude_session_id: null },
-    implement: { codex_session_id: null },
-    review: { claude_session_id: null },
-    supervise: { claude_session_id: null },
-    fix: { codex_session_id: null },
+    plan: emptyProviderSession(),
+    plan_verify: emptyProviderSession(),
+    plan_fix: emptyProviderSession(),
+    implement: emptyProviderSession(),
+    review: emptyProviderSession(),
+    supervise: emptyProviderSession(),
+    fix: emptyProviderSession(),
   };
   task.git.base_sha = null;
   for (const checkpoint of Object.values(task.git.checkpoints)) {
@@ -172,6 +177,9 @@ function clearRetryFields(task: TaskEntry): void {
   task.runtime.previous_state = null;
   task.runtime.interrupted_at = null;
   task.runtime.last_event_id = null;
+  task.runtime.resolved_effort = null;
+  task.runtime.phase_self_correct_done = null;
+  task.runtime.phase_override = null;
   for (const phase of Object.keys(task.runtime.resolved_model) as Array<
     keyof typeof task.runtime.resolved_model
   >) {

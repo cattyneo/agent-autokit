@@ -1,6 +1,19 @@
 import { transitionTask } from "./state-machine.ts";
 import { cloneTask, type TaskEntry } from "./tasks.ts";
 
+const defaultProviderSessionKeys = {
+  plan: "claude_session_id",
+  plan_verify: "codex_session_id",
+  plan_fix: "claude_session_id",
+  implement: "codex_session_id",
+  review: "claude_session_id",
+  supervise: "claude_session_id",
+  fix: "codex_session_id",
+} as const satisfies Record<
+  Exclude<NonNullable<TaskEntry["runtime_phase"]>, "ci_wait" | "merge">,
+  "claude_session_id" | "codex_session_id"
+>;
+
 export type PullRequestObservation = {
   state: "OPEN" | "MERGED" | "CLOSED";
   merged: boolean;
@@ -311,7 +324,7 @@ function hasProviderSession(
   phase: Exclude<NonNullable<TaskEntry["runtime_phase"]>, "ci_wait" | "merge">,
 ): boolean {
   const session = task.provider_sessions[phase];
-  return Object.values(session).some((value) => value !== null);
+  return session[defaultProviderSessionKeys[phase]] !== null;
 }
 
 function failure(

@@ -1,0 +1,6 @@
+phase: plan_verify
+expected_last_provider: codex
+provider_sessions:
+  plan_verify:
+    claude_session_id: legacy-plan-verify-claude
+    codex_session_id: legacy-plan-verify-codex

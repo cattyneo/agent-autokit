@@ -15,8 +15,6 @@ export {
   capabilityProviders,
   derive_claude_perm,
   derive_codex_perm,
-  deriveClaudePerm,
-  deriveCodexPerm,
   isCapabilityPhase,
   isCapabilityProvider,
   validateCapabilitySelection,

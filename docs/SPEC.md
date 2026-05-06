@@ -124,7 +124,7 @@
 
 `ci_wait` / `merge` は autokit core が gh API 呼出と状態判定のみ実施するため runner 入力対象外。
 
-v0.2.0 では上表の Provider 固定割当を `packages/core/src/capability.ts` の capability table 由来へ移行する。`ci_wait` / `merge` は引き続き core-only とし、provider / permission profile の設定対象外にする。
+v0.2.0 では上表の Provider 固定割当を `packages/core/src/capability.ts` の capability table 由来へ移行する。Issue #87 では core 側の SoT を追加し、workflow / runner 側の消費は後続 Issue で実装する。`ci_wait` / `merge` は引き続き core-only とし、provider / permission profile の設定対象外にする。
 
 ### 2.3 ランタイム前提
 

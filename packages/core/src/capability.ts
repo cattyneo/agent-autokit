@@ -85,9 +85,6 @@ export function derive_codex_perm(phase: Phase): CodexPermission {
   };
 }
 
-export const deriveClaudePerm = derive_claude_perm;
-export const deriveCodexPerm = derive_codex_perm;
-
 export function validateCapabilitySelection(input: {
   phase: unknown;
   provider: unknown;
@@ -114,7 +111,7 @@ export function isCapabilityProvider(value: unknown): value is Provider {
 }
 
 function permissionProfileForPhase(phase: Phase): PermissionProfile {
-  return phasePermissionProfiles[phase];
+  return phasePermissionProfiles[validatePhase(phase)];
 }
 
 function validatePhase(value: unknown): Phase {

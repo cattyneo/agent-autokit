@@ -4,7 +4,7 @@
 Add the v0.2 core-owned capability table and validation entry point for all agent phases/providers without changing runner consumption yet.
 
 ## Success Criteria
-- `@cattyneo/autokit-core` exports `capabilities`, `deriveClaudePerm`, `deriveCodexPerm`, and validation helpers.
+- `@cattyneo/autokit-core` exports `capabilities`, `derive_claude_perm`, `derive_codex_perm`, and validation helpers.
 - The table contains exactly 14 rows: 7 `agent_phase` values x 2 providers, excluding `ci_wait` and `merge`.
 - Runtime validation rejects unknown phase/provider values and provider assignment for `ci_wait` / `merge`.
 - `docs/SPEC.md` §2.2 notes that v0.2 migrates provider assignment to the capability table.

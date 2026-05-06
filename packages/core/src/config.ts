@@ -1,7 +1,12 @@
 import { parseDocument } from "yaml";
 import * as z from "zod";
 
-import { capabilityPhases, type Provider, validateCapabilitySelection } from "./capability.js";
+import {
+  capabilityPhases,
+  capabilityProviders,
+  type Provider,
+  validateCapabilitySelection,
+} from "./capability.js";
 
 export const runtimePhases = capabilityPhases;
 
@@ -50,7 +55,7 @@ const defaultRedactPatterns = ["ghp_[A-Za-z0-9]{20,}", "sk-[A-Za-z0-9]{20,}"];
 const positiveInteger = z.int().positive();
 const nonNegativeInteger = z.int().nonnegative();
 const modelNameSchema = z.string().trim().min(1);
-const providerSchema = z.enum(["claude", "codex"]);
+const providerSchema = z.enum(capabilityProviders);
 
 function phaseSchema(phase: RuntimePhase) {
   return z

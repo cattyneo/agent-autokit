@@ -33,6 +33,7 @@
 |---|---|---|
 | `autokit-implement` | 既存 `tdd-workflow` | 本ツールに合わせて調整 (TDD step + autokit prompt_contract への適合) |
 | `autokit-review` | 既存 `general-review` | 本ツールに合わせて調整 (review 軸 + supervisor 連携) |
+| `autokit-question` | (コピー元なし、autokit 固有) | v0.2.0 では `status=need_input` プロトコル定義のみで構造維持。改修対象外 (理由: SPEC §1.4 / §13.1 で AC 既存、prompt_contract と 1:1 結合済) |
 
 > **コピー元バージョン**: PR 内で commit hash を明記し、上流更新時の同期義務を `CONTRIBUTING` に記載
 
@@ -40,14 +41,25 @@
 
 - skills 改修 PR は `runner-visibility.test.ts` fixture で緑
 - skills 改修で `prompt_contract` 構造化出力フィールドの diff が出ないこと (CI で検証)
+- 具体 gate (本書 §2.1 と整合): `codexPromptContractJsonSchema` (codex-runner/src/index.ts:403-429) の **JSON snapshot test** を `runner-contract.test.ts` に追加し、skills / prompts 改修 PR で snapshot diff が出たら fail
 
 ## 2. prompt 品質向上
 
-### 2.1 不変条件
+### 2.1 不変条件 + CI gate
 
 **重要**: prompt-contract structured-output schema は **不変** (SPEC §9.3)。Phase 4 の改善は **自由記述部 (rationale / steps / constraints) のみ**。
 
 「基本形」セクションは参考であり、出力の `## Result / ## Evidence / ## Changes / ## Test results` は既存 prompt-contract の構造化出力フィールドと **mapping 表で対応** (mapping 表は実装 PR で添付)。
+
+**CI gate 具体化** (本書 §1.3 と整合):
+
+| gate | 配置 | 検出対象 |
+|---|---|---|
+| `codexPromptContractJsonSchema` JSON snapshot | `runner-contract.test.ts` 拡張 (新規 test ケース追加) | `data` schema / `question` schema / null union / plan-verify anyOf 等の strict schema diff |
+| prompt md 構造化領域マーカー diff | `runner-visibility.test.ts` 拡張 | `## Result` / `## Evidence` / `## Changes` / `## Test results` セクション存在 + 順序 |
+| `validatePromptContractPayload` 全 phase pass | 既存 `runner-contract.test.ts` (現状そのまま) | runner 受理 payload の意味論検証 |
+
+prompt 改善 PR / skills 改修 PR は **3 つの gate すべてが緑** であること。snapshot diff 検出時は (a) schema 改訂を意図する場合 SPEC §9.3 同 PR 更新、(b) 意図しない場合は prompt 自由記述部に閉じ込めるよう改修して再 commit、いずれかを必須とする。
 
 ### 2.2 設定ポイント
 

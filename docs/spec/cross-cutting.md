@@ -22,11 +22,25 @@
 
 実装 PR で **必ず同 PR 内** に SPEC §4.2.1.1 表 + §10.2.2.2 audit kind リストを追記する (既存 PLAN 重要原則 10 / `scripts/check-trace.sh` 1:1 trace gate 準拠)。本書では追加 `failure.code` の意味のみ列挙し、SPEC.md 自体は本タスクで改変しない。
 
-| code | 発火 state | 発火 phase | 意味 | 関連 §  |
-|---|---|---|---|---|
-| `effort_unsupported` | failed | 全 agent_phase 7種 | `effort` 解決時に `unsupported_policy=fail` でサポート外 (effort, provider, model) 組合せを検出 | Phase 1 §3.3 |
-| `preset_path_traversal` | failed | (preset apply 中) | preset archive 展開時に絶対 path / `..` / symlink を検出 | Phase 3 §3.1 |
-| `preset_blacklist_hit` | failed | (preset apply 中) | preset 展開先 path が blacklist (`.env*` / `.codex/**` / `.claude/credentials*` / `id_rsa*` / `*.pem` / `*.key`) にヒット | Phase 3 §3.1 |
+| code | 発火 state | 発火 phase | 記録先 | 意味 | 関連 §  |
+|---|---|---|---|---|---|
+| `effort_unsupported` | failed | 全 agent_phase 7種 | `tasks.yaml.failure` (issue 単位) | `effort` 解決時に `unsupported_policy=fail` でサポート外 (effort, provider, model) 組合せを検出 | Phase 1 §3.3 |
+| `preset_path_traversal` | (preset apply abort) | — (preset 経路 / state machine 不経由) | **`tasks.yaml` 不書込** + audit log + CLI exit 1 | preset archive 展開時に絶対 path / `..` / symlink / NUL byte / 親 chain symlink を検出 | Phase 3 §3.1 |
+| `preset_blacklist_hit` | (preset apply abort) | — (preset 経路 / state machine 不経由) | **`tasks.yaml` 不書込** + audit log + CLI exit 1 | preset 展開先 path / コンテンツ署名が blacklist (`.env*` / `.codex/**` / `.claude/credentials*` / `id_rsa*` / `*.pem` / `*.key` / SSH PRIVATE KEY 等) にヒット | Phase 3 §3.1.2 |
+
+`preset_*` 系 failure.code は既存 `symlink_invalid` (SPEC §4.2.1.1 「(init abort)」) と同じ semantics で運用する: state machine を経由せず、`tasks.yaml` (issue 単位 task entry) には書込まず、CLI exit 1 + 専用 audit log のみで完結する。SPEC §4.2.1.1 表に追加する際は state 列を「(preset apply abort)」、phase 列を `—` で記述する責務。
+
+#### 1.1 `failure.message` redaction 規約 (新 3 failure.code 共通)
+
+新 3 failure.code は機構上 path / pattern / effort tuple を含むため、`failure.message` / audit details に以下の redaction を **必ず適用**:
+
+- `sanitizeLogString` (SPEC §4.6.2 既存) を必須通過
+- `$HOME` 配下の絶対パスは `~/...` 化
+- repo root 配下は `<repo>/...` 化
+- blacklist hit はカテゴリ表現 (`<blacklist:credentials>` / `<blacklist:env>` / `<blacklist:ssh-key>` / `<content-signature:openssh-private-key>` 等) に置換し、literal pattern / 攻撃者がアクセス試行したファイル名は **非開示**
+- effort tuple `(effort, provider, model)` のみ literal で許容 (機微情報なし)
+
+AC「`failure.message` に `$HOME` 絶対パスが含まれない fixture」「blacklist hit message にカテゴリ表現のみが含まれる fixture」を追加。
 
 **既存 `failure.code` で再利用 (新規追加なし)**:
 
@@ -36,7 +50,7 @@
 | `ci_failure_max` | ci-fix loop 上限到達 | SPEC §4.2.1.1 既存 |
 | `prompt_contract_violation` | self-correction retry 後も契約違反 (`runtime.phase_self_correct_done=true` で 2 回目検出) | SPEC §4.2.1.1 既存 |
 | `phase_attempt_exceeded` | phase ごとの試行上限到達 | SPEC §4.2.1.1 既存 |
-| `lock_host_mismatch` | Phase 2A `autokit serve` lock 衝突時にも転用 (HTTP 409 ↔ CLI exit 75) | SPEC §4.2.1.1 既存 / Phase 2 §1.2 |
+| `lock_host_mismatch` | **CLI 経路のみ** (SPEC §4.2.1.1 既存 = 起動拒否 / exit 1 / `--force-unlock`)。Phase 2A `autokit serve` 経路は **流用しない** — serve は fast-path 409 (`tasks.yaml` 不書込、`failure.code` 不発火、`phase2-serve-dashboard.md` §1.2 / §1.5 参照) で完結 | SPEC §4.2.1.1 既存 / Phase 2 §1.2 |
 
 実装 PR (Phase 1 §7 / Phase 3 §3) で SPEC §4.2.1.1 表 / §10.2.2.2 リストの行追加と `packages/core/src/failure-codes.ts` 配列の追加を同 PR で行う (既存重要原則 10 / `scripts/check-trace.sh` を緑化)。
 
@@ -63,20 +77,29 @@
 
 `scripts/check-trace.sh` は §4.2.1.1 の `failure.code` 列と §10.2.2.2 の `kind` 列の集合一致を機械検査する。実装 PR で **同 3 行を §4.2.1.1 表 + §10.2.2.2 リストの両方** に追加する責務 (PLAN 重要原則 10)。
 
-## 3. 新 `TransitionEvent` (SPEC §5.1 / `state-machine.ts` への追加候補)
+## 3. 新 `TransitionEvent` / state-machine 不変条件との整合
 
-| event | 遷移 | 関連 § |
-|---|---|---|
-| `prompt_contract_self_correct` | active state (`*` 計 9 種) → 同 state (subphase 移行のみ) | Phase 1 §7.2 |
-| `phase_override_started` | active state → 同 state (run 内 override 表記の永続化) | Phase 1 §6 |
-| `phase_override_ended` | active state → 同 state (override expire) | Phase 1 §6 |
+SPEC §5.1 不変条件: **1 transition で state または runtime_phase が必ず変化**。subphase 移行 / runtime field 更新のみで state / runtime_phase が動かないイベントは TransitionEvent 化しない方針 (現行 E01〜E40 全 case が state または runtime_phase を変える)。
 
-state-machine.ts の `TransitionEvent` union に 3 種追加。実装 PR で SPEC §5.1 表に E40 以降の連番を割当てる (現行 E01〜E40 の次番、§5.1.3 復帰先表は不変)。
+本 Phase で導入する 3 イベントはこの不変条件を保つため **TransitionEvent 化しない**:
 
-加えて、既存 **E34 (`prompt_contract_violation`)** の condition 列を同 PR で改訂:
+| イベント名 | 扱い | 配置 | 関連 § |
+|---|---|---|---|
+| `phase_self_correct` | **operational audit kind のみ** (§2.1) + `runtime.phase_self_correct_done` field 更新 | workflows 内 retry orchestrator (`runWithSelfCorrection`、§7 命名 mapping) | Phase 1 §7.3 |
+| `phase_override_started` | **operational audit kind のみ** (§2.1) + `runtime.phase_override` field 更新 | CLI override receiver / state machine 不経由 | Phase 1 §6 |
+| `phase_override_ended` | **operational audit kind のみ** (§2.1) + `runtime.phase_override=null` 復帰 | run 終了 / `expires_at_run_id` 到達検査 | Phase 1 §6 |
+
+### 3.1 既存 E34 condition 改訂 (実装 PR で同 PR 更新)
+
+既存 **E34 (`prompt_contract_violation`)** の condition 列を同 PR で改訂:
 
 - 旧: 「prompt_contract 違反 (`status=need_input` で `default` 欠落 等)」即時 `failed`
-- 新: 「prompt_contract 違反 + `runtime.phase_self_correct_done=true`」で `failed`。`false` 状態の 1 回目違反は新 `prompt_contract_self_correct` 経由で同 phase retry (`phase1-core-cli-runner.md` §7.5)
+- 新: 「prompt_contract 違反 **+** `runtime.phase_self_correct_done=true`」で `failed`
+- `false` 状態の 1 回目違反は **state-machine event 化せず** workflows 内 retry orchestrator (`phase1-core-cli-runner.md` §7.3) で `phase_self_correct_done=false → true` の field 更新 + audit kind `phase_self_correct` 発火で同 phase 内 retry へ進む
+
+### 3.2 採番
+
+state-machine.ts の `TransitionEvent` union に **新規追加なし** (§3 の 3 イベントは TransitionEvent 化しないため)。実装側でやむを得ず TransitionEvent 化が必要になった場合のみ SPEC §5.1 表に **E41 以降** の連番を割当てる (現行最終 = E40 `merged | (終端)`、§5.1.3 復帰先表は不変)。
 
 ## 4. SPEC trace gate 同 PR 更新ルール
 
@@ -102,7 +125,7 @@ state-machine.ts の `TransitionEvent` union に 3 種追加。実装 PR で SPE
 4. runner の phase 固定制約を capability 判定へ置換 (Claude `allowed_tools` / `denied_tools` 動的化、`write_path_guard` hook 新設、Bash allowlist)
 5. Codex runner の effort 反映 (`--reasoning-effort`) と payload schema 共通化 (validate のみ、JsonSchema は provider-specific 維持)
 6. Claude runner の effort profile 変換 (model / max_turns / timeout / prompt policy)
-7. state-machine に新 `TransitionEvent` (`prompt_contract_self_correct` / `phase_override_started/ended`) 追加 + 新 failure.code / audit kind を SPEC §4.2.1.1 / §10.2.2.2 同 PR 更新
+7. state-machine の **既存 E34 condition 改訂** (`runtime.phase_self_correct_done=true` 必須化、§3.1) + 新 failure.code / audit kind を SPEC §4.2.1.1 / §10.2.2.2 同 PR 更新 (state-machine `TransitionEvent` union への新規追加は **なし**、§3.2)
 8. `doctor` に provider / effort / prompt / permission 検証を追加 + CLI override の安全 fail-closed
 9. review-fix / ci-fix loop の E2E テスト追加 (audit kind 列で assert、`fakeGh` 拡張)
 10. logs / diff の sanitize / blacklist hunk 除去

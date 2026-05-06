@@ -78,23 +78,46 @@ apply 時に以下の操作系 audit kind を発火 (`cross-cutting.md` §2.1):
 | `autokit init` | `<repo>/.autokit/.backup/<timestamp>/` (SPEC §4.1 既存 `init.backup_dir`) | init 直後 rollback 必須 / repo 内に閉じる必要あり |
 | `autokit preset apply` | `${XDG_STATE_HOME:-~/.local/state}/autokit/backup/<repo>/<timestamp>/` (本書 §3.3) | repo tree 外で `scripts/check-assets-hygiene.sh` 禁止 glob を素通りさせない |
 
-`init.backup_blacklist` (default: `.claude/credentials*` / `.codex/auth*` / `.claude/state` / `.claude/sessions` / `.codex/credentials*`) は両経路で共有。`init.backup.retention_days` も両経路で共通適用。
+`init.backup_blacklist` (default: `.claude/credentials*` / `.codex/auth*` / `.claude/state` / `.claude/sessions` / `.codex/credentials*`、SPEC §4.1 既存) は両経路で共有。
+
+**`init.backup.retention_days` は本 Phase で新規追加** (現 `config.ts:171-180` `init` block には未定義、`logging.retention_days` (config.ts:165) とは別フィールド)。両経路で共通適用、default `30`。SPEC §4.1 への追加は実装 PR (`cross-cutting.md` §5 step 12 の preset 実装と同 PR) で行う責務。
 
 実装メモ: 既存 `init` の copy ロジック (`packages/cli/src/init.ts:73-163` / rollback `init.ts:443-459`) を `assets-writer.ts` 経由で共通化し、`backup_dir` 引数の差し替えのみで両経路に対応する。
 
 ### 3.1 Path traversal / blacklist 防御
 
-- preset archive エントリ毎に **絶対パス / `..` / symlink 禁止**:
-  - 絶対パス・親ディレクトリ参照・symlink を含むエントリは fail-closed `failure.code=preset_path_traversal`
-- 出力先 realpath が `.agents/` 配下に閉じることを assert
-- deny-list 必須 (apply / export 両方):
-  - `.env*`
-  - `.codex/**`
-  - `.claude/credentials*`
-  - `id_rsa*`
-  - `*.pem`
-  - `*.key`
-  - ヒット時 `failure.code=preset_blacklist_hit` で fail-closed
+#### 3.1.1 Path traversal
+
+archive エントリ毎に以下を fail-closed `failure.code=preset_path_traversal`:
+
+- 絶対パス (POSIX `/...` / Windows `C:\...` / drive-letter)
+- 親ディレクトリ参照 (`..` / `..\\` / Unicode 相当)
+- symlink エントリ (archive 上の symlink type / 解決後 path どちらも禁止)
+- NUL byte (`\0`) 含む path
+- archive entry path / 出力先 destination の **両方を realpath 解決** し `.agents/` 配下に閉じることを assert
+- **親 chain realpath 検査**: `<repo>/.agents/` 自体が symlink でないこと、parent chain (`<repo>/`) も含めて chained-openat (SPEC §11.2.2) で検査。`.agents/` 自体が symlink で repo 外を指している環境では fail-closed
+
+#### 3.1.2 Blacklist (deny-list)
+
+apply / export 両方で必須。**ヒット時 `failure.code=preset_blacklist_hit` で fail-closed**。
+
+| 種別 | 対象 |
+|---|---|
+| パターン (basename + フルパス両方検査) | `.env*` / `.codex/**` / `.claude/credentials*` / `id_rsa*` / `*.pem` / `*.key` |
+| コンテンツ署名 | `BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY` / `ssh-rsa AAAA[A-Za-z0-9+/]{20,}` / `ghp_[A-Za-z0-9]{20,}` / `sk-[A-Za-z0-9]{20,}` / `xox[baprs]-[A-Za-z0-9-]+` / GCP private_key JSON 等 (SPEC §4.6.2.2 token-like pattern と同集合) |
+
+#### 3.1.3 glob 方言
+
+- ライブラリ: `minimatch` 互換、option `{ dot: true, nocase: process.platform === 'darwin' }` (macOS APFS case-insensitive 対応で `.ENV` / `.Env` を捕捉)
+- archive entry path と destination realpath の **両方** を上記 option で照合
+- Linux ext4 / btrfs では case-sensitive 既定だが、glob option は darwin 検出で自動 toggle (Linux 上の disk image を mount した case-insensitive volume での bypass を防止)
+
+#### AC 追加
+
+- [ ] case-folded `.ENV` / `.Env` を含む preset の apply が `failure.code=preset_blacklist_hit`
+- [ ] `prompts/notes.md` 名で SSH PRIVATE KEY を内包する preset の apply がコンテンツ署名検出で fail-closed
+- [ ] `.agents/` 親が repo 外 symlink の環境で preset apply が `failure.code=preset_path_traversal`
+- [ ] NUL byte 含む archive entry が fail-closed
 
 ### 3.2 Atomic apply
 
@@ -104,20 +127,55 @@ apply 時に以下の操作系 audit kind を発火 (`cross-cutting.md` §2.1):
 
 ### 3.3 Backup 配置
 
-- backup 先: `${XDG_STATE_HOME:-~/.local/state}/autokit/backup/<repo>/<timestamp>/` (mode `0700`)
+- backup 先: `${XDG_STATE_HOME:-~/.local/state}/autokit/backup/<repo-id>/<timestamp>/` (mode `0700`)
+- `<repo-id>` の確定形式: `sha256(realpath(repoRoot)).slice(0, 16)` (16 hex chars) — basename collision で別 repo の backup が交差するのを防止
+- 親 chain mode 強制:
+  - `${XDG_STATE_HOME:-~/.local/state}/` … (XDG 既存 mode)
+  - `${XDG_STATE_HOME:-~/.local/state}/autokit/` … `0700`
+  - `${XDG_STATE_HOME:-~/.local/state}/autokit/backup/` … `0700`
+  - `${XDG_STATE_HOME:-~/.local/state}/autokit/backup/<repo-id>/` … `0700`
+  - `${XDG_STATE_HOME:-~/.local/state}/autokit/backup/<repo-id>/<timestamp>/` … `0700`
 - repo tree 内 (例: `.agents/.backup/`) には作らない
   - `scripts/check-assets-hygiene.sh` の禁止 glob を素通りするのを防止 (SPEC §11.6)
   - 現 `init.backup_dir=.autokit/.backup/<timestamp>/` (SPEC §4.1) は **repo tree 内に残るが既に `assets-hygiene` 禁止 glob (`.claude/*` 等) 対象外**。preset apply の backup のみ repo tree 外へ移動する規約とする
-- retention は `init.backup.retention_days` (既存 config) 適用
+- **backup ソース側にも `init.backup_blacklist` 適用**: `.agents/` 内に紛れ込んだ `.env` / `.claude/credentials*` 等は backup 取得時点で除外、XDG dir に流出させない
+- retention は `init.backup.retention_days` 適用 (default `30`、本書 §3 冒頭で新規追加宣言)
+- retention 削除失敗 (例: file system 権限欠落 / disk full) は **fail-closed**: silent skip 禁止、apply 自体を `paused` 風 abort + audit log
+
+#### AC 追加
+
+- [ ] 同 basename / 異なる realpath の 2 repo で backup が交差しない (`<repo-id>` 衝突回避)
+- [ ] 親 chain (`autokit/` / `backup/` / `<repo-id>/` / `<timestamp>/`) が **mode 0700** で生成される
+- [ ] `.agents/` 内に `.env` を含む状態で preset apply 後、XDG backup tree に `.env` が含まれない (backup ソース側 blacklist)
+- [ ] retention 削除失敗時に preset apply が fail-closed する
 
 ### 3.4 Merge patch 規則
 
 `config.yaml` merge:
 
 - **object**: deep merge
-- **array**: preset 値で完全置換 (`label_filter` / `allowed_tools` / `redact_patterns` はユーザー側上書き想定が強いため確実な置換)
+- **array (一般)**: preset 値で完全置換 (例: `label_filter` / `allowed_tools` はユーザー側上書き想定が強いため確実な置換)
 - 明示 `null`: default 復帰
 - `prompts/` / `skills/` / `agents/` のファイルは **ファイル単位置換 + backup**。部分 merge しない
+
+#### 3.4.1 Protected array (preset 単独で減らせない安全関連 array)
+
+以下の array は **preset 単独で完全置換できない** (silent な防御無効化を防止):
+
+| field | 防御責務 | merge ポリシー |
+|---|---|---|
+| `logging.redact_patterns` | log redaction (SPEC §4.6.2.2 + §10.2 既存) | **baseline + preset の union** のみ。preset 単独で短くできない (要素削除には `--allow-protected-replace` flag 必須) |
+| `init.backup_blacklist` | credentials backup 流出防止 (SPEC §11.5 + 本書 §3.1.2) | union のみ (同上) |
+| `permissions.claude.denied_tools` (Phase 1 新設、`phase1-core-cli-runner.md` §1) | 危険 tool 拒否 | union のみ (同上) |
+
+`autokit preset show <name>` は **protected array の diff を強調表示** (実装 PR で TUI marker 追加責務)。`autokit preset apply <name>` は protected array の **完全置換 / 要素削減** を含む preset を `--allow-protected-replace` flag なしで **fail-closed** とする。
+
+#### AC 追加
+
+- [ ] `redact_patterns: []` を含む preset の apply が flag なしで **fail-closed** (`failure.code=preset_blacklist_hit` 経由 or 専用エラー)
+- [ ] `init.backup_blacklist` を空にする preset の apply が flag なしで fail-closed
+- [ ] `denied_tools` を縮小する preset の apply が flag なしで fail-closed
+- [ ] `preset show` 出力で protected array の diff が強調表示される
 
 ## 4. 初期 Preset
 

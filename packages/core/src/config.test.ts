@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { ConfigParseError, DEFAULT_CONFIG, parseConfigYaml, runtimePhases } from "./config.ts";
+import {
+  ConfigParseError,
+  capabilities,
+  capabilityProviders,
+  DEFAULT_CONFIG,
+  parseConfigYaml,
+  runtimePhases,
+} from "./index.ts";
 
 describe("core config schema", () => {
   it("parses a minimal config and applies SPEC defaults", () => {
@@ -172,6 +179,28 @@ extra: true
     const config = parseConfigYaml("version: 1\n");
 
     assert.deepEqual(Object.keys(config.phases), [...runtimePhases]);
+  });
+
+  it("keeps config phase provider values inside the capability table", () => {
+    const config = parseConfigYaml("version: 1\n");
+    const capabilityKeys = new Set(capabilities.map((row) => `${row.phase}:${row.provider}`));
+
+    for (const phase of runtimePhases) {
+      assert.equal(capabilityKeys.has(`${phase}:${config.phases[phase].provider}`), true);
+    }
+  });
+
+  it("accepts providers from the capability provider SoT", () => {
+    for (const provider of capabilityProviders) {
+      const config = parseConfigYaml(`
+version: 1
+phases:
+  plan:
+    provider: ${provider}
+`);
+
+      assert.equal(config.phases.plan.provider, provider);
+    }
   });
 });
 

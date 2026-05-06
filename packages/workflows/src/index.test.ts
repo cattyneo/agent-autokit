@@ -214,6 +214,32 @@ describe("planning workflow", () => {
     assert.equal(sandboxFailure.task.state, "paused");
     assert.equal(sandboxFailure.task.failure?.code, "sandbox_violation");
   });
+
+  it("redacts runner summaries in failure messages and history", async () => {
+    const result = await runPlanningWorkflow(baseTask(), {
+      runner: queueRunner(
+        [],
+        [
+          {
+            status: "rate_limited",
+            summary: `429 sk-${"a".repeat(24)} /Users/tester/.env:4 SECRET=raw-secret /repo/root`,
+          },
+        ],
+      ),
+      repoRoot: "/repo/root",
+      homeDir: "/Users/tester",
+      now: () => "2026-05-05T10:00:00+09:00",
+    });
+
+    assert.equal(result.task.state, "paused");
+    assert.equal(result.task.failure?.code, "rate_limited");
+    assert.doesNotMatch(
+      result.task.failure?.message ?? "",
+      /sk-|\/Users\/tester|\/repo\/root|raw-secret/,
+    );
+    assert.equal(result.task.failure_history.length, 1);
+    assert.equal(result.task.failure_history[0].message, result.task.failure?.message);
+  });
 });
 
 describe("implement and fix workflow", () => {
@@ -241,9 +267,50 @@ describe("implement and fix workflow", () => {
     assert.doesNotMatch(failed.task.failure?.message ?? "", /\/Users\/tester|\/repo\/root/);
 
     const calls: AgentRunInput[] = [];
-    const audits: string[] = [];
+    const audits: Array<Record<string, unknown>> = [];
     const downgraded = await runImplementWorkflow(implementReadyTask(), {
       runner: queueRunner(calls, [
+        completed("codex", {
+          changed_files: [],
+          tests_run: [],
+          docs_updated: false,
+          notes: "ok",
+        }),
+      ]),
+      git: mockGitDeps(["base-sha", "agent-sha"], ["commit-sha"], {
+        prNumber: 51,
+        prHeadSha: "remote-head",
+      }),
+      repoRoot: "/repo/root",
+      worktreeRoot: "/repo/root/.autokit/worktrees/issue-13",
+      homeDir: "/Users/tester",
+      config: parseConfig({
+        effort: { unsupported_policy: "downgrade" },
+        phases: {
+          implement: {
+            provider: "codex",
+            effort: "high",
+            model: `/Users/tester/gpt-5.4-mini-sk-${"a".repeat(24)}`,
+          },
+        },
+        runner_timeout: { implement_ms: 900_000 },
+      }),
+      auditOperation: (kind, fields) => audits.push({ kind, ...fields }),
+    });
+
+    assert.equal(downgraded.task.runtime.resolved_effort?.effort, "medium");
+    assert.equal(downgraded.task.runtime.resolved_effort?.downgraded_from, "high");
+    assert.equal(calls[0].effort?.effort, "medium");
+    assert.equal(calls[0].effort?.timeout_ms, 900_000);
+    assert.equal(calls[0].timeoutMs, 900_000);
+    assert.equal(audits[0].kind, "effort_downgrade");
+    assert.equal(audits[0].from, "high");
+    assert.equal(audits[0].to, "medium");
+    assert.doesNotMatch(String(audits[0].model), /\/Users\/tester|sk-/);
+
+    const noExplicitCalls: AgentRunInput[] = [];
+    const downgradedNoExplicit = await runImplementWorkflow(implementReadyTask(), {
+      runner: queueRunner(noExplicitCalls, [
         completed("codex", {
           changed_files: [],
           tests_run: [],
@@ -260,17 +327,12 @@ describe("implement and fix workflow", () => {
       config: parseConfig({
         effort: { unsupported_policy: "downgrade" },
         phases: { implement: { provider: "codex", effort: "high", model: "gpt-5.4-mini" } },
-        runner_timeout: { implement_ms: 900_000 },
       }),
-      auditOperation: (kind, fields) => audits.push(`${kind}:${fields.from}->${fields.to}`),
     });
 
-    assert.equal(downgraded.task.runtime.resolved_effort?.effort, "medium");
-    assert.equal(downgraded.task.runtime.resolved_effort?.downgraded_from, "high");
-    assert.equal(calls[0].effort?.effort, "medium");
-    assert.equal(calls[0].effort?.timeout_ms, 900_000);
-    assert.equal(calls[0].timeoutMs, 900_000);
-    assert.deepEqual(audits, ["effort_downgrade:high->medium"]);
+    assert.equal(downgradedNoExplicit.task.runtime.resolved_effort?.effort, "medium");
+    assert.equal(downgradedNoExplicit.task.runtime.resolved_effort?.timeout_ms, 1_800_000);
+    assert.equal(noExplicitCalls[0].timeoutMs, 1_800_000);
   });
 
   it("runs implement through ordered checkpoints and opens a ready PR", async () => {
@@ -445,6 +507,62 @@ describe("implement and fix workflow", () => {
     assert.equal(result.task.provider_sessions.plan.codex_session_id, "codex-plan-new");
     assert.equal(result.task.provider_sessions.plan.claude_session_id, "claude-plan-old");
     assert.equal(result.task.provider_sessions.plan.last_provider, "codex");
+  });
+
+  it("uses phase_override provider before last_provider and config provider", async () => {
+    const calls: AgentRunInput[] = [];
+    const task = {
+      ...baseTask(),
+      state: "planning" as const,
+      runtime_phase: "plan" as const,
+      runtime: {
+        ...baseTask().runtime,
+        phase_override: {
+          phase: "plan" as const,
+          provider: "claude" as const,
+          effort: "low" as const,
+          expires_at_run_id: "run-1",
+        },
+      },
+      git: {
+        ...baseTask().git,
+        checkpoints: {
+          ...baseTask().git.checkpoints,
+          plan: { ...baseTask().git.checkpoints.plan, before_sha: "before" },
+        },
+      },
+      provider_sessions: {
+        ...baseTask().provider_sessions,
+        plan: {
+          claude_session_id: "claude-plan",
+          codex_session_id: "codex-plan",
+          last_provider: "codex" as const,
+        },
+      },
+    };
+
+    await runPlanningWorkflow(task, {
+      runner: queueRunner(calls, [
+        completed("claude", { plan_markdown: "## Plan", assumptions: [], risks: [] }),
+        completed("codex", { result: "ok", findings: [] }),
+      ]),
+      repoRoot: "/repo",
+      config: parseConfig({
+        phases: { plan: { provider: "codex", effort: "high", model: "gpt-5.5" } },
+      }),
+    });
+
+    assert.equal(calls[0].provider, "claude");
+    assert.deepEqual(calls[0].resume, { claudeSessionId: "claude-plan" });
+    assert.equal(calls[0].effort?.effort, "low");
+    assert.deepEqual(calls[0].effective_permission, {
+      permission_profile: "readonly_repo",
+      claude: {
+        allowed_tools: ["Read", "Grep", "Glob"],
+        denied_tools: ["Bash", "Edit", "Write", "WebFetch", "WebSearch"],
+        hook: "readonly_path_guard",
+      },
+    });
   });
 
   it("continues implement from commit_done without rerunning the agent", async () => {
@@ -1072,13 +1190,19 @@ describe("merge and cleaning workflow", () => {
     const branchFailure = await runCleaningWorkflow(cleaningTask(), {
       runner: queueRunner([], []),
       cleanup: mockCleaningDeps({
-        branch: [{ ok: false, message: "denied" }],
+        branch: [{ ok: false, message: "denied /Users/tester/.codex/auth.json /repo/root" }],
         worktree: [],
       }),
-      repoRoot: "/repo",
+      repoRoot: "/repo/root",
       worktreeRoot: "/worktree",
+      homeDir: "/Users/tester",
     });
     assert.equal(branchFailure.task.failure?.code, "branch_delete_failed");
+    assert.doesNotMatch(branchFailure.task.failure?.message ?? "", /\/Users\/tester|\/repo\/root/);
+    assert.equal(
+      branchFailure.task.failure_history[0].message,
+      branchFailure.task.failure?.message,
+    );
 
     const cleanup = mockCleaningDeps({
       branch: [{ ok: true }],
@@ -1088,16 +1212,21 @@ describe("merge and cleaning workflow", () => {
         { ok: false, message: "locked-3" },
         { ok: false, message: "force failed" },
       ],
-      prune: { ok: false, message: "prune failed" },
+      prune: { ok: false, message: `prune failed sk-${"a".repeat(24)} /repo/root` },
     });
     const worktreeFailure = await runCleaningWorkflow(cleaningTask(), {
       runner: queueRunner([], []),
       cleanup,
-      repoRoot: "/repo",
+      repoRoot: "/repo/root",
       worktreeRoot: "/worktree",
     });
     assert.equal(worktreeFailure.task.failure?.code, "worktree_remove_failed");
     assert.equal(worktreeFailure.task.cleaning_progress.worktree_remove_attempts, 3);
+    assert.doesNotMatch(worktreeFailure.task.failure?.message ?? "", /sk-|\/repo\/root/);
+    assert.equal(
+      worktreeFailure.task.failure_history.at(-1)?.message,
+      worktreeFailure.task.failure?.message,
+    );
     assert.deepEqual(cleanup.calls, [
       "sleep:5000",
       "deleteRemoteBranch:autokit/issue-13",

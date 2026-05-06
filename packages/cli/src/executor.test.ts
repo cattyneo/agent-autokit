@@ -99,6 +99,48 @@ describe("production workflow executor", () => {
     assert.equal(calls.length, 0);
   });
 
+  it("uses resolved effort timeout and emits downgrade audit in production", async () => {
+    const root = makeTempDir();
+    writeConfig(
+      root,
+      `
+version: 1
+base_branch: main
+effort:
+  unsupported_policy: downgrade
+phases:
+  plan:
+    provider: claude
+    effort: high
+    model: ${root}/claude-haiku-sk-${"a".repeat(24)}
+`,
+    );
+    writePromptAssets(root);
+    writeTasks(root, [task(58)]);
+    const calls: AgentRunInput[] = [];
+    const commands: string[] = [];
+
+    const tasks = await runProductionWorkflow({
+      cwd: root,
+      env: {},
+      execFile: mockExecFile(commands),
+      runner: queueRunner(calls),
+      maxSteps: 1,
+      now: () => NOW,
+    });
+
+    assert.equal(tasks[0].state, "planned");
+    assert.equal(calls[0].phase, "plan");
+    assert.equal(calls[0].effort?.effort, "medium");
+    assert.equal(calls[0].effort?.downgraded_from, "high");
+    assert.equal(calls[0].effort?.timeout_ms, 1_800_000);
+    assert.equal(calls[0].timeoutMs, 1_800_000);
+    const logText = readFileSync(join(root, ".autokit", "logs", "2026-05-05.log"), "utf8");
+    assert.match(logText, /"kind":"effort_downgrade"/);
+    assert.doesNotMatch(logText, new RegExp(escapeRegExp(root)));
+    assert.doesNotMatch(logText, /sk-/);
+  });
+
   it("does not mark remote branch deletion as complete for non-gone git errors", async () => {
     const root = makeTempDir();
     writeFastConfig(root);
@@ -244,9 +286,8 @@ function writeTasks(root: string, tasks: TaskEntry[]): void {
 }
 
 function writeFastConfig(root: string): void {
-  mkdirSync(join(root, ".autokit"), { recursive: true });
-  writeFileSync(
-    join(root, ".autokit", "config.yaml"),
+  writeConfig(
+    root,
     `
 version: 1
 base_branch: main
@@ -265,8 +306,12 @@ runner_timeout:
   supervise_ms: 555
   default_ms: 666
 `,
-    { mode: 0o600 },
   );
+}
+
+function writeConfig(root: string, yaml: string): void {
+  mkdirSync(join(root, ".autokit"), { recursive: true });
+  writeFileSync(join(root, ".autokit", "config.yaml"), yaml, { mode: 0o600 });
 }
 
 function writePromptAssets(root: string): void {
@@ -287,4 +332,8 @@ function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "autokit-executor-"));
   mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

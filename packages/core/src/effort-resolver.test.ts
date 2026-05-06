@@ -57,4 +57,18 @@ describe("core effort resolver", () => {
       to: "medium",
     });
   });
+
+  it("fails downgrade when no effort level is supported", () => {
+    const result = resolveEffort({
+      phase: "review",
+      provider: "claude",
+      effort: "low",
+      model: "unsupported-all-efforts",
+      unsupported_policy: "downgrade",
+      timeout_ms: 1_200_000,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.ok ? null : result.failure.code, "effort_unsupported");
+  });
 });

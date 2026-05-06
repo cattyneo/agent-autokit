@@ -847,10 +847,14 @@ export async function runCleaningWorkflow(
     const branch = requireBranch(task);
     const deleted = await options.cleanup.deleteRemoteBranch(branch);
     if (!deleted.ok) {
+      const message = sanitizeWorkflowString(
+        `branch cleanup incomplete: ${deleted.message}`,
+        options,
+      );
       return {
         task: transitionTask(task, {
           type: "cleaning_branch_failed",
-          message: `branch cleanup incomplete: ${deleted.message}`,
+          message,
         }),
       };
     }
@@ -935,7 +939,7 @@ function buildAgentRunInput(
           ? (options.worktreeRoot ?? options.repoRoot)
           : options.repoRoot,
     },
-    timeoutMs: options.timeoutMsForPhase?.(phase) ?? options.timeoutMs ?? resolvedEffort.timeout_ms,
+    timeoutMs: options.timeoutMs ?? resolvedEffort.timeout_ms,
   };
 }
 
@@ -1107,28 +1111,60 @@ async function resolveAndPersistEffort(
   if (!result.ok) {
     return failWorkflow(task, phase, result.failure.code, result.failure.message, options).task;
   }
+  const finalTimeoutMs = resolveRunnerTimeout(config, phase, {
+    ...result.resolved,
+    timeout_ms: timeoutMsForEffort(result.resolved.effort),
+  });
+  const resolved = { ...result.resolved, timeout_ms: finalTimeoutMs };
   const currentSession = task.provider_sessions[phase];
   if (
-    resolvedEffortEquals(task.runtime.resolved_effort, result.resolved) &&
+    resolvedEffortEquals(task.runtime.resolved_effort, resolved) &&
     currentSession.last_provider === provider
   ) {
+    if (resolved.downgraded_from !== null) {
+      emitEffortDowngradeAudit(
+        {
+          kind: "effort_downgrade",
+          phase: resolved.phase,
+          provider: resolved.provider,
+          model: task.runtime.resolved_model[phase] ?? config.phases[phase].model,
+          from: resolved.downgraded_from,
+          to: resolved.effort,
+        },
+        options,
+      );
+    }
     return task;
   }
 
   const next = cloneTask(task);
-  next.runtime.resolved_effort = result.resolved;
+  next.runtime.resolved_effort = resolved;
   next.provider_sessions[phase].last_provider = provider;
   await persistTask(next, options);
   if (result.audit !== null) {
-    options.auditOperation?.(result.audit.kind, {
-      phase: result.audit.phase,
-      provider: result.audit.provider,
-      model: result.audit.model,
-      from: result.audit.from,
-      to: result.audit.to,
-    });
+    emitEffortDowngradeAudit(result.audit, options);
   }
   return next;
+}
+
+function emitEffortDowngradeAudit(
+  audit: {
+    kind: "effort_downgrade";
+    phase: Phase;
+    provider: Provider;
+    model: string;
+    from: EffortLevel;
+    to: EffortLevel;
+  },
+  options: WorkflowOptions,
+): void {
+  options.auditOperation?.(audit.kind, {
+    phase: audit.phase,
+    provider: audit.provider,
+    model: sanitizeWorkflowString(audit.model, options),
+    from: audit.from,
+    to: audit.to,
+  });
 }
 
 function resolvedEffortEquals(
@@ -1432,11 +1468,15 @@ async function removeWorktreeWithRetry(
         return { ok: true, task: next };
       }
       const message = pruned && !pruned.ok ? pruned.message : forced.message;
+      const sanitizedMessage = sanitizeWorkflowString(
+        `worktree cleanup incomplete after ${next.cleaning_progress.worktree_remove_attempts} attempts: ${message}`,
+        options,
+      );
       return {
         ok: false,
         task: transitionTask(next, {
           type: "cleaning_worktree_failed",
-          message: `worktree cleanup incomplete after ${next.cleaning_progress.worktree_remove_attempts} attempts: ${message}`,
+          message: sanitizedMessage,
         }),
       };
     }

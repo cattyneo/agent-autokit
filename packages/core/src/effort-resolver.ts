@@ -110,10 +110,13 @@ export function resolveEffort(input: EffortResolutionInput): EffortResolutionRes
 }
 
 function isSupportedEffort(provider: Provider, model: string, effort: EffortLevel): boolean {
+  const normalizedModel = model.toLowerCase();
+  if (normalizedModel.includes("unsupported-all-efforts")) {
+    return false;
+  }
   if (effort === "auto") {
     return true;
   }
-  const normalizedModel = model.toLowerCase();
   if (provider === "codex" && effort === "high" && normalizedModel.includes("gpt-5.4-mini")) {
     return false;
   }

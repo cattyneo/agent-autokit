@@ -40,7 +40,6 @@ import {
   parseGhMergeability,
   parseGhPrView,
   type RuntimePhase,
-  resolveRunnerTimeout,
   type TaskEntry,
   type TasksFile,
   writeTasksFileAtomic,
@@ -110,10 +109,10 @@ export async function runProductionWorkflow(
         const result = await runPlanningWorkflow(task, {
           config,
           repoRoot: options.cwd,
-          timeoutMsForPhase: (phase) => resolveRunnerTimeout(config, phase),
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
           buildPrompt: (input) =>
             buildPrompt(
               options.cwd,
@@ -138,10 +137,10 @@ export async function runProductionWorkflow(
           config,
           repoRoot: options.cwd,
           worktreeRoot: worktreePath(options.cwd, task),
-          timeoutMsForPhase: (phase) => resolveRunnerTimeout(config, phase),
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
           buildPrompt: (input) =>
             buildPrompt(
               options.cwd,
@@ -163,10 +162,10 @@ export async function runProductionWorkflow(
           config,
           repoRoot: options.cwd,
           worktreeRoot: worktreePath(options.cwd, task),
-          timeoutMsForPhase: (phase) => resolveRunnerTimeout(config, phase),
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
           buildPrompt: (input) =>
             buildPrompt(
               options.cwd,
@@ -189,10 +188,10 @@ export async function runProductionWorkflow(
           config,
           repoRoot: options.cwd,
           worktreeRoot: worktreePath(options.cwd, task),
-          timeoutMsForPhase: (phase) => resolveRunnerTimeout(config, phase),
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
           buildPrompt: (input) =>
             buildPrompt(
               options.cwd,

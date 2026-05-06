@@ -1,6 +1,27 @@
 export const CORE_PACKAGE = "@cattyneo/autokit-core";
 
 export type {
+  CapabilityRow,
+  ClaudeHook,
+  ClaudePermission,
+  CodexPermission,
+  PermissionProfile,
+  Phase,
+} from "./capability.js";
+export {
+  CapabilityValidationError,
+  capabilities,
+  capabilityPhases,
+  capabilityProviders,
+  derive_claude_perm,
+  derive_codex_perm,
+  deriveClaudePerm,
+  deriveCodexPerm,
+  isCapabilityPhase,
+  isCapabilityProvider,
+  validateCapabilitySelection,
+} from "./capability.js";
+export type {
   AutokitConfig,
   PhaseConfig,
   PromptContractId,

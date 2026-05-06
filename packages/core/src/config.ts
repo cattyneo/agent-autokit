@@ -1,18 +1,12 @@
 import { parseDocument } from "yaml";
 import * as z from "zod";
 
-export const runtimePhases = [
-  "plan",
-  "plan_verify",
-  "plan_fix",
-  "implement",
-  "review",
-  "supervise",
-  "fix",
-] as const;
+import { capabilityPhases, type Provider, validateCapabilitySelection } from "./capability.js";
+
+export const runtimePhases = capabilityPhases;
 
 export type RuntimePhase = (typeof runtimePhases)[number];
-export type Provider = "claude" | "codex";
+export type { Provider } from "./capability.js";
 export type PromptContractId =
   | "plan"
   | "plan-verify"
@@ -189,6 +183,21 @@ const configSchema = z
         message: "permissions.codex.allow_network=true requires codex.home_isolation=isolated",
         path: ["permissions", "codex", "home_isolation"],
       });
+    }
+
+    for (const phase of runtimePhases) {
+      try {
+        validateCapabilitySelection({
+          phase,
+          provider: config.phases[phase].provider,
+        });
+      } catch (error) {
+        context.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : "Invalid phase provider capability",
+          path: ["phases", phase, "provider"],
+        });
+      }
     }
   });
 

@@ -11,7 +11,7 @@
 | 計画書 | `docs/references/agent-autokit_phase1-3_implementation_plan.md` | (改修計画) | 本ディレクトリの起源 |
 | ロードマップ | `docs/PLAN.md` | v0.1.0+ | 段取り (本タスクの対象外) |
 
-`docs/SPEC.md` は本タスクで **移動も内容修正もしない**。新 `failure.code` / audit kind / `TransitionEvent` は実装 PR (`packages/core/src/failure-codes.ts` 等) と同 PR で SPEC.md §4.2.1.1 / §10.2.2.2 / §5.1 に追記し、`scripts/check-trace.sh` 1:1 trace gate を緑化する責務 (`cross-cutting.md` §4 参照)。
+`docs/SPEC.md` は本タスクで **移動も内容修正もしない**。新 `failure.code` / audit kind は実装 PR (`packages/core/src/failure-codes.ts` 等) と同 PR で SPEC.md §4.2.1.1 / §10.2.2.2 に追記し、`scripts/check-trace.sh` 1:1 trace gate を緑化する責務 (`cross-cutting.md` §4 参照)。SPEC §5.1 については **新規 `TransitionEvent` 追加なし** (`cross-cutting.md` §3 / §3.2 で確定)、既存 **E34 (`prompt_contract_violation`) condition の改訂のみ** が同 PR 更新対象。E41 以降の連番は `TransitionEvent` 化が真に必要な例外的将来対応のみ留保。
 
 ## 章マップ
 

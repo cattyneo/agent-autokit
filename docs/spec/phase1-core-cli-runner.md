@@ -10,7 +10,7 @@
   - `../SPEC.md#41-configyaml` (`effort` ブロック / `runner_timeout.<phase>_ms` `optional()` 化)
   - `../SPEC.md#42-tasksyaml` (`runtime` フィールド拡張)
   - `../SPEC.md#4211-failurecode-固定列挙` (新 `failure.code` を `cross-cutting.md` §1 経由で同 PR 追記)
-  - `../SPEC.md#51-state-遷移表` (新 `TransitionEvent` を `cross-cutting.md` §3 経由で同 PR 追記)
+  - `../SPEC.md#51-state-遷移表` (**新規 `TransitionEvent` 追加なし**、既存 **E34 condition 改訂のみ** を `cross-cutting.md` §3 / §3.1 経由で同 PR 反映)
   - `../SPEC.md#1143-claude-runner-の安全境界` (write profile + `write_path_guard` 拡張)
   - `../SPEC.md#1022-audit-イベント` (新 audit kind を `cross-cutting.md` §2 経由で同 PR 追記)
 - 関連 issue / PR: TBD
@@ -356,15 +356,37 @@ autokit diff --issue <n>      # working tree diff を blacklist hunk 除去 (本
 
 ### 9.2 diff 出力
 
-- 出力前に以下を含む hunk を **hunk 単位で削除しプレースホルダ表示**:
-  - `.env*`
-  - `.codex/**`
-  - `.claude/credentials*`
-  - `id_rsa*`
-  - `*.pem`
-  - `*.key`
-- working tree に operator が置いた credentials の差分が出力に混入するのを防ぐ
-- 実装: `packages/cli/src/diff.ts` (新設想定) で `git diff` raw 出力 → hunk parser → 上記 path にマッチする hunk を `[REDACTED hunk: <path>]` プレースホルダに置換
+diff 出力は **2 段の redact** を必ず通過させる。path のみの blacklist では非ブラックリスト path に紛れ込んだ secret が漏洩するため、hunk body にも content redactor を必須適用する。
+
+#### 9.2.1 path-based hunk 除去 (1 段目)
+
+以下を含む hunk を **hunk 単位で削除しプレースホルダ表示**:
+
+- `.env*`
+- `.codex/**`
+- `.claude/credentials*`
+- `id_rsa*`
+- `*.pem`
+- `*.key`
+
+working tree に operator が置いた credentials の差分が出力に混入するのを防ぐ。実装: `packages/cli/src/diff.ts` (新設想定) で `git diff` raw 出力 → hunk parser → 上記 path にマッチする hunk を `[REDACTED hunk: <path>]` プレースホルダに置換。
+
+#### 9.2.2 content-based redaction (2 段目、全 hunk body 必須)
+
+path-based 除去を通過した残り全 hunk の body に **`sanitizeLogString` (SPEC §4.6.2.2 token-like pattern + `logging.redact_patterns`) を必須適用**。`README.md` / `config/example.ts` 等の非ブラックリスト path に commit / staged された credential もマッチング行を `<REDACTED>` 化:
+
+- GitHub PAT (`ghp_` / `github_pat_` / `gho_` 等)
+- OpenAI API key (`sk-`)
+- `Bearer <token>` / `Authorization:` header echo
+- AWS / GCP credentials patterns
+- `BEGIN PRIVATE KEY` / `ssh-rsa` (本書 SPEC §4.6.2.2 既存全集合)
+- Claude / Codex subscription credentials JSON (refreshToken / oauthAccessToken / token field)
+- `config.logging.redact_patterns` 追加分
+
+#### AC 追加
+
+- [ ] 非ブラックリスト path (`README.md` / `docs/example.md` 等) に dummy token (`ghp_xxx` / `sk-xxx` / `BEGIN OPENSSH PRIVATE KEY`) を含む staged 差分で、`autokit diff` 出力 / `GET /api/tasks/:issue/diff` 出力に token literal が含まれない fixture
+- [ ] path-based 除去された hunk のプレースホルダ表示と content redaction された行の `<REDACTED>` 表示が **どちらも** 出力に含まれる (silent drop なし)
 
 ## 将来拡張 / 残課題
 

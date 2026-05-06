@@ -78,7 +78,7 @@ apply 時に以下の操作系 audit kind を発火 (`cross-cutting.md` §2.1):
 | `autokit init` | `<repo>/.autokit/.backup/<timestamp>/` (SPEC §4.1 既存 `init.backup_dir`) | init 直後 rollback 必須 / repo 内に閉じる必要あり |
 | `autokit preset apply` | `${XDG_STATE_HOME:-~/.local/state}/autokit/backup/<repo>/<timestamp>/` (本書 §3.3) | repo tree 外で `scripts/check-assets-hygiene.sh` 禁止 glob を素通りさせない |
 
-`init.backup_blacklist` (default: `.claude/credentials*` / `.codex/auth*` / `.claude/state` / `.claude/sessions` / `.codex/credentials*`、SPEC §4.1 既存) は両経路で共有。
+`init.backup_blacklist` (default: `.claude/credentials*` / `.codex/auth*` / `.claude/state` / `.claude/sessions` / `.codex/credentials*` / **`.autokit/audit-hmac-key`** 、SPEC §4.1 / §11.5 既存 + `packages/core/src/config.ts:45-52` `DEFAULT_CONFIG.init.backup_blacklist`) は両経路で共有。`.autokit/audit-hmac-key` は SPEC §11.5 の sanitize audit HMAC lifecycle に紐付くため **preset apply / export 経路でも必ず除外** (key leak で過去 audit HMAC 検証性が破壊されるのを防止)。
 
 **`init.backup.retention_days` は本 Phase で新規追加** (現 `config.ts:171-180` `init` block には未定義、`logging.retention_days` (config.ts:165) とは別フィールド)。両経路で共通適用、default `30`。SPEC §4.1 への追加は実装 PR (`cross-cutting.md` §5 step 12 の preset 実装と同 PR) で行う責務。
 
@@ -103,7 +103,7 @@ apply / export 両方で必須。**ヒット時 `failure.code=preset_blacklist_h
 
 | 種別 | 対象 |
 |---|---|
-| パターン (basename + フルパス両方検査) | `.env*` / `.codex/**` / `.claude/credentials*` / `id_rsa*` / `*.pem` / `*.key` |
+| パターン (basename + フルパス両方検査) | `.env*` / `.codex/**` / `.claude/credentials*` / `id_rsa*` / `*.pem` / `*.key` / `.autokit/audit-hmac-key` |
 | コンテンツ署名 | `BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY` / `ssh-rsa AAAA[A-Za-z0-9+/]{20,}` / `ghp_[A-Za-z0-9]{20,}` / `sk-[A-Za-z0-9]{20,}` / `xox[baprs]-[A-Za-z0-9-]+` / GCP private_key JSON 等 (SPEC §4.6.2.2 token-like pattern と同集合) |
 
 #### 3.1.3 glob 方言
@@ -154,7 +154,7 @@ apply / export 両方で必須。**ヒット時 `failure.code=preset_blacklist_h
 `config.yaml` merge:
 
 - **object**: deep merge
-- **array (一般)**: preset 値で完全置換 (例: `label_filter` / `allowed_tools` はユーザー側上書き想定が強いため確実な置換)
+- **array (一般、`label_filter` 等)**: preset 値で完全置換 (ユーザー側上書き想定が強いため確実な置換)
 - 明示 `null`: default 復帰
 - `prompts/` / `skills/` / `agents/` のファイルは **ファイル単位置換 + backup**。部分 merge しない
 
@@ -165,16 +165,18 @@ apply / export 両方で必須。**ヒット時 `failure.code=preset_blacklist_h
 | field | 防御責務 | merge ポリシー |
 |---|---|---|
 | `logging.redact_patterns` | log redaction (SPEC §4.6.2.2 + §10.2 既存) | **baseline + preset の union** のみ。preset 単独で短くできない (要素削除には `--allow-protected-replace` flag 必須) |
-| `init.backup_blacklist` | credentials backup 流出防止 (SPEC §11.5 + 本書 §3.1.2) | union のみ (同上) |
+| `init.backup_blacklist` | credentials backup 流出防止 (SPEC §11.5 + 本書 §3.1.2、`.autokit/audit-hmac-key` 含む) | union のみ (同上) |
 | `permissions.claude.denied_tools` (Phase 1 新設、`phase1-core-cli-runner.md` §1) | 危険 tool 拒否 | union のみ (同上) |
+| `permissions.claude.allowed_tools` (deprecate 期間中、`phase1-core-cli-runner.md` §1.4) | runner 利用可能 tool の境界 (SPEC §11.4.3 B 既存) | **deprecate 期間中は protected**: preset 単独での **拡大** (Edit / Write / Bash 等の追加) は `--allow-protected-replace` flag 必須。capability table 由来 derive 結果を超える tool 追加は flag ありでも fail-closed (= capability table 不許可組への昇格を防止)。deprecate 完了 (v0.3.0) で本フィールド自体が削除されるため protected 解除 |
 
-`autokit preset show <name>` は **protected array の diff を強調表示** (実装 PR で TUI marker 追加責務)。`autokit preset apply <name>` は protected array の **完全置換 / 要素削減** を含む preset を `--allow-protected-replace` flag なしで **fail-closed** とする。
+`autokit preset show <name>` は **protected array の diff を強調表示** (実装 PR で TUI marker 追加責務)。`autokit preset apply <name>` は protected array の **完全置換 / 要素削減 / `allowed_tools` の拡大** を含む preset を `--allow-protected-replace` flag なしで **fail-closed** とする。
 
 #### AC 追加
 
 - [ ] `redact_patterns: []` を含む preset の apply が flag なしで **fail-closed** (`failure.code=preset_blacklist_hit` 経由 or 専用エラー)
-- [ ] `init.backup_blacklist` を空にする preset の apply が flag なしで fail-closed
+- [ ] `init.backup_blacklist` を空 / `.autokit/audit-hmac-key` を除外する preset の apply が flag なしで fail-closed
 - [ ] `denied_tools` を縮小する preset の apply が flag なしで fail-closed
+- [ ] `allowed_tools: ["Edit","Write","Bash"]` のように拡大する preset の apply が flag なしで fail-closed (deprecate 期間中も capability table 由来 baseline を超える追加禁止)
 - [ ] `preset show` 出力で protected array の diff が強調表示される
 
 ## 4. 初期 Preset

@@ -66,6 +66,7 @@ AC「`failure.message` に `$HOME` 絶対パスが含まれない fixture」「b
 | `phase_override_ended` | override の `expires_at_run_id` 到達 + run 終了時 | Phase 1 §6 |
 | `preset_apply_started` | `autokit preset apply <name>` の staging 展開開始 | Phase 3 §2 |
 | `preset_apply_finished` | atomic rename で `.agents/` 全体差し替え完了 | Phase 3 §2 |
+| `serve_lock_busy` | `autokit serve` 経路で cross-process lock (`flock(2)`) 取得失敗時 (HTTP 409 fast-path、`failure.code` 不発火) | Phase 2 §1.2 |
 
 ### 2.2 失敗系 audit kind (§10.2.2.2 への追加候補、`failure.code` 1:1)
 

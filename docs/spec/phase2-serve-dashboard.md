@@ -6,7 +6,7 @@
 - 関連: `docs/references/agent-autokit_phase1-3_implementation_plan.md` §「Phase 2: Local API server + Dashboard (issue 分割)」
 - 既存 SPEC との関係 (引用のみ、改変なし):
   - `../SPEC.md#43-autokitlock` (`.autokit/lock` 単プロセス前提) — 本 Phase で cross-process lock を別ファイル `.autokit/.lock` で追加
-  - `../SPEC.md#1022-audit-イベント` (新 audit kind なし、既存の `lock_seized` / `auto_merge_disabled` 等を流用)
+  - `../SPEC.md#1022-audit-イベント` (新規 操作系 audit kind `serve_lock_busy` を `cross-cutting.md` §2.1 経由で同 PR 追記。既存の `lock_seized` / `auto_merge_disabled` 等は流用)
   - `../SPEC.md#116-assets-hygiene-ci` (`packages/serve/` 追加でも CLI bin self-contained 維持)
   - `../SPEC.md#4211-failurecode-固定列挙` (`lock_host_mismatch` は CLI 経路のみ。serve 経路は fast-path 409 で `failure.code` 不発火)
 - 関連 issue / PR: TBD (Phase 2A / Phase 2B を別 issue として分割)
@@ -86,7 +86,7 @@ mutating endpoint = `POST /api/{run,resume,retry,cleanup}`。SSE = `GET /api/eve
 | ファイル | `.autokit/.lock` (既存 `.autokit/lock` (SPEC §4.3) とは別ファイル) |
 | 機構 | `flock(2)` ベース |
 | 取得 API | `acquireRunLock(repo)` |
-| 取得失敗時 mapping | **fast-path 409**: HTTP `409 Conflict` + body `{ code: "serve_lock_busy" }` + 操作系 audit log (kind 名は `cross-cutting.md` §2.1 で別途定義)。CLI 同 repo 直叩きは exit 75 (TEMPFAIL) + 案内メッセージのみ。**`failure.code` 不発火 / `tasks.yaml` 不書込**。SPEC §4.2.1.1 既存 `lock_host_mismatch` (= CLI 起動拒否 / exit 1 / `--force-unlock` 経路) とは別契約 |
+| 取得失敗時 mapping | **fast-path 409**: HTTP `409 Conflict` + body `{ code: "serve_lock_busy" }` + 操作系 audit kind `serve_lock_busy` (`cross-cutting.md` §2.1 で定義)。CLI 同 repo 直叩きは exit 75 (TEMPFAIL) + 案内メッセージのみ。**`failure.code` 不発火 / `tasks.yaml` 不書込**。SPEC §4.2.1.1 既存 `lock_host_mismatch` (= CLI 起動拒否 / exit 1 / `--force-unlock` 経路) とは別契約 |
 | holder 情報 | `.autokit/.lock` に PID / host / acquired_at を記録 |
 | ファイル mode | `0600` (所有者のみ read/write、SPEC §4.3 既存 `.autokit/lock` と同 mode で multi-user macOS の info-disclosure 遮断) |
 | `.gitignore` 強制 | `autokit init` 時に `.autokit/.gitignore` で `*` パターンを書込 (SPEC §3.2 / §11.5 既存 `.autokit/.gitignore` 規約と統合)、`.autokit/.lock` を含む lock / backup / state 全体が **commit/push されないことを init で強制**。doctor は `.gitignore` 欠落を検出して FAIL |

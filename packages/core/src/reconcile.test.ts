@@ -113,7 +113,7 @@ describe("core reconcile", () => {
       },
       provider_sessions: {
         ...baseTask().provider_sessions,
-        implement: { codex_session_id: "thread-1" },
+        implement: { ...baseTask().provider_sessions.implement, codex_session_id: "thread-1" },
       },
     };
     assert.equal(reconcileTask(beforeWithSession, {}).action, "resume_session");
@@ -223,7 +223,10 @@ function implementCheckpointTask(
     },
     provider_sessions: {
       ...baseTask().provider_sessions,
-      implement: { codex_session_id: withSession ? "thread-1" : null },
+      implement: {
+        ...baseTask().provider_sessions.implement,
+        codex_session_id: withSession ? "thread-1" : null,
+      },
     },
   };
 }
@@ -244,7 +247,10 @@ function fixCheckpointTask(
     },
     provider_sessions: {
       ...baseTask().provider_sessions,
-      fix: { codex_session_id: withSession ? "thread-1" : null },
+      fix: {
+        ...baseTask().provider_sessions.fix,
+        codex_session_id: withSession ? "thread-1" : null,
+      },
     },
   };
 }

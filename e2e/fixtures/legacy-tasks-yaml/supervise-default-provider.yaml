@@ -1,0 +1,5 @@
+phase: supervise
+expected_last_provider: claude
+provider_sessions:
+  supervise:
+    claude_session_id: legacy-supervise-claude

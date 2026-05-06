@@ -1,0 +1,6 @@
+phase: fix
+expected_last_provider: codex
+provider_sessions:
+  fix:
+    claude_session_id: legacy-fix-claude
+    codex_session_id: legacy-fix-codex

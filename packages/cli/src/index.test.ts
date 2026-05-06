@@ -16,8 +16,10 @@ import { describe, it } from "node:test";
 import {
   type AgentRunInput,
   createTaskEntry,
+  DEFAULT_CONFIG,
   loadTasksFile,
   makeFailure,
+  parseConfigYaml,
   type TaskEntry,
   type TaskState,
   type TasksFile,
@@ -86,6 +88,10 @@ describe("cli task commands", () => {
     assert.equal(lstatSync(join(root, ".claude", "skills")).isSymbolicLink(), true);
     assert.match(readFileSync(join(root, "AGENTS.md"), "utf8"), new RegExp(INIT_MARKER_START));
     assert.equal(existsSync(join(root, ".autokit", ".backup")), false);
+    assert.deepEqual(
+      parseConfigYaml(readFileSync(join(root, ".autokit", "config.yaml"), "utf8")),
+      DEFAULT_CONFIG,
+    );
 
     const harness = makeCliHarness(root, { execFile: () => "ok" });
     assert.equal(await runCli(["doctor"], harness.deps), 0);

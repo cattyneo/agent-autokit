@@ -311,7 +311,7 @@ function hasProviderSession(
   phase: Exclude<NonNullable<TaskEntry["runtime_phase"]>, "ci_wait" | "merge">,
 ): boolean {
   const session = task.provider_sessions[phase];
-  return Object.values(session).some((value) => value !== null);
+  return session.claude_session_id !== null || session.codex_session_id !== null;
 }
 
 function failure(

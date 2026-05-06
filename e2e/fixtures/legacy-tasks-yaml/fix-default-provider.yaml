@@ -1,0 +1,5 @@
+phase: fix
+expected_last_provider: codex
+provider_sessions:
+  fix:
+    codex_session_id: legacy-fix-codex

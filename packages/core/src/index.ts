@@ -21,10 +21,13 @@ export {
 } from "./capability.js";
 export type {
   AutokitConfig,
+  EffortLevel,
   PhaseConfig,
   PromptContractId,
   Provider,
+  ResolvedEffort,
   RuntimePhase,
+  UnsupportedEffortPolicy,
 } from "./config.js";
 export {
   ConfigParseError,
@@ -32,8 +35,11 @@ export {
   parseConfig,
   parseConfigYaml,
   phasePromptContracts,
+  resolveRunnerTimeout,
   runtimePhases,
+  serializeConfigYaml,
 } from "./config.js";
+export type { PhaseOverride } from "./effort-resolver.js";
 export type { ChildEnv, ParentEnv, RunnerEnvOptions } from "./env-allowlist.js";
 export { buildGhEnv, buildRunnerEnv } from "./env-allowlist.js";
 export type { GhPrView, GhPrViewJson } from "./gh.js";
@@ -126,6 +132,7 @@ export type {
   ImplementCheckpoint,
   LoadTasksFileOptions,
   PlanState,
+  ProviderSession,
   RetryCleanupProgress,
   SimpleCheckpoint,
   TaskEntry,
@@ -136,9 +143,11 @@ export type {
 export {
   cloneTask,
   createTaskEntry,
+  emptyProviderSession,
   loadTasksFile,
   makeFailure,
   TaskFileParseError,
+  taskAgentPhases,
   taskRuntimePhases,
   taskStates,
   writeTasksFileAtomic,

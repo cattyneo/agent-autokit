@@ -2,6 +2,7 @@ import type { AutokitConfig } from "./config.ts";
 import { DEFAULT_CONFIG } from "./config.ts";
 import {
   cloneTask,
+  emptyProviderSession,
   makeFailure,
   type TaskEntry,
   type TaskRuntimePhase,
@@ -78,8 +79,8 @@ export function transitionTask(
       }
       task.plan.plan_verify_round += 1;
       task.runtime_phase = "plan_fix";
-      task.provider_sessions.plan_verify.codex_session_id = null;
-      task.provider_sessions.plan_fix.claude_session_id = null;
+      task.provider_sessions.plan_verify = emptyProviderSession();
+      task.provider_sessions.plan_fix = emptyProviderSession();
       resetPhaseAttempt(task);
       return task;
     case "plan_fix_completed":
@@ -266,12 +267,12 @@ function resetPhaseAttempt(task: TaskEntry): void {
 
 function resetReviewPhase(task: TaskEntry): void {
   task.git.checkpoints.review = { before_sha: null, after_sha: null };
-  task.provider_sessions.review.claude_session_id = null;
+  task.provider_sessions.review = emptyProviderSession();
 }
 
 function resetSupervisePhase(task: TaskEntry): void {
   task.git.checkpoints.supervise = { before_sha: null, after_sha: null };
-  task.provider_sessions.supervise.claude_session_id = null;
+  task.provider_sessions.supervise = emptyProviderSession();
 }
 
 function resetFixPhase(task: TaskEntry): void {
@@ -285,5 +286,5 @@ function resetFixPhase(task: TaskEntry): void {
     head_sha_persisted: null,
     after_sha: null,
   };
-  task.provider_sessions.fix.codex_session_id = null;
+  task.provider_sessions.fix = emptyProviderSession();
 }

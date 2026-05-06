@@ -309,7 +309,10 @@ describe("implement and fix workflow", () => {
       },
       provider_sessions: {
         ...baseTask().provider_sessions,
-        implement: { codex_session_id: "codex-implement-session" },
+        implement: {
+          ...baseTask().provider_sessions.implement,
+          codex_session_id: "codex-implement-session",
+        },
       },
     };
 
@@ -501,7 +504,7 @@ describe("implement and fix workflow", () => {
       },
       provider_sessions: {
         ...baseTask().provider_sessions,
-        fix: { codex_session_id: "codex-fix-session" },
+        fix: { ...baseTask().provider_sessions.fix, codex_session_id: "codex-fix-session" },
       },
     };
 

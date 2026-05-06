@@ -126,6 +126,8 @@
 
 v0.2.0 では上表の Provider 固定割当を `packages/core/src/capability.ts` の capability table 由来へ移行する。Issue #87 では core 側の SoT を追加し、workflow / runner 側の消費は後続 Issue で実装する。`ci_wait` / `merge` は引き続き core-only とし、provider / permission profile の設定対象外にする。
 
+Issue #88 では `provider_sessions.<phase>` を `{claude_session_id, codex_session_id, last_provider}` 形に拡張し、旧 schema からの migration で session id がある場合は上表の既定 Provider を `last_provider` に採用する。両 provider の session id が同時に存在する旧 yaml でも両方の id を保持し、`last_provider` だけ上表の既定 Provider に正規化する。
+
 ### 2.3 ランタイム前提
 
 - macOS (Apple Silicon)
@@ -290,6 +292,10 @@ label_filter: []
 runtime:
   max_untrusted_input_kb: 256  # 超過時は truncate marker 付与 + paused (§11.4.4)
 
+effort:
+  default: medium              # auto | low | medium | high
+  unsupported_policy: fail     # fail | downgrade。downgrade 実行と audit は後続 Issue で実装
+
 # 各 phase の provider はここで上書き可能 (claude | codex)。
 # CLI flag / 環境変数による per-phase 上書きは v0.1.0 では非サポート (config.yaml が単一 SoT)。
 # prompt_contract は step 名と 1:1 対応必須 (`.agents/prompts/<id>.md` をルックアップ)。
@@ -297,6 +303,7 @@ phases:
   plan:
     provider: claude
     model: auto
+    # effort: medium           # optional。未指定時は effort.default を使用
     prompt_contract: plan
   plan_verify:
     provider: codex
@@ -356,14 +363,12 @@ permissions:
 
 # runner 子プロセス hard timeout
 runner_timeout:
-  plan_ms: 600000             # 10 min
-  implement_ms: 1800000       # 30 min
-  review_ms: 600000
-  default_ms: 600000
+  # hard timeout は optional。未指定時は effort 由来 timeout、または core resolver の既定値を使用
+  # 任意: plan_ms / plan_verify_ms / plan_fix_ms / implement_ms / review_ms / supervise_ms / fix_ms / default_ms
   # idle timeout (無出力 stall 検知): hard timeout の前に WARN audit `runner_idle` 発火
   # stdout/stderr 双方が無出力で経過した時間が idle_ms 超過時、audit 記録 + `runtime.last_activity_at` 永続化
   # 429 / CLI バグでの軽微 hang を hard kill 前に operator が認識可能にする (§7.7 stall observability)
-  default_idle_ms: 300000     # 5 min。`<phase>_idle_ms` 未設定時の fallback (stdout/stderr drain は非ブロッキング tee 必須)
+  default_idle_ms: 300000     # 5 min 相当の resolver fallback。`<phase>_idle_ms` 未設定時の fallback (stdout/stderr drain は非ブロッキング tee 必須)
   # 任意: plan_idle_ms / plan_verify_idle_ms / plan_fix_idle_ms / implement_idle_ms /
   # review_idle_ms / supervise_idle_ms / fix_idle_ms。設定名は必ず `runner_timeout.<runtime_phase>_idle_ms`
   # で統一し、audit 側もこの effective 値を参照する。
@@ -445,13 +450,13 @@ tasks:
           head_sha_persisted: null
           after_sha:         null
     provider_sessions:                   # agent_phase 7種 (ci_wait / merge は runner 入力外でセッションなし)
-      plan: { claude_session_id: null }
-      plan_verify: { codex_session_id: null }
-      plan_fix: { claude_session_id: null }
-      implement: { codex_session_id: null }
-      review: { claude_session_id: null }
-      supervise: { claude_session_id: null }
-      fix: { codex_session_id: null }
+      plan: { claude_session_id: null, codex_session_id: null, last_provider: null }
+      plan_verify: { claude_session_id: null, codex_session_id: null, last_provider: null }
+      plan_fix: { claude_session_id: null, codex_session_id: null, last_provider: null }
+      implement: { claude_session_id: null, codex_session_id: null, last_provider: null }
+      review: { claude_session_id: null, codex_session_id: null, last_provider: null }
+      supervise: { claude_session_id: null, codex_session_id: null, last_provider: null }
+      fix: { claude_session_id: null, codex_session_id: null, last_provider: null }
     fix:                                 # 直近 fix 起動時のメタ。fix 入力種別と E12/E13 の分岐に使用 (§5.1)
       origin: null                       # null | "review" | "ci"
       started_at: null
@@ -464,6 +469,9 @@ tasks:
       last_event_id: null
       interrupted_at: null           # ISO 中断時刻
       previous_state: null           # paused 時の戻り state (resume 復帰先)
+      resolved_effort: null          # null | { phase, provider, effort, downgraded_from, timeout_ms }
+      phase_self_correct_done: null  # null | boolean。self-correction 実行済み判定は後続 Issue で消費
+      phase_override: null           # null | { phase, provider?, effort?, expires_at_run_id }
       resolved_model:                # queued → planning 遷移時に一括解決
         plan: null
         plan_verify: null

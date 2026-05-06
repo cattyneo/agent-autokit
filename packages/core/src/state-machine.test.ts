@@ -266,9 +266,15 @@ describe("core state machine", () => {
       },
       provider_sessions: {
         ...baseTask().provider_sessions,
-        review: { claude_session_id: "old-review-session" },
-        supervise: { claude_session_id: "old-supervise-session" },
-        fix: { codex_session_id: "old-fix-session" },
+        review: {
+          ...baseTask().provider_sessions.review,
+          claude_session_id: "old-review-session",
+        },
+        supervise: {
+          ...baseTask().provider_sessions.supervise,
+          claude_session_id: "old-supervise-session",
+        },
+        fix: { ...baseTask().provider_sessions.fix, codex_session_id: "old-fix-session" },
       },
     };
 

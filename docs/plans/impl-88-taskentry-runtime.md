@@ -20,4 +20,4 @@ Implement Issue #88 by extending `tasks.yaml` runtime/session schema and config 
 
 - [x] #88 AC pass: old/new tasks round-trip, 7 phase x 2 legacy session pattern coverage, effort config validation, init config sync, and typecheck.
 - [x] No runner effort propagation, downgrade audit emission, redaction public API, or provider resume selection changes from #89+ are included.
-- [ ] PR body includes `Closes #88`, `Related #80`, SSOT refs, commands/exit codes, CI status, provider-backed tests status, and residual risks.
+- [x] PR body includes `Closes #88`, `Related #80`, SSOT refs, commands/exit codes, CI status, provider-backed tests status, and residual risks.

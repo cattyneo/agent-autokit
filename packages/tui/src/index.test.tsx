@@ -72,7 +72,7 @@ describe("tui render model", () => {
 });
 
 describe("Ink components", () => {
-  it("renders task progress, log tail, and question prompt", () => {
+  it("renders task progress, log tail, and question prompt", async () => {
     const { lastFrame } = render(
       createElement(App, {
         tasks: [
@@ -87,6 +87,7 @@ describe("Ink components", () => {
         question: { text: "Use vitest?", defaultAnswer: "vitest" },
       }),
     );
+    await waitForInk();
 
     assert.match(lastFrame() ?? "", /#16 implementing implement/);
     assert.match(lastFrame() ?? "", /INFO runner started/);

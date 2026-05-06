@@ -16,7 +16,7 @@
 
 計画書「Phase 4 完了条件 (観測可能)」をそのまま転記。
 
-- [ ] 全 prompt が `runner-contract.test.ts` の `validatePromptContractPayload` を全 phase 通過
+- [ ] `packages/cli/assets/prompts/*.md` の実 prompt asset が prompt_contract mapping と visibility marker gate を通過し、fixture payload が `runner-contract.test.ts` の `validatePromptContractPayload` を全 phase 通過
 - [ ] `autokit-implement` / `autokit-review` skill が `runner-visibility.test.ts` fixture で緑
 - [ ] prompt 改善 PR が `prompt_contract` schema 不変 (構造化出力フィールド diff なし) を CI で検証
 
@@ -41,7 +41,7 @@
 
 - skills 改修 PR は `runner-visibility.test.ts` fixture で緑
 - skills 改修で `prompt_contract` 構造化出力フィールドの diff が出ないこと (CI で検証)
-- 具体 gate (本書 §2.1 と整合): `codexPromptContractJsonSchema` (codex-runner/src/index.ts:403-429) の **JSON snapshot test** を `runner-contract.test.ts` に追加し、skills / prompts 改修 PR で snapshot diff が出たら fail
+- 具体 gate (本書 §2.1 と整合): `codexPromptContractJsonSchema` の **JSON snapshot test** を `packages/codex-runner/src/index.test.ts` に追加する。`codexPromptContractJsonSchema` は現状 private helper なので、テストは同 package 内に置くか、schema builder を明示 export する方針を実装 PR で固定する。skills / prompts 改修 PR で snapshot diff が出たら fail
 
 ## 2. prompt 品質向上
 
@@ -55,11 +55,11 @@
 
 | gate | 配置 | 検出対象 |
 |---|---|---|
-| `codexPromptContractJsonSchema` JSON snapshot | `runner-contract.test.ts` 拡張 (新規 test ケース追加) | `data` schema / `question` schema / null union / plan-verify anyOf 等の strict schema diff |
-| prompt md 構造化領域マーカー diff | `runner-visibility.test.ts` 拡張 | `## Result` / `## Evidence` / `## Changes` / `## Test results` セクション存在 + 順序 |
+| `codexPromptContractJsonSchema` JSON snapshot | `packages/codex-runner/src/index.test.ts` 追加、または schema builder 明示 export 後に runner contract test へ配置 | `data` schema / `question` schema / null union / plan-verify anyOf 等の strict schema diff |
+| prompt asset scanner + 構造化領域マーカー diff | `runner-visibility.test.ts` 拡張 | base prompt (`packages/cli/assets/prompts/*.md`) と bundled preset の effective prompt set (`packages/cli/assets/presets/*/prompts/**/*.md` を base に overlay した結果) を列挙し、prompt_contract mapping 表と対応する `## Result` / `## Evidence` / `## Changes` / `## Test results` セクション存在 + 順序。既存 prompt に marker が不足する場合、gate 追加 PR が最小 marker 正規化も同 PR で行い、gate-only red PR を作らない |
 | `validatePromptContractPayload` 全 phase pass | 既存 `runner-contract.test.ts` (現状そのまま) | runner 受理 payload の意味論検証 |
 
-prompt 改善 PR / skills 改修 PR は **3 つの gate すべてが緑** であること。snapshot diff 検出時は (a) schema 改訂を意図する場合 SPEC §9.3 同 PR 更新、(b) 意図しない場合は prompt 自由記述部に閉じ込めるよう改修して再 commit、いずれかを必須とする。
+prompt 改善 PR / skills 改修 PR / bundled preset prompt 追加 PR は **3 つの gate すべてが緑** であること。asset scanner は fixture payload だけでなく実 prompt file と preset-effective prompt を読むため、prompt asset 破損が schema snapshot だけで green になる状態を禁止する。snapshot diff 検出時は (a) schema 改訂を意図する場合 SPEC §9.3 同 PR 更新、(b) 意図しない場合は prompt 自由記述部に閉じ込めるよう改修して再 commit、いずれかを必須とする。
 
 ### 2.2 設定ポイント
 
@@ -108,12 +108,13 @@ prompt 改善 PR / skills 改修 PR は **3 つの gate すべてが緑** であ
 | `implementer` | コード編集 + テスト (Codex)、git/PR 操作禁止 |
 | `reviewer` | レビュー (Claude) |
 | `supervisor` | レビュー妥当性判断 + 修正方針生成 (Claude) |
-| `doc-updater` | docs 更新委譲先 (`autokit-implement` skill から呼出、独立 step なし) |
+| `doc-updater` | docs 更新委譲先 (`autokit-implement` skill から呼出、独立 phase なし)。実装変更に伴う docs 更新が必要な場合のみ implement / fix の write_worktree 境界内で動く |
 
 各 agent の「権限境界」と「責務範囲」は Phase 1 capability table (`phase1-core-cli-runner.md` §1) と整合させる:
 
 - `implementer` / `fix` (= write profile 相当) は worktree 内のみ書込可 (SPEC §11.4)
-- `planner` / `plan-verifier` / `reviewer` / `supervisor` / `doc-updater` は read-only (SPEC §11.4.3 + 本 Phase capability table)
+- `doc-updater` は独立 read-only phase ではなく、implement / fix 内の限定委譲先。書込先は docs / guide / spec / README 等の documentation path に限定し、git/PR 操作は禁止
+- `planner` / `plan-verifier` / `reviewer` / `supervisor` は read-only (SPEC §11.4.3 + 本 Phase capability table)
 
 ## 将来拡張 / 残課題
 

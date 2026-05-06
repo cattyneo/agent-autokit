@@ -80,7 +80,7 @@
 |---|---|---|
 | `docs/spec/*` ↔ `docs/references/...` (計画書) | `docs/spec/*` | 計画書を update PR で同期 |
 | `docs/spec/*` ↔ `docs/SPEC.md` (v0.1.0 既存記述) | **状況依存**: docs/spec が **意図的拡張** (例: phase1 §1.4 deprecate path で v0.2.0 で挙動変更) → `docs/spec/*` 優先 + SPEC.md 同 PR 改訂責務。`docs/spec/*` が SPEC.md の不変条件 (例: §5.1 1 transition = state/runtime_phase 変化) を破壊する場合 → **SPEC.md 優先**、`docs/spec/*` を SPEC §不変条件と整合する記述へ訂正 | 実装 PR で SPEC.md §X.Y を改訂、または docs/spec/* を訂正 |
-| deprecate 期間中 (例: `permissions.claude.allowed_tools`) | **両者を満たす実装** | 旧仕様 + 新仕様の union を実装し、deprecate 完了 PR で旧仕様削除 |
+| deprecate 期間中 (例: `permissions.claude.allowed_tools`) | **両者を満たす実装** | capability table の hard cap 内だけ旧設定を受理し、deprecate 完了 PR で旧仕様削除 |
 | `docs/spec/*` ↔ `CLAUDE.md` / `docs/PLAN.md` | CLAUDE.md / PLAN.md が **運用 / 制約** を定義する場合 (例: CLI subscription auth) → `CLAUDE.md` 優先。`docs/spec/*` が **新機能仕様** を導入する場合 → `docs/spec/*` 優先 + CLAUDE.md / PLAN.md 同 PR 同期 | 実装 PR で同期 |
 
 ## 実装ヒント (擬似コード集約)

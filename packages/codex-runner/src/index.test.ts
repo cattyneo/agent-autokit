@@ -60,14 +60,14 @@ describe("codex-runner", () => {
         ...baseInput,
         phase: "plan_verify",
         promptContract: "plan-verify",
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         permissions: { ...baseInput.permissions, mode: "readonly", workspaceScope: "repo" },
       },
       runFiles,
     );
 
     assert.equal(readArg(args, "--sandbox"), "read-only");
-    assert.equal(readArg(args, "--model"), "gpt-5.4");
+    assert.equal(readArg(args, "--model"), "gpt-5.5");
     assert.equal(readArg(args, "--disable"), "shell_tool");
   });
 

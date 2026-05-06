@@ -99,9 +99,9 @@ type EffortLevel = "auto" | "low" | "medium" | "high";
 | low | claude | sonnet | 8 | 1200000 | n/a | 簡潔指示 |
 | low | codex | gpt-5.4-mini | n/a | 1200000 | low | 簡潔指示 |
 | medium | claude | sonnet | 16 | 1800000 | n/a | 既定 |
-| medium | codex | gpt-5.4 | n/a | 1800000 | medium | 既定 |
+| medium | codex | gpt-5.5 | n/a | 1800000 | medium | 既定 |
 | high | claude | opus | 32 | 3600000 | n/a | 詳細手順含 |
-| high | codex | gpt-5.4 | n/a | 3600000 | high | 詳細手順含 |
+| high | codex | gpt-5.5 | n/a | 3600000 | high | 詳細手順含 |
 
 - `auto` 解決時点: core `effort-resolver.ts` が `phase 開始直前` に解決。runner は受け取った値を CLI 引数化のみ
 - Claude は native effort flag を前提にしない (autokit profile)

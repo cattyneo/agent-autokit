@@ -26,7 +26,7 @@
 |---|---|---|---|---|---|
 | `effort_unsupported` | failed | 全 agent_phase 7種 | `tasks.yaml.failure` (issue 単位) | `effort` 解決時に `unsupported_policy=fail` でサポート外 (effort, provider, model) 組合せを検出 | Phase 1 §3.3 |
 | `preset_path_traversal` | (preset apply abort) | — (preset 経路 / state machine 不経由) | **`tasks.yaml` 不書込** + audit log + CLI exit 1 | preset archive 展開時に絶対 path / `..` / symlink / NUL byte / 親 chain symlink を検出 | Phase 3 §3.1 |
-| `preset_blacklist_hit` | (preset apply abort) | — (preset 経路 / state machine 不経由) | **`tasks.yaml` 不書込** + audit log + CLI exit 1 | preset 展開先 path / コンテンツ署名が blacklist (`.env*` / `.codex/**` / `.claude/credentials*` / `id_rsa*` / `*.pem` / `*.key` / SSH PRIVATE KEY 等) にヒット | Phase 3 §3.1.2 |
+| `preset_blacklist_hit` | (preset apply abort) | — (preset 経路 / state machine 不経由) | **`tasks.yaml` 不書込** + audit log + CLI exit 1 | preset 展開先 path / コンテンツ署名が blacklist (`.env*` / `.codex/**` / `.claude/credentials*` / `id_rsa*` / `*.pem` / `*.key` / SSH PRIVATE KEY 等) にヒット、または protected array 違反 (`logging.redact_patterns` 縮小等) を検出 | Phase 3 §3.1.2 / §3.4.1 |
 
 `preset_*` 系 failure.code は既存 `symlink_invalid` (SPEC §4.2.1.1 「(init abort)」) と同じ semantics で運用する: state machine を経由せず、`tasks.yaml` (issue 単位 task entry) には書込まず、CLI exit 1 + 専用 audit log のみで完結する。SPEC §4.2.1.1 表に追加する際は state 列を「(preset apply abort)」、phase 列を `—` で記述する責務。
 
@@ -38,6 +38,7 @@
 - `$HOME` 配下の絶対パスは `~/...` 化
 - repo root 配下は `<repo>/...` 化
 - blacklist hit はカテゴリ表現 (`<blacklist:credentials>` / `<blacklist:env>` / `<blacklist:ssh-key>` / `<content-signature:openssh-private-key>` 等) に置換し、literal pattern / 攻撃者がアクセス試行したファイル名は **非開示**
+- protected array 違反はカテゴリ表現 (`<protected-array:logging.redact_patterns>` / `<protected-array:init.backup_blacklist>` 等) に置換し、preset の具体値は **非開示**
 - effort tuple `(effort, provider, model)` のみ literal で許容 (機微情報なし)
 
 AC「`failure.message` に `$HOME` 絶対パスが含まれない fixture」「blacklist hit message にカテゴリ表現のみが含まれる fixture」を追加。
@@ -65,8 +66,11 @@ AC「`failure.message` に `$HOME` 絶対パスが含まれない fixture」「b
 | `phase_override_started` | `autokit run --phase / --provider / --effort` の per-run override 受理時 | Phase 1 §6 |
 | `phase_override_ended` | override の `expires_at_run_id` 到達 + run 終了時 | Phase 1 §6 |
 | `preset_apply_started` | `autokit preset apply <name>` の staging 展開開始 | Phase 3 §2 |
-| `preset_apply_finished` | atomic rename で `.agents/` 全体差し替え完了 | Phase 3 §2 |
-| `serve_lock_busy` | `autokit serve` 経路で cross-process lock (`flock(2)`) 取得失敗時 (HTTP 409 fast-path、`failure.code` 不発火) | Phase 2 §1.2 |
+| `preset_apply_finished` | final doctor 緑で apply 成功、または rename 後 doctor failure から rollback 完了し `.agents` が apply 前 manifest と一致した時 | Phase 3 §2 |
+| `preset_apply_rollback_started` | rename 後 doctor failure を検出し、backup 復元を開始する時 | Phase 3 §2 |
+| `preset_apply_rollback_finished` | backup 復元が完了し、apply 前 manifest と一致した時 | Phase 3 §2 |
+| `preset_apply_rollback_failed` | backup 復元失敗 / timeout / manifest 不一致で壊れた `.agents` が残り得る時 | Phase 3 §2 |
+| `serve_lock_busy` | `autokit serve` 経路で cross-process lock (atomic directory lock) 取得失敗時 (HTTP 409 fast-path、`failure.code` 不発火) | Phase 2 §1.2 |
 
 ### 2.2 失敗系 audit kind (§10.2.2.2 への追加候補、`failure.code` 1:1)
 
@@ -122,22 +126,22 @@ state-machine.ts の `TransitionEvent` union に **新規追加なし** (§3 の
 
 1. `packages/core/src/capability.ts` 新設 + `effort-resolver.ts` 新設 + `config.ts` に effort / capability validation 追加
 2. `TaskEntry.runtime` 拡張 (`resolved_effort` / `phase_self_correct_done` / `phase_override` / `provider_sessions` 統合) + zod default で旧 yaml 互換
-3. `AgentRunInput` に effort / effective permission を追加
-4. runner の phase 固定制約を capability 判定へ置換 (Claude `allowed_tools` / `denied_tools` 動的化、`write_path_guard` hook 新設、Bash allowlist)
-5. Codex runner の effort 反映 (`--reasoning-effort`) と payload schema 共通化 (validate のみ、JsonSchema は provider-specific 維持)
+3. `AgentRunInput` に effort / effective permission を追加 + public redaction API と workflow-owned audit emission boundary を固定。Issue 1.3 は `effort_unsupported` (`failure.code`) / `effort_downgrade` (操作系 audit kind) の SPEC trace 更新を所有する
+4. runner の phase 固定制約を capability 判定へ置換 (Claude `allowed_tools` / `denied_tools` 動的化、`write_path_guard` hook + guarded command runner 新設、direct `git` / `gh` は read-only のみ許可)
+5. Codex runner の effort 反映 (`-c model_reasoning_effort=<value>`) と payload schema 共通化 (validate のみ、JsonSchema は provider-specific 維持)
 6. Claude runner の effort profile 変換 (model / max_turns / timeout / prompt policy)
-7. state-machine の **既存 E34 condition 改訂** (`runtime.phase_self_correct_done=true` 必須化、§3.1) + 新 failure.code / audit kind を SPEC §4.2.1.1 / §10.2.2.2 同 PR 更新 (state-machine `TransitionEvent` union への新規追加は **なし**、§3.2)
+7. state-machine の **既存 E34 condition 改訂** (`runtime.phase_self_correct_done=true` 必須化、§3.1) + `phase_self_correct` / `phase_override_*` の操作系 audit kind trace 更新 (SPEC §10.2.2.1 を同 PR 更新。`effort_unsupported` / `effort_downgrade` は Issue 1.3 owner。state-machine `TransitionEvent` union への新規追加は **なし**、§3.2)
 8. `doctor` に provider / effort / prompt / permission 検証を追加 + CLI override の安全 fail-closed
 9. review-fix / ci-fix loop の E2E テスト追加 (audit kind 列で assert、`fakeGh` 拡張)
-10. logs / diff の sanitize / blacklist hunk 除去
-11. `process-lock.ts` + `autokit serve` (HTTP/JSON only、bearer/Origin/Host) + 401/403/409 E2E
-12. `assets-writer.ts` 新設 + preset 構造と `list/show/apply` (path traversal / blacklist / atomic / XDG backup)
+10. logs / diff の sanitize / blacklist hunk 除去 (step 3 で public 化済み redaction API を消費)
+11. `process-lock.ts` (Node 標準 API の atomic directory lock) + `autokit serve` (HTTP/JSON only、bearer/Origin/Host) + 401/403/409 E2E
+12. `assets-writer.ts` 新設 (P1 後に先行可) + P2A-E2E 後に preset `list/show/apply` (path traversal / blacklist / atomic / XDG backup)
 13. 初期 preset 追加 (default / laravel-filament / next-shadcn / docs-create)
 14. skills / prompts / agents を見直して改善 (Phase 4)
-15. user-guide / dev-guide を更新 (SPEC は step 1, 7, 11, 12 で機能と同 PR 更新済み)
+15. user-guide / dev-guide を更新 (SPEC は step 1, 3, 7, 11, 12 で機能と同 PR 更新済み)
 16. (別 issue) Dashboard UI (Phase 2B)
 
-step 7, 11, 12 の各 PR で SPEC §4.2.1.1 / §10.2.2.2 を 1:1 trace 緑で更新する責務 (本書 §4)。
+step 3, 7, 11, 12 の各 PR で、failure.code 追加は SPEC §4.2.1.1 / §10.2.2.2、操作系 audit kind 追加は SPEC §10.2.2.1 を 1:1 trace 緑で更新する責務 (本書 §4)。owner は Issue 1.3 = `effort_unsupported` / `effort_downgrade`、Issue 1.7 = `phase_self_correct` / `phase_override_*` + E34、Issue 2A.1 = `serve_lock_busy`、Issue 3.2 = `preset_*`。
 
 ## 6. リスクと対策
 
@@ -146,15 +150,15 @@ step 7, 11, 12 の各 PR で SPEC §4.2.1.1 / §10.2.2.2 を 1:1 trace 緑で更
 | リスク | 対策 | 関連 § |
 |---|---|---|
 | provider 自由化で安全境界が曖昧 | capability table を core 単独所有 SoT 化、CLI override で permission を変更不可 | Phase 1 §1, §6 |
-| Claude write phase が過剰権限 | write profile のみ `allowed_tools` 拡張 + `write_path_guard` hook + Bash allowlist (git/gh 除外) | Phase 1 §5.1 |
+| Claude write phase が過剰権限 | write profile のみ `allowed_tools` 拡張 + `write_path_guard` hook + guarded command runner。direct `git` / `gh` は read-only 参照のみ許可し write 系と package script 迂回を fail-closed | Phase 1 §5.1 |
 | effort の意味が provider/model でズレる | native effort と autokit profile を `effort-resolver.ts` で分離、downgrade ladder と audit kind | Phase 1 §3 |
 | schema 共通化で構造化出力が壊れる | validate は共通、provider strict schema は provider-specific 維持 (Codex `anyOf` / null 維持) | Phase 1 §5.2 |
 | prompt カスタムで構造化出力が壊れる | prompt_contract test と self-correction retry 1 回 + state-machine 経由 | Phase 1 §7.2, Phase 4 §2 |
-| Dashboard と CLI の二重起動 | `flock(2)` based `.autokit/.lock` + HTTP 409 / CLI exit 75 mapping | Phase 2 §1.2 |
+| Dashboard と CLI の二重起動 | Node 標準 API の atomic directory lock `.autokit/.lock/` + HTTP 409 / CLI exit 75 mapping | Phase 2 §1.2 |
 | Dashboard mutating endpoint の CSRF | bearer token + Origin/Host/Content-Type 検証 + 127.0.0.1 bind | Phase 2 §1.3 |
-| preset 適用で credentials 取込み・既存 `.agents` 破壊 | path traversal / blacklist / atomic apply / XDG backup / SHA256 manifest | Phase 3 §3 |
-| SPEC trace gate 違反 | 新 failure.code / audit kind を core に入れる PR で SPEC §4.2.1.1 / §10.2.2.2 を必ず同時更新 | 本書 §4 |
-| assets-hygiene gate 違反 | Dashboard を `packages/dashboard/` に分離、CLI bin は `bun build` self-contained 維持 | Phase 2 §2 |
+| preset 適用で credentials 取込み・既存 `.agents` 破壊 | bundled preset は `packages/cli/assets/presets/**` に分離、repo-local preset は `.autokit/.gitignore` 配下の user override。apply 前 preflight / path traversal / blacklist / atomic apply / XDG backup / SHA256 manifest | Phase 3 §1, §3 |
+| SPEC trace gate 違反 | 新 failure.code を core に入れる PR は SPEC §4.2.1.1 / §10.2.2.2、操作系 audit kind を core に入れる PR は SPEC §10.2.2.1 を必ず同時更新 | 本書 §4 |
+| assets-hygiene gate 違反 | serve runtime は CLI bin に self-contained bundle し unresolved workspace import を残さない。Dashboard は `packages/dashboard/` に分離し CLI bin に含めない | Phase 2 §1 / §2 |
 
 ## 7. 命名 mapping (計画書 ↔ コード SoT)
 
@@ -167,8 +171,8 @@ step 7, 11, 12 の各 PR で SPEC §4.2.1.1 / §10.2.2.2 を 1:1 trace 緑で更
 | autokit profile (effort) | `resolved_effort` | `tasks.yaml.runtime.resolved_effort` |
 | write profile path guard | `write_path_guard` (Claude PreToolUse hook) | `packages/claude-runner/src/index.ts` (新規 fn) |
 | run-once override | `phase_override` (`expires_at_run_id` 付) | `tasks.yaml.runtime.phase_override` |
-| process lock | `acquireRunLock(repo)` | `packages/core/src/process-lock.ts` (新設) |
-| preset assets writer | `applyPreset(name)` / `assets-writer.ts` | `packages/core/src/assets-writer.ts` (新設) |
+| process lock | `tryAcquireRunLock(repo)` / `waitAcquireRunLock(repo, { timeout_ms })` | `packages/core/src/process-lock.ts` (新設) |
+| preset assets writer | atomic write / backup / manifest primitive (`assets-writer.ts`) | `packages/core/src/assets-writer.ts` (新設)。preset discovery / bundled asset root resolution は CLI |
 | sanitize hunk filter | `filterDiffHunks(diff)` | `packages/cli/src/diff.ts` (新設想定) |
 | doctor override fail-closed checker | `validatePhaseOverride()` | `packages/cli/src/index.ts` の doctor 系 (`index.ts:622-694` 周辺) |
 | self-correction retry orchestrator | `runWithSelfCorrection()` | `packages/workflows/src/index.ts` (現 review/fix loop `index.ts:351-457` 周辺に統合) |
@@ -182,9 +186,9 @@ step 7, 11, 12 の各 PR で SPEC §4.2.1.1 / §10.2.2.2 を 1:1 trace 緑で更
 
 実装 PR (上記 §5 step 1〜14) では:
 
-- 新 `failure.code` / audit kind を含む PR は SPEC.md を同 PR で更新し `scripts/check-trace.sh` を緑化。
-- `packages/serve/` / `packages/dashboard/` を追加する PR は CLI bin に巻き込まないことを `scripts/check-assets-hygiene.sh` で確認。
-- preset backup 配置 (`${XDG_STATE_HOME:-~/.local/state}/autokit/backup/<repo>/<timestamp>/`) は repo tree 外のため `scripts/check-assets-hygiene.sh` の禁止 glob を素通りしない。
+- 新 `failure.code` を含む PR は SPEC.md §4.2.1.1 / §10.2.2.2、操作系 audit kind を含む PR は SPEC.md §10.2.2.1 を同 PR で更新し `scripts/check-trace.sh` を緑化。
+- `packages/serve/` を追加する PR は installed `autokit serve` が動くよう CLI bin に self-contained bundle し、unresolved workspace import が残らないことを `scripts/check-assets-hygiene.sh` と packed install smoke で確認。`packages/dashboard/` を追加する PR は CLI bin に巻き込まないことを確認。
+- preset backup 配置 (`${XDG_STATE_HOME:-~/.local/state}/autokit/backup/<repo-id>/<timestamp>/`) は repo tree 外のため `scripts/check-assets-hygiene.sh` の禁止 glob を素通りしない。bundled preset は `packages/cli/assets/presets/**` として `assets/**` pack 対象に含める。
 
 ## 将来拡張 / 残課題
 

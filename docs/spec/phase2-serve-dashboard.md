@@ -28,6 +28,9 @@ Phase 2 は以下 2 issue に分割。MVP は **Phase 2A のみ必須**。
 - [ ] `GET /api/tasks/:issue/diff` が credentials 含む hunk をプレースホルダ化 (`phase1-core-cli-runner.md` §9.2 と同等)
 - [ ] bearer token が CSPRNG 生成 / 毎起動 regenerate / `crypto.timingSafeEqual` 比較 / shutdown で unlink される (本書 §1.3 AC)
 - [ ] SSE event の bearer / credentials / API key 値 redact / `Last-Event-ID` replay / heartbeat の各 fixture 検証 (本書 §1.4 AC)
+- [ ] `.autokit/.lock` が **mode 0600** で生成される (本書 §1.2)
+- [ ] `autokit init` が `.autokit/.gitignore` を生成し、doctor が欠落時 FAIL する (本書 §1.2)
+- [ ] `.autokit/.lock` の `host` field に hostname 短縮形のみ記録され、username / FQDN / IP が含まれない fixture 検証 (本書 §1.2)
 
 ### Phase 2B 完了条件 (UI、別 issue)
 
@@ -69,6 +72,9 @@ mutating endpoint = `POST /api/{run,resume,retry,cleanup}`。SSE = `GET /api/eve
 | 取得 API | `acquireRunLock(repo)` |
 | 取得失敗時 mapping | HTTP `409 Conflict` (event body `{ code: "serve_lock_busy" }`) ↔ CLI `exit 75 (TEMPFAIL)` + 案内メッセージのみ (`failure.code` は **発火しない**、SPEC §4.2.1.1 既存 `lock_host_mismatch` の「(起動拒否)」「`--force-unlock` 確認」セマンティクスと衝突しないよう、serve 経路は `tasks.yaml` を一切書かない fast-path 統一)  |
 | holder 情報 | `.autokit/.lock` に PID / host / acquired_at を記録 |
+| ファイル mode | `0600` (所有者のみ read/write、SPEC §4.3 既存 `.autokit/lock` と同 mode で multi-user macOS の info-disclosure 遮断) |
+| `.gitignore` 強制 | `autokit init` 時に `.autokit/.gitignore` で `*` パターンを書込 (SPEC §3.2 / §11.5 既存 `.autokit/.gitignore` 規約と統合)、`.autokit/.lock` を含む lock / backup / state 全体が **commit/push されないことを init で強制**。doctor は `.gitignore` 欠落を検出して FAIL |
+| host field redaction | `host` には **hostname 短縮形のみ** 記録 (例: `macbook.local`、`os.hostname()` 由来) し、ユーザー名 / FQDN / 内部ドメイン / IP を含めない。`os.userInfo().username` 等の **個人情報は記録しない**。host が redact 必須環境では config `serve.lock.host_redact: true` で sha256 短縮形 (16 hex) に置換可能 |
 | stale 検出 | 既存 `.autokit/lock` (SPEC §4.3.1) と同様の lstart / pid 死活確認で自動回収 |
 
 `POST /api/run` 中に同 repo で `autokit run` を実行すると exit 75 + 「serve がロック中」ガイダンスを表示。serve 経路の HTTP 409 は **`tasks.yaml.failure` を書かず audit log + HTTP body のみ** で完結する fast-path とし、CLI 経路の `failure.code=lock_host_mismatch` (= SPEC §4.2.1.1 既存「起動拒否 / exit 1 / `--force-unlock` 経路」) との二重定義を避ける。

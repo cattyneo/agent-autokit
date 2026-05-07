@@ -52,6 +52,12 @@ import { Command, CommanderError } from "commander";
 import { redactGitDiff } from "./diff.js";
 import { runProductionWorkflow } from "./executor.js";
 import { type InitOptions, promptContractAssetNames, runInit } from "./init.js";
+import {
+  commandPresetApply,
+  commandPresetList,
+  commandPresetShow,
+  type PresetCliDeps,
+} from "./preset.js";
 
 export const AUTOKIT_VERSION = "0.1.0";
 export const TEMPFAIL_EXIT_CODE = 75;
@@ -86,6 +92,8 @@ export type CliDeps = {
     input: AutokitServeOptions,
   ) => Promise<Pick<AutokitServeServer, "host" | "port" | "tokenPath" | "close">>;
   proc?: Pick<NodeJS.Process, "once" | "exit">;
+  presetAssetRoot?: string;
+  presetPostApplyCheck?: (input: { repoRoot: string; presetName: string }) => void;
 };
 
 export type CliQuestionInput = {
@@ -204,6 +212,36 @@ function createProgram(deps: CliDeps, setExitCode: (code: number) => void): Comm
     .option("--force", "allow init when prior backup residue exists")
     .action((options: { dryRun?: boolean; force?: boolean }) => {
       setExitCode(commandInit(options, deps));
+    });
+
+  const preset = program.command("preset").description("list, show, and apply autokit presets");
+
+  preset
+    .command("list")
+    .description("list bundled and repository-local presets")
+    .action(() => {
+      setExitCode(commandPresetList(toPresetDeps(deps)));
+    });
+
+  preset
+    .command("show")
+    .description("show sanitized preset contents")
+    .argument("<name>", "preset name")
+    .action((name: string) => {
+      setExitCode(commandPresetShow(name, toPresetDeps(deps)));
+    });
+
+  preset
+    .command("apply")
+    .description("apply a preset to .agents and .autokit/config.yaml")
+    .argument("<name>", "preset name")
+    .option("--allow-protected-replace", "allow protected array replacement")
+    .action((name: string, options: { allowProtectedReplace?: boolean }) => {
+      setExitCode(
+        withWriteCommandLock(deps, () =>
+          commandPresetApply(name, options, toPresetDeps(deps, { withPostApplyCheck: true })),
+        ),
+      );
     });
 
   program
@@ -357,6 +395,35 @@ function createProgram(deps: CliDeps, setExitCode: (code: number) => void): Comm
     });
 
   return program;
+}
+
+function toPresetDeps(
+  deps: CliDeps,
+  options: { withPostApplyCheck?: boolean } = {},
+): PresetCliDeps {
+  return {
+    cwd: deps.cwd,
+    env: deps.env,
+    stdout: deps.stdout,
+    stderr: deps.stderr,
+    now: deps.now,
+    presetAssetRoot: deps.presetAssetRoot,
+    presetPostApplyCheck:
+      options.withPostApplyCheck === true
+        ? (deps.presetPostApplyCheck ??
+          (() => {
+            const result = runDoctor(deps);
+            const failures = result.checks.filter((check) => check.status === "FAIL");
+            if (failures.length > 0) {
+              throw new Error(
+                `doctor failed: ${failures
+                  .map((check) => `${check.name}=${check.message}`)
+                  .join("; ")}`,
+              );
+            }
+          }))
+        : undefined,
+  };
 }
 
 function commandInit(options: { dryRun?: boolean; force?: boolean }, deps: CliDeps): number {

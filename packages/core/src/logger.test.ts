@@ -29,7 +29,7 @@ describe("core logger audit tables", () => {
     assert.deepEqual([...failureAuditKinds].sort(), extractSpecFailureAuditKinds(spec));
     assert.deepEqual([...operationalAuditKinds].sort(), extractSpecOperationalAuditKinds(spec));
     assert.deepEqual([...failureAuditKinds], [...failureCodes]);
-    assert.equal(operationalAuditKinds.length, 26);
+    assert.equal(operationalAuditKinds.length, 31);
   });
 });
 

@@ -51,6 +51,11 @@ export const operationalAuditKinds = [
   "phase_override_ended",
   "serve_lock_busy",
   "sse_write_failed",
+  "preset_apply_started",
+  "preset_apply_finished",
+  "preset_apply_rollback_started",
+  "preset_apply_rollback_finished",
+  "preset_apply_rollback_failed",
 ] as const;
 
 export type FailureAuditKind = (typeof failureAuditKinds)[number];

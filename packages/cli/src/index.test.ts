@@ -7,6 +7,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -291,6 +292,234 @@ describe("cli task commands", () => {
     const harness = makeCliHarness(root, { execFile: () => "ok" });
     assert.equal(await runCli(["doctor"], harness.deps), 0);
     assert.match(harness.stdout(), /PASS\tprompt contracts\tvalid/);
+  });
+
+  it("lists bundled and local presets with local priority", async () => {
+    const root = makeTempDir();
+    const bundledRoot = makeTempDir();
+    writeBundledPreset(bundledRoot, "default", { "config.yaml": "version: 1\n" });
+    writePreset(root, "default", { "config.yaml": "version: 1\n" });
+    writePreset(root, "team", { "config.yaml": "version: 1\n" });
+    const harness = makeCliHarness(root, { presetAssetRoot: bundledRoot });
+
+    assert.equal(await runCli(["preset", "list"], harness.deps), 0);
+    assert.match(harness.stdout(), /^NAME\tsource/m);
+    assert.match(harness.stdout(), /^default\tlocal$/m);
+    assert.match(harness.stdout(), /^team\tlocal$/m);
+    assert.doesNotMatch(harness.stdout(), /^default\tbundled$/m);
+  });
+
+  it("shows safe preset contents and refuses sensitive entries with category-only output", async () => {
+    const root = makeTempDir();
+    writePreset(root, "safe", {
+      "config.yaml": `version: 1\nbase_branch: "${root}"\nlabel_filter:\n  - agent-ready\n`,
+      "prompts/notes.md": "# notes\n",
+    });
+    const safeHarness = makeCliHarness(root);
+
+    assert.equal(await runCli(["preset", "show", "safe"], safeHarness.deps), 0);
+    assert.match(safeHarness.stdout(), /preset\tsafe\tlocal/);
+    assert.match(safeHarness.stdout(), /file\tprompts\/notes.md/);
+    assert.match(safeHarness.stdout(), /config\nversion: 1/);
+    assert.match(safeHarness.stdout(), /<repo>/);
+    assert.doesNotMatch(safeHarness.stdout(), new RegExp(escapeRegExp(root)));
+
+    writePreset(root, "secrets", {
+      "prompts/notes.md": "-----BEGIN OPENSSH PRIVATE KEY-----\nnot-real\n",
+    });
+    const secretHarness = makeCliHarness(root);
+
+    assert.equal(await runCli(["preset", "show", "secrets"], secretHarness.deps), 1);
+    assert.match(secretHarness.stderr(), /preset_blacklist_hit/);
+    assert.match(secretHarness.stderr(), /<content-signature:openssh-private-key>/);
+    assert.doesNotMatch(secretHarness.stderr(), /BEGIN OPENSSH PRIVATE KEY/);
+    assert.doesNotMatch(secretHarness.stderr(), /notes\.md/);
+  });
+
+  it("applies a safe preset under lock, merges protected arrays by union, and audits success", async () => {
+    const root = makeTempDir();
+    const stateHome = makeTempDir();
+    runInit(root, { now: () => NOW });
+    const beforeTasks = readFileSync(tasksPath(root), "utf8");
+    const planPrompt = `${readFileSync(join(root, ".agents", "prompts", "plan.md"), "utf8")}\n# preset marker\n`;
+    writePreset(root, "safe", {
+      "config.yaml": [
+        "version: 1",
+        "label_filter:",
+        "  - preset-ready",
+        "logging:",
+        "  redact_patterns:",
+        "    - preset-secret-[0-9]+",
+        "",
+      ].join("\n"),
+      "prompts/plan.md": planPrompt,
+      "skills/team/SKILL.md": "---\nname: team\n---\n# Team\n",
+      "agents/reviewer.md": "# Reviewer\n",
+    });
+    let observedApplyLock = false;
+    const harness = makeCliHarness(root, {
+      env: { XDG_STATE_HOME: stateHome },
+      execFile: () => "ok",
+      presetPostApplyCheck: ({ repoRoot }) => {
+        const contender = tryAcquireRunLock(repoRoot);
+        observedApplyLock = !contender.acquired;
+        if (contender.acquired) {
+          contender.lock.release();
+        }
+      },
+    });
+
+    assert.equal(await runCli(["preset", "apply", "safe"], harness.deps), 0);
+    const config = parseConfigYaml(readFileSync(join(root, ".autokit", "config.yaml"), "utf8"));
+    assert.deepEqual(config.label_filter, ["preset-ready"]);
+    assert.ok(config.logging.redact_patterns.includes(DEFAULT_CONFIG.logging.redact_patterns[0]));
+    assert.ok(config.logging.redact_patterns.includes("preset-secret-[0-9]+"));
+    assert.match(
+      readFileSync(join(root, ".agents", "prompts", "plan.md"), "utf8"),
+      /preset marker/,
+    );
+    assert.equal(existsSync(join(root, ".agents", "skills", "team", "SKILL.md")), true);
+    assert.equal(existsSync(join(root, ".agents", "agents", "reviewer.md")), true);
+    assert.equal(readFileSync(tasksPath(root), "utf8"), beforeTasks);
+    assert.equal(observedApplyLock, true);
+    assert.match(harness.stdout(), /preset applied\tsafe/);
+    assertAuditKinds(root, ["preset_apply_started", "preset_apply_finished"]);
+    assert.equal(existsSync(join(stateHome, "autokit", "backup")), true);
+  });
+
+  it("fails protected array replacement without the explicit flag before creating backup", async () => {
+    const root = makeTempDir();
+    const stateHome = makeTempDir();
+    runInit(root, { now: () => NOW });
+    const beforeAgents = readFileSync(join(root, ".agents", "prompts", "plan.md"), "utf8");
+    writePreset(root, "unsafe", {
+      "config.yaml": "version: 1\nlogging:\n  redact_patterns: []\n",
+      "prompts/plan.md": `${beforeAgents}\n# should not apply\n`,
+    });
+    const harness = makeCliHarness(root, {
+      env: { XDG_STATE_HOME: stateHome },
+      execFile: () => "ok",
+    });
+
+    assert.equal(await runCli(["preset", "apply", "unsafe"], harness.deps), 1);
+    assert.match(harness.stderr(), /preset_blacklist_hit/);
+    assert.match(harness.stderr(), /<protected-array:logging.redact_patterns>/);
+    assert.equal(readFileSync(join(root, ".agents", "prompts", "plan.md"), "utf8"), beforeAgents);
+    assert.equal(existsSync(join(stateHome, "autokit", "backup")), false);
+    assertAuditKinds(root, ["preset_blacklist_hit"]);
+  });
+
+  it("allows explicit protected replacement but still enforces the Claude capability hard cap", async () => {
+    const replaceRoot = makeTempDir();
+    runInit(replaceRoot, { now: () => NOW });
+    writePreset(replaceRoot, "replace", {
+      "config.yaml": "version: 1\nlogging:\n  redact_patterns: []\n",
+    });
+    const replaceHarness = makeCliHarness(replaceRoot, { execFile: () => "ok" });
+
+    assert.equal(
+      await runCli(
+        ["preset", "apply", "replace", "--allow-protected-replace"],
+        replaceHarness.deps,
+      ),
+      0,
+    );
+    assert.deepEqual(
+      parseConfigYaml(readFileSync(join(replaceRoot, ".autokit", "config.yaml"), "utf8")).logging
+        .redact_patterns,
+      [],
+    );
+
+    const capRoot = makeTempDir();
+    runInit(capRoot, { now: () => NOW });
+    writePreset(capRoot, "cap", {
+      "config.yaml":
+        'version: 1\npermissions:\n  claude:\n    allowed_tools: ["Read", "Grep", "Glob", "Bash"]\n',
+    });
+    const capHarness = makeCliHarness(capRoot, { execFile: () => "ok" });
+
+    assert.equal(
+      await runCli(["preset", "apply", "cap", "--allow-protected-replace"], capHarness.deps),
+      1,
+    );
+    assert.match(capHarness.stderr(), /preset_blacklist_hit/);
+    assert.match(capHarness.stderr(), /<protected-array:permissions.claude.allowed_tools>/);
+    assert.doesNotMatch(capHarness.stderr(), /Bash/);
+  });
+
+  it("fast-fails preset apply when the process lock is busy before backup or asset mutation", async () => {
+    const root = makeTempDir();
+    const stateHome = makeTempDir();
+    writePreset(root, "safe", { "config.yaml": "version: 1\n" });
+    createBusyLock(root);
+    const harness = makeCliHarness(root, {
+      env: { XDG_STATE_HOME: stateHome },
+      execFile: () => "ok",
+    });
+
+    assert.equal(await runCli(["preset", "apply", "safe"], harness.deps), TEMPFAIL_EXIT_CODE);
+    assert.match(harness.stderr(), /autokit lock busy/);
+    assert.equal(existsSync(join(root, ".agents")), false);
+    assert.equal(existsSync(join(stateHome, "autokit", "backup")), false);
+  });
+
+  it("rejects blacklist paths, symlinks, and symlinked .agents parent with preset-specific failures", async () => {
+    const casefoldRoot = makeTempDir();
+    runInit(casefoldRoot, { now: () => NOW });
+    writePreset(casefoldRoot, "casefold", { ".ENV": "TOKEN=value\n" });
+    const casefoldHarness = makeCliHarness(casefoldRoot, { execFile: () => "ok" });
+    assert.equal(await runCli(["preset", "apply", "casefold"], casefoldHarness.deps), 1);
+    assert.match(casefoldHarness.stderr(), /preset_blacklist_hit/);
+    assert.match(casefoldHarness.stderr(), /<blacklist:env>/);
+    assert.doesNotMatch(casefoldHarness.stderr(), /\.ENV/);
+
+    const symlinkRoot = makeTempDir();
+    runInit(symlinkRoot, { now: () => NOW });
+    mkdirSync(join(symlinkRoot, ".autokit", "presets", "linked", "prompts"), { recursive: true });
+    symlinkSync(
+      join(makeTempDir(), "outside.md"),
+      join(symlinkRoot, ".autokit", "presets", "linked", "prompts", "link.md"),
+    );
+    const symlinkHarness = makeCliHarness(symlinkRoot, { execFile: () => "ok" });
+    assert.equal(await runCli(["preset", "apply", "linked"], symlinkHarness.deps), 1);
+    assert.match(symlinkHarness.stderr(), /preset_path_traversal/);
+    assert.doesNotMatch(symlinkHarness.stderr(), /link\.md/);
+
+    const agentsRoot = makeTempDir();
+    const outside = makeTempDir();
+    mkdirSync(join(agentsRoot, ".autokit"), { recursive: true });
+    symlinkSync(outside, join(agentsRoot, ".agents"));
+    writePreset(agentsRoot, "safe", { "config.yaml": "version: 1\n" });
+    const agentsHarness = makeCliHarness(agentsRoot, { execFile: () => "ok" });
+    assert.equal(await runCli(["preset", "apply", "safe"], agentsHarness.deps), 1);
+    assert.match(agentsHarness.stderr(), /preset_path_traversal/);
+    assert.equal(readlinkSync(join(agentsRoot, ".agents")), outside);
+  });
+
+  it("rolls back applied files when post-apply validation fails and records rollback audits", async () => {
+    const root = makeTempDir();
+    runInit(root, { now: () => NOW });
+    const beforePlan = readFileSync(join(root, ".agents", "prompts", "plan.md"), "utf8");
+    writePreset(root, "rollback", {
+      "config.yaml": "version: 1\nlabel_filter:\n  - rollback\n",
+      "prompts/plan.md": `${beforePlan}\n# rollback marker\n`,
+    });
+    const harness = makeCliHarness(root, {
+      execFile: () => "ok",
+      presetPostApplyCheck: () => {
+        throw new Error("injected preset doctor failure");
+      },
+    });
+
+    assert.equal(await runCli(["preset", "apply", "rollback"], harness.deps), 1);
+    assert.match(harness.stderr(), /preset apply validation failed/);
+    assert.equal(readFileSync(join(root, ".agents", "prompts", "plan.md"), "utf8"), beforePlan);
+    assertAuditKinds(root, [
+      "preset_apply_started",
+      "preset_apply_rollback_started",
+      "preset_apply_rollback_finished",
+      "preset_apply_finished",
+    ]);
   });
 
   it("supports init --dry-run through the CLI seam without writing", async () => {
@@ -1278,6 +1507,43 @@ function matchFixtureValue(source: string, key: string): string {
     throw new Error(`missing ${key} in legacy session fixture`);
   }
   return value;
+}
+
+function writePreset(root: string, name: string, files: Record<string, string>): void {
+  writePresetFiles(join(root, ".autokit", "presets", name), files);
+}
+
+function writeBundledPreset(assetRoot: string, name: string, files: Record<string, string>): void {
+  writePresetFiles(join(assetRoot, name), files);
+}
+
+function writePresetFiles(presetRoot: string, files: Record<string, string>): void {
+  for (const [relativePath, content] of Object.entries(files)) {
+    const target = join(presetRoot, relativePath);
+    mkdirSync(join(target, ".."), { recursive: true });
+    writeFileSync(target, content, { mode: 0o600 });
+  }
+}
+
+function assertAuditKinds(root: string, expectedKinds: string[]): void {
+  const logRoot = join(root, ".autokit", "logs");
+  const lines = existsSync(logRoot)
+    ? readdirSync(logRoot)
+        .filter((entry) => entry.endsWith(".log"))
+        .flatMap((entry) =>
+          readFileSync(join(logRoot, entry), "utf8")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as { event?: string; kind?: string }),
+        )
+    : [];
+  for (const expectedKind of expectedKinds) {
+    assert.ok(
+      lines.some((line) => line.event === "audit" && line.kind === expectedKind),
+      `missing audit kind: ${expectedKind}`,
+    );
+  }
 }
 
 function makeCliHarness(

@@ -460,6 +460,7 @@ tasks:
     fix:                                 # 直近 fix 起動時のメタ。fix 入力種別と E12/E13 の分岐に使用 (§5.1)
       origin: null                       # null | "review" | "ci"
       started_at: null
+      ci_failure_log: null               # origin="ci" の fix prompt へ渡す sanitize 済 failure log
     retry:                               # autokit retry 起動中のみ非 null。冪等再実行のための進捗 marker (§6.2)
       cleanup_progress: null             # null | { pr_closed, worktree_removed, branch_deleted, fields_cleared }
                                           # retry 起動中の各 flag は false | true。retry 外 / 完了後は null。
@@ -1345,7 +1346,7 @@ git worktree add -b autokit/issue-12345 .autokit/worktrees/issue-12345 origin/<b
 2. core が rebase 実行 (§7.8)。自動解決失敗で E31 → 成功で **`git.checkpoints.fix.rebase_done = git rev-parse HEAD`** 永続化 (rebase 副作用 = rerere キャッシュ / 解決済 conflict は永続化済、reconcile では再実行しない、二重実行による worktree 破壊防止)
 3. implementer (Codex) を `fix` prompt_contract で起動 (内包 skill: `autokit-implement` + `autokit-question`)
    - `origin="review"` の場合: accept 分の finding のみ入力に含める (sanitize 済、§4.6.2.1)
-   - `origin="ci"` の場合: CI failure log (`gh run view --log-failed`、sanitize 済) を入力に含める
+   - `origin="ci"` の場合: `fix.ci_failure_log` に保持した CI failure log (`gh run view --log-failed`、sanitize 済) を入力に含める
 4. runner `status=completed` 受領直後 **`agent_done` 永続化** (worktree 内変更が積まれた未 commit 状態の marker)
 5. core が `git add -A` + `git commit -m <msg>` → **`commit_done` 永続化**
 6. core が `git push` → **`push_done` 永続化**
@@ -1385,8 +1386,8 @@ git worktree add -b autokit/issue-12345 .autokit/worktrees/issue-12345 origin/<b
       - `--auto` 予約 **しない**
       - state=`paused` + `failure.code=manual_merge_required` + 通知 (E15)
 3. **CI failure 検知:**
-   - `gh run view --log-failed` で failure log 抽出 (sanitize 済で fix prompt 入力に使用、§4.6.2)
-   - tasks.yaml に `fix.origin="ci"` 記録
+   - `gh run view --log-failed` で failure log 抽出 (sanitize 済で `fix.ci_failure_log` に保持し、fix prompt 入力に使用、§4.6.2)
+   - tasks.yaml に `fix.origin="ci"` と `fix.ci_failure_log` を記録
    - `ci_fix_round` カウンタは **`ci_waiting` で CI failure を観測したこの時点でのみ +1**。fix フェーズ内の rebase / push 失敗 (E31 等) では加算しない (連鎖 paused → resume での重複加算を防止)
    - reconcile 経由で `ci_waiting` 直接復帰した場合も加算しない (新規 CI failure 観測ではないため)
    - `ci_fix_round + 1 > config.ci.fix_max_rounds` なら E19 (`failure.code=ci_failure_max`、fix_max_rounds=N で N 回 fix 後 N+1 回目 failure で停止)、それ以外は E18 で `fixing` 入り
@@ -1901,6 +1902,11 @@ audit イベントは info level で必ず記録する。**`paused` 遷移時の
 | `retry_pr_closed` | retry の事前処理 PR close 完了 (§6.2) |
 | `effort_downgrade` | workflow phase start で未サポート effort を `effort.unsupported_policy=downgrade` により下位 effort へ解決 |
 | `phase_self_correct` | 初回 prompt_contract 違反時に `runtime.phase_self_correct_done=false -> true` を永続化し、同一 phase を self-correction retry する直前 |
+| `phase_started` | review-fix / ci-fix loop 内で review phase runner dispatch を開始 |
+| `review_finding_seen` | review phase が新規 finding を観測し、supervise / fix 判定へ渡す直前 |
+| `fix_started` | review-origin または ci-origin の fix phase を開始し、fix checkpoint を作成する直前 |
+| `fix_finished` | fix push 完了後、`fixing -> reviewing` へ戻す直前 |
+| `review_started` | fix 完了後、次の review phase へ戻ることを記録 |
 | `phase_override_started` | `autokit run --phase / --provider / --effort` が per-run phase/provider/effort override を受理 |
 | `phase_override_ended` | phase override が正常完了、期限切れ、または retry/reset で終了 |
 
@@ -2369,7 +2375,7 @@ v0.1.0 GA 条件:
 - [ ] **`~/.codex/auth.json` / `$CODEX_HOME/auth.json` / `.codex/auth*` の値が logs / backup / artifacts / Issue body / review artifact / PR comment に混入しない**
 - [ ] **`codex exec --json` event parse / session id 保存 / final JSON schema validation / resume / sandbox / approval / ChatGPT-managed auth 判別は MIG-004 pinned evidence で確認済みの contract のみ AK-010 実装に使われ、未確認 CLI 機能は必須要件として固定されない**
 - [ ] **audit kind が `failure.code` と 1:1 対応: paused/failed 遷移時に同名 audit kind が info で発火し、event 本体に `failure: {phase, code, message, ts}` field を含む** (§10.2.2.2)
-- [ ] **操作系 audit kind (§10.2.2.1 の 18 種: resume / resumed / lock_seized / init_rollback / init_rollback_failed / retry_resumed / runner_idle / audit_hmac_key_rotated / queue_corruption_recovered / sanitize_pass_hmac / auto_merge_disabled / auto_merge_reserved / branch_deleted / retry_pr_closed / effort_downgrade / phase_self_correct / phase_override_started / phase_override_ended) が info または指定 level で必ず記録**
+- [ ] **操作系 audit kind (§10.2.2.1 の 23 種: resume / resumed / lock_seized / init_rollback / init_rollback_failed / retry_resumed / runner_idle / audit_hmac_key_rotated / queue_corruption_recovered / sanitize_pass_hmac / auto_merge_disabled / auto_merge_reserved / branch_deleted / retry_pr_closed / effort_downgrade / phase_self_correct / phase_started / review_finding_seen / fix_started / fix_finished / review_started / phase_override_started / phase_override_ended) が info または指定 level で必ず記録**
 - [ ] **log rotation 中も audit event を silent drop しない: ローテ手順 (flush → fsync → close → rename → open) の境界で event drop なし、rename 失敗時は旧 file 継続 + WARN 記録** (§10.3.1)
 - [ ] **log size (`max_file_size_mb` / `max_total_size_mb`) 超過でローテ / 削除**
 

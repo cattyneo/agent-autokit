@@ -31,6 +31,10 @@ export function buildGhPrViewCiArgs(prNumber: number): string[] {
   return ["pr", "view", String(prNumber), "--json", "statusCheckRollup"];
 }
 
+export function buildGhRunViewFailedLogArgs(runId: string): string[] {
+  return ["run", "view", runId, "--log-failed"];
+}
+
 export function buildGhPrViewMergeArgs(prNumber: number): string[] {
   return [
     "pr",

@@ -187,5 +187,5 @@ function clearRetryFields(task: TaskEntry): void {
   }
   task.review_round = 0;
   task.ci_fix_round = 0;
-  task.fix = { origin: null, started_at: null };
+  task.fix = { origin: null, started_at: null, ci_failure_log: null };
 }

@@ -63,6 +63,11 @@ AC「`failure.message` に `$HOME` 絶対パスが含まれない fixture」「b
 |---|---|---|
 | `effort_downgrade` | `effort.unsupported_policy=downgrade` でサポート外組合せが ladder (`high → medium → low → auto`) で 1 段階落ちた時 | Phase 1 §3.3 |
 | `phase_self_correct` | `prompt_contract_violation` 検出 → self-correction retry の `runtime.phase_self_correct_done=false → true` 遷移時 | Phase 1 §7.2 |
+| `phase_started` | review-fix / ci-fix loop 内で review phase runner dispatch を開始 | Phase 1 §7.1 / Issue 1.9 |
+| `review_finding_seen` | review phase が新規 finding を観測し、supervise / fix 判定へ渡す直前 | Phase 1 §7.1 / Issue 1.9 |
+| `fix_started` | review-origin または ci-origin の fix phase を開始し、fix checkpoint を作成する直前 | Phase 1 §7.2 / Issue 1.9 |
+| `fix_finished` | fix push 完了後、`fixing -> reviewing` へ戻す直前 | Phase 1 §7.2 / Issue 1.9 |
+| `review_started` | fix 完了後、次の review phase へ戻ることを記録 | Phase 1 §7.1 / Issue 1.9 |
 | `phase_override_started` | `autokit run --phase / --provider / --effort` の per-run override 受理時 | Phase 1 §6 |
 | `phase_override_ended` | override の `expires_at_run_id` 到達 + run 終了時 | Phase 1 §6 |
 | `preset_apply_started` | `autokit preset apply <name>` の staging 展開開始 | Phase 3 §2 |
@@ -86,11 +91,16 @@ AC「`failure.message` に `$HOME` 絶対パスが含まれない fixture」「b
 
 SPEC §5.1 不変条件: **1 transition で state または runtime_phase が必ず変化**。subphase 移行 / runtime field 更新のみで state / runtime_phase が動かないイベントは TransitionEvent 化しない方針 (現行 E01〜E40 全 case が state または runtime_phase を変える)。
 
-本 Phase で導入する 3 イベントはこの不変条件を保つため **TransitionEvent 化しない**:
+本 Phase で導入する 8 イベントはこの不変条件を保つため **TransitionEvent 化しない**:
 
 | イベント名 | 扱い | 配置 | 関連 § |
 |---|---|---|---|
 | `phase_self_correct` | **operational audit kind のみ** (§2.1) + `runtime.phase_self_correct_done` field 更新 | workflows 内 retry orchestrator (`runWithSelfCorrection`、§7 命名 mapping) | Phase 1 §7.3 |
+| `phase_started` | **operational audit kind のみ** (§2.1) | workflows 内 review runner dispatch 境界 | Phase 1 §7.1 / Issue 1.9 |
+| `review_finding_seen` | **operational audit kind のみ** (§2.1) | workflows 内 review finding 受領境界 | Phase 1 §7.1 / Issue 1.9 |
+| `fix_started` | **operational audit kind のみ** (§2.1) | workflows 内 fix checkpoint 開始境界 | Phase 1 §7.2 / Issue 1.9 |
+| `fix_finished` | **operational audit kind のみ** (§2.1) | workflows 内 fix push 完了境界 | Phase 1 §7.2 / Issue 1.9 |
+| `review_started` | **operational audit kind のみ** (§2.1) | workflows 内 fix から review へ戻る境界 | Phase 1 §7.1 / Issue 1.9 |
 | `phase_override_started` | **operational audit kind のみ** (§2.1) + `runtime.phase_override` field 更新 | CLI override receiver / state machine 不経由 | Phase 1 §6 |
 | `phase_override_ended` | **operational audit kind のみ** (§2.1) + `runtime.phase_override=null` 復帰 | run 終了 / `expires_at_run_id` 到達検査 | Phase 1 §6 |
 
@@ -132,7 +142,7 @@ state-machine.ts の `TransitionEvent` union に **新規追加なし** (§3 の
 6. Claude runner の effort profile 変換 (model / max_turns / timeout / prompt policy)
 7. state-machine の **既存 E34 condition 改訂** (`runtime.phase_self_correct_done=true` 必須化、§3.1) + `phase_self_correct` / `phase_override_*` の操作系 audit kind trace 更新 (SPEC §10.2.2.1 を同 PR 更新。`effort_unsupported` / `effort_downgrade` は Issue 1.3 owner。state-machine `TransitionEvent` union への新規追加は **なし**、§3.2)
 8. `doctor` に provider / effort / prompt / permission 検証を追加 + CLI override の安全 fail-closed
-9. review-fix / ci-fix loop の E2E テスト追加 (audit kind 列で assert、`fakeGh` 拡張)
+9. review-fix / ci-fix loop の E2E テスト追加 (audit kind 列で assert、`fakeGh` 拡張、`phase_started` / `review_finding_seen` / `fix_started` / `fix_finished` / `review_started` の操作系 audit kind trace 更新)
 10. logs / diff の sanitize / blacklist hunk 除去 (step 3 で public 化済み redaction API を消費)
 11. `process-lock.ts` (Node 標準 API の atomic directory lock) + `autokit serve` (HTTP/JSON only、bearer/Origin/Host) + 401/403/409 E2E
 12. `assets-writer.ts` 新設 (P1 後に先行可) + P2A-E2E 後に preset `list/show/apply` (path traversal / blacklist / atomic / XDG backup)
@@ -141,7 +151,7 @@ state-machine.ts の `TransitionEvent` union に **新規追加なし** (§3 の
 15. user-guide / dev-guide を更新 (SPEC は step 1, 3, 7, 11, 12 で機能と同 PR 更新済み)
 16. (別 issue) Dashboard UI (Phase 2B)
 
-step 3, 7, 11, 12 の各 PR で、failure.code 追加は SPEC §4.2.1.1 / §10.2.2.2、操作系 audit kind 追加は SPEC §10.2.2.1 を 1:1 trace 緑で更新する責務 (本書 §4)。owner は Issue 1.3 = `effort_unsupported` / `effort_downgrade`、Issue 1.7 = `phase_self_correct` / `phase_override_*` + E34、Issue 2A.1 = `serve_lock_busy`、Issue 3.2 = `preset_*`。
+step 3, 7, 9, 11, 12 の各 PR で、failure.code 追加は SPEC §4.2.1.1 / §10.2.2.2、操作系 audit kind 追加は SPEC §10.2.2.1 を 1:1 trace 緑で更新する責務 (本書 §4)。owner は Issue 1.3 = `effort_unsupported` / `effort_downgrade`、Issue 1.7 = `phase_self_correct` / `phase_override_*` + E34、Issue 1.9 = `phase_started` / `review_finding_seen` / `fix_started` / `fix_finished` / `review_started`、Issue 2A.1 = `serve_lock_busy`、Issue 3.2 = `preset_*`。
 
 ## 6. リスクと対策
 

@@ -41,6 +41,11 @@ export const operationalAuditKinds = [
   "retry_pr_closed",
   "effort_downgrade",
   "phase_self_correct",
+  "phase_started",
+  "review_finding_seen",
+  "fix_started",
+  "fix_finished",
+  "review_started",
   "phase_override_started",
   "phase_override_ended",
 ] as const;

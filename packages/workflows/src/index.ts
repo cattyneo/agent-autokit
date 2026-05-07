@@ -4,6 +4,7 @@ import { posix } from "node:path";
 import {
   type AgentRunInput,
   type AgentRunOutput,
+  type AuditFailureInput,
   type AutokitConfig,
   cloneTask,
   DEFAULT_CONFIG,
@@ -25,6 +26,7 @@ import {
   resolveRunnerTimeout,
   sanitizeLogString,
   type TaskEntry,
+  type TransitionEvent,
   transitionTask,
   validateCapabilitySelection,
 } from "@cattyneo/autokit-core";
@@ -38,6 +40,7 @@ export type WorkflowPromptInput = {
   phase: RuntimePhase;
   planMarkdown?: string;
   currentFindings?: ReviewFindingWithId[];
+  ciFailureLog?: string;
 };
 
 export type WorkflowQuestionInput = {
@@ -60,6 +63,7 @@ export type WorkflowOptions = {
   getHeadSha?: (phase: RuntimePhase) => Promise<string> | string;
   persistTask?: (task: TaskEntry) => Promise<void> | void;
   auditOperation?: (kind: OperationalAuditKind, fields: Record<string, unknown>) => void;
+  auditFailure?: (input: AuditFailureInput) => void;
   now?: () => string;
   homeDir?: string;
 };
@@ -416,6 +420,14 @@ export async function runReviewSuperviseWorkflow(
   }
   task = reviewCompleted.task;
   findings = assignFindingIds(sanitizeReviewFindings(reviewCompleted.data.findings, options));
+  if (findings.length > 0) {
+    emitLoopAudit(options, "review_finding_seen", {
+      issue: task.issue,
+      phase: "review",
+      count: findings.length,
+      finding_ids: findings.map((finding) => finding.finding_id),
+    });
+  }
   task = transitionTask(task, { type: "review_completed" }, config);
 
   if (findings.length === 0 || everyFindingAlreadyRejected(task, findings)) {
@@ -449,7 +461,12 @@ export async function runReviewSuperviseWorkflow(
   upsertRejectHistory(task, findings, superviseDecision, decisionRound);
 
   if (superviseDecision.accept_ids.length > 0) {
-    task = transitionTask(task, { type: "supervise_accept", origin: "review" }, config);
+    task = transitionWorkflowTask(
+      task,
+      { type: "supervise_accept", origin: "review" },
+      config,
+      options,
+    );
     return {
       task,
       findings,
@@ -620,6 +637,11 @@ export async function runFixWorkflow(
   const prNumber = task.pr.number;
 
   if (task.git.checkpoints.fix.before_sha === null) {
+    emitLoopAudit(options, "fix_started", {
+      issue: task.issue,
+      phase: "fix",
+      origin: task.fix.origin,
+    });
     task.git.checkpoints.fix.before_sha = await options.git.getHeadSha();
     phaseStartedInThisInvocation = true;
     await persistTask(task, options);
@@ -686,10 +708,38 @@ export async function runFixWorkflow(
 
   if (task.git.checkpoints.fix.after_sha === null) {
     task.git.checkpoints.fix.after_sha = requirePrHead(task);
+    const origin = task.fix.origin;
+    emitLoopAudit(options, "fix_finished", {
+      issue: task.issue,
+      phase: "fix",
+      origin,
+      head_sha: task.git.checkpoints.fix.after_sha,
+    });
+    emitLoopAudit(options, "review_started", {
+      issue: task.issue,
+      phase: "review",
+      origin,
+      review_round: task.review_round,
+      ci_fix_round: task.ci_fix_round,
+    });
     task = transitionTask(task, { type: "fix_pushed" });
     task.git.checkpoints.fix.after_sha = requirePrHead(task);
     await persistTask(task, options);
   } else if (task.state === "fixing") {
+    const origin = task.fix.origin;
+    emitLoopAudit(options, "fix_finished", {
+      issue: task.issue,
+      phase: "fix",
+      origin,
+      head_sha: task.git.checkpoints.fix.after_sha,
+    });
+    emitLoopAudit(options, "review_started", {
+      issue: task.issue,
+      phase: "review",
+      origin,
+      review_round: task.review_round,
+      ci_fix_round: task.ci_fix_round,
+    });
     task = transitionTask(task, { type: "fix_pushed" });
     task.git.checkpoints.fix.after_sha = requirePrHead(task);
     await persistTask(task, options);
@@ -724,7 +774,7 @@ export async function runCiWaitWorkflow(
       if (config.ci.timeout_action === "failed") {
         await options.github.disableAutoMerge(prNumber);
       }
-      return { task: transitionTask(task, { type: "ci_timeout" }, config) };
+      return { task: transitionWorkflowTask(task, { type: "ci_timeout" }, config, options) };
     }
 
     const checks = await options.github.getChecks(prNumber);
@@ -733,18 +783,27 @@ export async function runCiWaitWorkflow(
       continue;
     }
     if (checks.status === "failure") {
+      const ciFailureLog = sanitizeWorkflowString(checks.failedLog, options);
+      const nextTask = transitionWorkflowTask(task, { type: "ci_failed" }, config, options, {
+        ci_failure_log: ciFailureLog,
+      });
+      if (nextTask.state === "fixing" && nextTask.fix.origin === "ci") {
+        nextTask.fix.ci_failure_log = ciFailureLog;
+      }
       return {
-        task: transitionTask(task, { type: "ci_failed" }, config),
-        ciFailureLog: checks.failedLog,
+        task: nextTask,
+        ciFailureLog,
       };
     }
 
     const preReservation = await options.github.getPr(prNumber, "pre_reservation_check");
     if (preReservation.headSha !== expectedHead) {
-      return { task: transitionTask(task, { type: "ci_head_mismatch" }, config) };
+      return { task: transitionWorkflowTask(task, { type: "ci_head_mismatch" }, config, options) };
     }
     if (preReservation.mergeable === "BLOCKED") {
-      return { task: transitionTask(task, { type: "ci_branch_protection" }, config) };
+      return {
+        task: transitionWorkflowTask(task, { type: "ci_branch_protection" }, config, options),
+      };
     }
     if (preReservation.mergeable === "UNKNOWN") {
       await sleepFor(config.merge.poll_interval_ms, options);
@@ -752,7 +811,9 @@ export async function runCiWaitWorkflow(
     }
 
     if (!config.auto_merge) {
-      return { task: transitionTask(task, { type: "ci_passed_manual_merge" }, config) };
+      return {
+        task: transitionWorkflowTask(task, { type: "ci_passed_manual_merge" }, config, options),
+      };
     }
 
     await options.github.reserveAutoMerge({ prNumber, headSha: expectedHead });
@@ -761,7 +822,7 @@ export async function runCiWaitWorkflow(
       await options.github.disableAutoMerge(prNumber);
       await waitForAutoMergeDisabled(prNumber, options);
       task = invalidateLatestAcceptedFindings(task);
-      return { task: transitionTask(task, { type: "ci_head_mismatch" }, config) };
+      return { task: transitionWorkflowTask(task, { type: "ci_head_mismatch" }, config, options) };
     }
 
     return { task: transitionTask(task, { type: "auto_merge_reserved" }, config) };
@@ -980,8 +1041,13 @@ function buildAgentRunInput(
     cwd:
       workspaceScope === "worktree" ? (options.worktreeRoot ?? options.repoRoot) : options.repoRoot,
     prompt:
-      options.buildPrompt?.({ task, phase, planMarkdown, currentFindings }) ??
-      defaultPrompt(task, phase),
+      options.buildPrompt?.({
+        task,
+        phase,
+        planMarkdown,
+        currentFindings,
+        ciFailureLog: phase === "fix" ? (task.fix.ci_failure_log ?? undefined) : undefined,
+      }) ?? defaultPrompt(task, phase),
     promptContract: promptContractForPhase(phase),
     model: task.runtime.resolved_model[phase] ?? "auto",
     effort: resolvedEffort,
@@ -1006,11 +1072,15 @@ function buildAgentRunInput(
 }
 
 function defaultPrompt(task: TaskEntry, phase: RuntimePhase): string {
-  return [
+  const lines = [
     `Issue #${task.issue}: ${task.title}`,
     `runtime_phase: ${phase}`,
     "Follow the configured prompt_contract and return structured output only.",
-  ].join("\n");
+  ];
+  if (phase === "fix" && task.fix.origin === "ci" && task.fix.ci_failure_log !== null) {
+    lines.push("", "CI failure log:", task.fix.ci_failure_log);
+  }
+  return lines.join("\n");
 }
 
 function resumeForPhase(
@@ -1142,6 +1212,14 @@ async function runPhase(
           return { ok: false, task: prepared.task };
         }
         currentTask = prepared.task;
+      }
+      if (phase === "review") {
+        emitLoopAudit(options, "phase_started", {
+          issue: currentTask.issue,
+          phase,
+          state: currentTask.state,
+          review_round: currentTask.review_round,
+        });
       }
       const output = await options.runner(
         buildAgentRunInput(
@@ -1366,6 +1444,20 @@ function emitEffortDowngradeAudit(
   });
 }
 
+function emitLoopAudit(
+  options: WorkflowOptions,
+  kind: "phase_started" | "review_finding_seen" | "fix_started" | "fix_finished" | "review_started",
+  fields: Record<string, unknown>,
+): void {
+  const sanitized = Object.fromEntries(
+    Object.entries(fields).map(([key, value]) => [
+      key,
+      typeof value === "string" ? sanitizeWorkflowString(value, options) : value,
+    ]),
+  );
+  options.auditOperation?.(kind, sanitized);
+}
+
 function resolvedEffortEquals(
   actual: TaskEntry["runtime"]["resolved_effort"],
   expected: NonNullable<TaskEntry["runtime"]["resolved_effort"]>,
@@ -1488,10 +1580,12 @@ function failWorkflow(
   options: WorkflowOptions,
 ): WorkflowResult {
   const sanitizedMessage = sanitizeWorkflowString(message, options);
+  const failure = makeFailure({ phase, code, message: sanitizedMessage, ts: options.now?.() });
+  emitFailureAudit(options, task.issue, failure);
   return {
     task: transitionTask(task, {
       type: "fail",
-      failure: makeFailure({ phase, code, message: sanitizedMessage, ts: options.now?.() }),
+      failure,
     }),
   };
 }
@@ -1504,9 +1598,51 @@ function pauseWorkflow(
   options: WorkflowOptions,
 ): TaskEntry {
   const sanitizedMessage = sanitizeWorkflowString(message, options);
+  const failure = makeFailure({ phase, code, message: sanitizedMessage, ts: options.now?.() });
+  emitFailureAudit(options, task.issue, failure);
   return transitionTask(task, {
     type: "pause",
-    failure: makeFailure({ phase, code, message: sanitizedMessage, ts: options.now?.() }),
+    failure,
+  });
+}
+
+function transitionWorkflowTask(
+  task: TaskEntry,
+  event: TransitionEvent,
+  config: AutokitConfig,
+  options: WorkflowOptions,
+  payload?: Record<string, unknown>,
+): TaskEntry {
+  const next = transitionTask(task, event, config);
+  if (next.failure !== null && failureChanged(task.failure, next.failure)) {
+    emitFailureAudit(options, next.issue, next.failure, payload);
+  }
+  return next;
+}
+
+function failureChanged(
+  before: TaskEntry["failure"],
+  after: NonNullable<TaskEntry["failure"]>,
+): boolean {
+  return (
+    before === null ||
+    before.code !== after.code ||
+    before.phase !== after.phase ||
+    before.message !== after.message ||
+    before.ts !== after.ts
+  );
+}
+
+function emitFailureAudit(
+  options: WorkflowOptions,
+  issue: number,
+  failure: NonNullable<TaskEntry["failure"]>,
+  payload?: Record<string, unknown>,
+): void {
+  options.auditFailure?.({
+    issue,
+    failure,
+    payload,
   });
 }
 

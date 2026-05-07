@@ -116,6 +116,7 @@ export function transitionTask(
       task.state = "fixing";
       task.runtime_phase = "fix";
       task.fix.origin = event.origin;
+      task.fix.ci_failure_log = null;
       resetFixPhase(task);
       resetPhaseAttempt(task);
       return task;
@@ -129,6 +130,7 @@ export function transitionTask(
       task.state = "reviewing";
       task.runtime_phase = "review";
       task.fix.origin = null;
+      task.fix.ci_failure_log = null;
       resetReviewPhase(task);
       resetPhaseAttempt(task);
       return task;
@@ -140,6 +142,7 @@ export function transitionTask(
       task.state = "fixing";
       task.runtime_phase = "fix";
       task.fix.origin = "ci";
+      task.fix.ci_failure_log = null;
       resetFixPhase(task);
       resetPhaseAttempt(task);
       return task;

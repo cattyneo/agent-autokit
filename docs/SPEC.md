@@ -460,6 +460,7 @@ tasks:
     fix:                                 # 直近 fix 起動時のメタ。fix 入力種別と E12/E13 の分岐に使用 (§5.1)
       origin: null                       # null | "review" | "ci"
       started_at: null
+      ci_failure_log: null               # origin="ci" の fix prompt へ渡す sanitize 済 failure log
     retry:                               # autokit retry 起動中のみ非 null。冪等再実行のための進捗 marker (§6.2)
       cleanup_progress: null             # null | { pr_closed, worktree_removed, branch_deleted, fields_cleared }
                                           # retry 起動中の各 flag は false | true。retry 外 / 完了後は null。
@@ -1345,7 +1346,7 @@ git worktree add -b autokit/issue-12345 .autokit/worktrees/issue-12345 origin/<b
 2. core が rebase 実行 (§7.8)。自動解決失敗で E31 → 成功で **`git.checkpoints.fix.rebase_done = git rev-parse HEAD`** 永続化 (rebase 副作用 = rerere キャッシュ / 解決済 conflict は永続化済、reconcile では再実行しない、二重実行による worktree 破壊防止)
 3. implementer (Codex) を `fix` prompt_contract で起動 (内包 skill: `autokit-implement` + `autokit-question`)
    - `origin="review"` の場合: accept 分の finding のみ入力に含める (sanitize 済、§4.6.2.1)
-   - `origin="ci"` の場合: CI failure log (`gh run view --log-failed`、sanitize 済) を入力に含める
+   - `origin="ci"` の場合: `fix.ci_failure_log` に保持した CI failure log (`gh run view --log-failed`、sanitize 済) を入力に含める
 4. runner `status=completed` 受領直後 **`agent_done` 永続化** (worktree 内変更が積まれた未 commit 状態の marker)
 5. core が `git add -A` + `git commit -m <msg>` → **`commit_done` 永続化**
 6. core が `git push` → **`push_done` 永続化**
@@ -1385,8 +1386,8 @@ git worktree add -b autokit/issue-12345 .autokit/worktrees/issue-12345 origin/<b
       - `--auto` 予約 **しない**
       - state=`paused` + `failure.code=manual_merge_required` + 通知 (E15)
 3. **CI failure 検知:**
-   - `gh run view --log-failed` で failure log 抽出 (sanitize 済で fix prompt 入力に使用、§4.6.2)
-   - tasks.yaml に `fix.origin="ci"` 記録
+   - `gh run view --log-failed` で failure log 抽出 (sanitize 済で `fix.ci_failure_log` に保持し、fix prompt 入力に使用、§4.6.2)
+   - tasks.yaml に `fix.origin="ci"` と `fix.ci_failure_log` を記録
    - `ci_fix_round` カウンタは **`ci_waiting` で CI failure を観測したこの時点でのみ +1**。fix フェーズ内の rebase / push 失敗 (E31 等) では加算しない (連鎖 paused → resume での重複加算を防止)
    - reconcile 経由で `ci_waiting` 直接復帰した場合も加算しない (新規 CI failure 観測ではないため)
    - `ci_fix_round + 1 > config.ci.fix_max_rounds` なら E19 (`failure.code=ci_failure_max`、fix_max_rounds=N で N 回 fix 後 N+1 回目 failure で停止)、それ以外は E18 で `fixing` 入り

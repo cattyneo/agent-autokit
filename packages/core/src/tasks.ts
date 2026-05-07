@@ -132,6 +132,7 @@ export type TaskEntry = {
   fix: {
     origin: FixOrigin | null;
     started_at: string | null;
+    ci_failure_log: string | null;
   };
   retry: {
     cleanup_progress: RetryCleanupProgress | null;
@@ -246,7 +247,7 @@ export function createTaskEntry(input: CreateTaskEntryInput): TaskEntry {
       supervise: emptyProviderSession(),
       fix: emptyProviderSession(),
     },
-    fix: { origin: null, started_at: null },
+    fix: { origin: null, started_at: null, ci_failure_log: null },
     retry: { cleanup_progress: null, started_at: null },
     runtime: {
       phase_attempt: 0,
@@ -502,6 +503,7 @@ const taskEntryShapeSchema = z
       .object({
         origin: z.enum(["review", "ci"]).nullable(),
         started_at: nullableStringSchema,
+        ci_failure_log: nullableStringSchema,
       })
       .strict(),
     retry: z
@@ -590,7 +592,18 @@ function migrateTaskEntryInput(input: unknown): unknown {
   }
   return {
     ...input,
+    fix: migrateFixMetadata(input.fix),
     provider_sessions: migrateProviderSessions(input.provider_sessions),
+  };
+}
+
+function migrateFixMetadata(input: unknown): unknown {
+  if (!isRecord(input)) {
+    return input;
+  }
+  return {
+    ...input,
+    ci_failure_log: stringOrNull(input.ci_failure_log),
   };
 }
 

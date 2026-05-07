@@ -59,6 +59,7 @@ export {
   buildGhPrViewCiArgs,
   buildGhPrViewHeadArgs,
   buildGhPrViewMergeArgs,
+  buildGhRunViewFailedLogArgs,
   parseGhMergeability,
   parseGhPrView,
 } from "./gh.js";

@@ -21,6 +21,7 @@ import {
   buildGhPrViewCiArgs,
   buildGhPrViewHeadArgs,
   buildGhPrViewMergeArgs,
+  buildGhRunViewFailedLogArgs,
   buildGitAddAllArgs,
   buildGitCommitArgs,
   buildGitFetchArgs,
@@ -41,6 +42,7 @@ import {
   parseGhMergeability,
   parseGhPrView,
   type RuntimePhase,
+  sanitizeLogString,
   type TaskEntry,
   type TasksFile,
   writeTasksFileAtomic,
@@ -141,6 +143,7 @@ export async function runProductionWorkflow(
             execFile("git", buildGitRevParseHeadArgs(), { cwd: options.cwd }).trim(),
           persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
           auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
+          auditFailure: (input) => logger?.auditFailure(input),
           buildPrompt: (input) =>
             buildPrompt(
               options.cwd,
@@ -149,6 +152,7 @@ export async function runProductionWorkflow(
               issueContext(),
               input.currentFindings,
               input.planMarkdown,
+              input.ciFailureLog,
             ),
         });
         if (result.planMarkdown !== undefined) {
@@ -169,6 +173,7 @@ export async function runProductionWorkflow(
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
           auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
+          auditFailure: (input) => logger?.auditFailure(input),
           buildPrompt: (input) =>
             buildPrompt(
               options.cwd,
@@ -177,6 +182,7 @@ export async function runProductionWorkflow(
               issueContext(),
               input.currentFindings,
               input.planMarkdown,
+              input.ciFailureLog,
             ),
           git: createGitDeps(options.cwd, task, config, execFile),
         });
@@ -200,6 +206,7 @@ export async function runProductionWorkflow(
             }).trim(),
           persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
           auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
+          auditFailure: (input) => logger?.auditFailure(input),
           buildPrompt: (input) =>
             buildPrompt(
               options.cwd,
@@ -208,6 +215,7 @@ export async function runProductionWorkflow(
               issueContext(),
               input.currentFindings,
               input.planMarkdown,
+              input.ciFailureLog,
             ),
         });
         writeReviewArtifact(options.cwd, result.task, result.findings);
@@ -226,6 +234,7 @@ export async function runProductionWorkflow(
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
           auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
+          auditFailure: (input) => logger?.auditFailure(input),
           buildPrompt: (input) =>
             buildPrompt(
               options.cwd,
@@ -234,6 +243,7 @@ export async function runProductionWorkflow(
               issueContext(),
               input.currentFindings,
               input.planMarkdown,
+              input.ciFailureLog,
             ),
           git: createGitDeps(options.cwd, task, config, execFile),
         });
@@ -248,7 +258,8 @@ export async function runProductionWorkflow(
           repoRoot: options.cwd,
           runner: options.runner ?? defaultRunner(options.env),
           persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
-          github: createCiDeps(execFile, options.cwd, logger),
+          auditFailure: (input) => logger?.auditFailure(input),
+          github: createCiDeps(execFile, options.cwd, logger, config),
         });
         task = result.task;
         persistTask(tasksFilePath, activeTasksFile, task);
@@ -261,6 +272,7 @@ export async function runProductionWorkflow(
           repoRoot: options.cwd,
           runner: options.runner ?? defaultRunner(options.env),
           persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
+          auditFailure: (input) => logger?.auditFailure(input),
           github: createMergeDeps(execFile, options.cwd, logger),
         });
         task = result.task;
@@ -601,9 +613,15 @@ function createGitDeps(
   };
 }
 
-function createCiDeps(execFile: WorkflowExecFile, cwd: string, logger: AutokitLogger) {
+function createCiDeps(
+  execFile: WorkflowExecFile,
+  cwd: string,
+  logger: AutokitLogger,
+  config: AutokitConfig = DEFAULT_CONFIG,
+) {
   return {
-    getChecks: (prNumber: number): CiCheckObservation => parseCiChecks(execFile, cwd, prNumber),
+    getChecks: (prNumber: number): CiCheckObservation =>
+      parseCiChecks(execFile, cwd, prNumber, config),
     getPr: (prNumber: number): CiWaitPrObservation => parseCiPr(execFile, cwd, prNumber),
     reserveAutoMerge: (input: { prNumber: number; headSha: string }) => {
       execFile("gh", buildAutoMergeArgs(input.prNumber, input.headSha), { cwd });
@@ -690,6 +708,7 @@ function parseCiChecks(
   execFile: WorkflowExecFile,
   cwd: string,
   prNumber: number,
+  config: AutokitConfig = DEFAULT_CONFIG,
 ): CiCheckObservation {
   const view = asRecord(parseJson(execFile("gh", buildGhPrViewCiArgs(prNumber), { cwd })));
   const checks = Array.isArray(view.statusCheckRollup) ? view.statusCheckRollup : [];
@@ -708,8 +727,35 @@ function parseCiChecks(
     ? { status: "success" }
     : {
         status: "failure",
-        failedLog: failed.map((check) => String(asRecord(check).name)).join(", "),
+        failedLog: sanitizeLogString(
+          failed.map((check) => failedCheckLog(execFile, cwd, asRecord(check))).join("\n\n"),
+          config,
+          false,
+          { homeDir: process.env.HOME, repoRoot: cwd },
+        ),
       };
+}
+
+function failedCheckLog(
+  execFile: WorkflowExecFile,
+  cwd: string,
+  check: Record<string, unknown>,
+): string {
+  const name = String(check.name ?? "unknown check");
+  const runId = runIdFromDetailsUrl(check.detailsUrl);
+  if (runId === null) {
+    return name;
+  }
+  const log = execFile("gh", buildGhRunViewFailedLogArgs(runId), { cwd });
+  return [`check: ${name}`, log].join("\n");
+}
+
+function runIdFromDetailsUrl(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = value.match(/\/actions\/runs\/([0-9]+)/);
+  return match?.[1] ?? null;
 }
 
 function parseCiPr(execFile: WorkflowExecFile, cwd: string, prNumber: number): CiWaitPrObservation {
@@ -754,6 +800,7 @@ function buildPrompt(
   issueContext: string,
   currentFindings?: unknown,
   planMarkdown?: string,
+  ciFailureLog?: string,
 ): string {
   const planPath = join(cwd, task.plan.path);
   const plan = planMarkdown ?? (existsSync(planPath) ? readFileSync(planPath, "utf8") : "");
@@ -774,6 +821,7 @@ function buildPrompt(
     currentFindings === undefined
       ? ""
       : `Current findings JSON:\n${JSON.stringify(currentFindings)}`,
+    ciFailureLog === undefined ? "" : `CI failure log:\n${ciFailureLog}`,
   ].join("\n");
 }
 

@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   type AgentRunInput,
   createTaskEntry,
+  type FailureCode,
   type OperationalAuditKind,
   parseConfig,
   type TaskEntry,
@@ -20,17 +21,23 @@ import {
 } from "../../packages/workflows/src/index.ts";
 import type { GhJsonRunner } from "./full-run.ts";
 
-type AuditEvent = { kind: OperationalAuditKind; fields: Record<string, unknown> };
+type AuditEvent = { kind: OperationalAuditKind | FailureCode; fields: Record<string, unknown> };
 
 describe("ci-fix loop E2E evidence", () => {
   it("uses fake GitHub CI evidence and fails with ci_failure_max on the third failed observation", async () => {
+    const audits: AuditEvent[] = [];
     let task = ciWaitingTask();
     const gh = fakeGh({
       checkRollups: [
-        [{ name: "test-1", status: "COMPLETED", conclusion: "FAILURE" }],
-        [{ name: "test-2", status: "COMPLETED", conclusion: "FAILURE" }],
-        [{ name: "test-3", status: "COMPLETED", conclusion: "FAILURE" }],
+        [failedCheck("test-1", "101")],
+        [failedCheck("test-2", "102")],
+        [failedCheck("test-3", "103")],
       ],
+      runLogs: {
+        "101": "first failure",
+        "102": "second failure",
+        "103": "third failure",
+      },
     });
 
     for (const round of [1, 2]) {
@@ -40,6 +47,7 @@ describe("ci-fix loop E2E evidence", () => {
         repoRoot: "/repo",
         worktreeRoot: "/repo/.autokit/worktrees/issue-95",
         config: parseConfig({ ci: { fix_max_rounds: 2 } }),
+        auditFailure: (input) => recordFailure(audits, input),
       });
       assert.equal(ci.task.state, "fixing");
       assert.equal(ci.task.ci_fix_round, round);
@@ -57,38 +65,55 @@ describe("ci-fix loop E2E evidence", () => {
       repoRoot: "/repo",
       worktreeRoot: "/repo/.autokit/worktrees/issue-95",
       config: parseConfig({ ci: { fix_max_rounds: 2 } }),
+      auditFailure: (input) => recordFailure(audits, input),
     });
 
     assert.equal(result.task.state, "failed");
     assert.equal(result.task.failure?.code, "ci_failure_max");
     assert.equal(result.task.ci_fix_round, 2);
-    assert.equal(result.ciFailureLog, "test-3");
+    assert.equal(result.ciFailureLog, "check: test-3\nthird failure");
+    assertFailureAudit(audits, "ci_failure_max");
   });
 
   it("returns CI-origin fixes to review and keeps CI and review rounds independent", async () => {
     const audits: AuditEvent[] = [];
     const gh = fakeGh({
-      checkRollups: [[{ name: "test", status: "COMPLETED", conclusion: "FAILURE" }]],
+      checkRollups: [[failedCheck("test", "201")]],
+      runLogs: {
+        "201":
+          "failing log with token ghp_123456789012345678901234 and path /repo/.env:1 API_KEY=secret",
+      },
     });
     const ci = await runCiWaitWorkflow(ciWaitingTask(), {
       runner: queueRunner([], []),
       github: ciDepsFromGh(gh),
       repoRoot: "/repo",
       worktreeRoot: "/repo/.autokit/worktrees/issue-95",
+      auditFailure: (input) => recordFailure(audits, input),
     });
 
     assert.equal(ci.task.state, "fixing");
     assert.equal(ci.task.fix.origin, "ci");
+    assert.equal(
+      ci.task.fix.ci_failure_log,
+      "check: test\nfailing log with token <REDACTED> and path <repo>/.env:1 API_KEY=<REDACTED>",
+    );
     assert.equal(ci.task.ci_fix_round, 1);
     assert.equal(ci.task.review_round, 0);
 
-    const fixed = await runFix(ci.task, audits);
+    const fixCalls: AgentRunInput[] = [];
+    const fixed = await runFix(ci.task, audits, fixCalls);
 
     assert.equal(fixed.task.state, "reviewing");
     assert.equal(fixed.task.runtime_phase, "review");
     assert.equal(fixed.task.fix.origin, null);
+    assert.equal(fixed.task.fix.ci_failure_log, null);
     assert.equal(fixed.task.ci_fix_round, 1);
     assert.equal(fixed.task.review_round, 0);
+    assert.match(fixCalls[0]?.prompt ?? "", /CI failure log:/);
+    assert.match(fixCalls[0]?.prompt ?? "", /<REDACTED>/);
+    assert.doesNotMatch(fixCalls[0]?.prompt ?? "", /ghp_123456789012345678901234/);
+    assert.doesNotMatch(fixCalls[0]?.prompt ?? "", /\/repo\/\.env/);
     assert.deepEqual(
       audits.map((event) => event.kind).filter((kind) => kind !== "phase_started"),
       ["fix_started", "fix_finished", "review_started"],
@@ -118,7 +143,7 @@ function ciDepsFromGh(gh: GhJsonRunner): CiWaitDeps {
       }
       return {
         status: "failure",
-        failedLog: failed.map((check) => String(asRecord(check).name)).join(", "),
+        failedLog: failed.map((check) => failedCheckLog(gh, asRecord(check))).join("\n\n"),
       };
     },
     getPr: (prNumber, _site) => {
@@ -151,6 +176,7 @@ function ciDepsFromGh(gh: GhJsonRunner): CiWaitDeps {
 function fakeGh(options: {
   checkRollups: Array<Array<Record<string, unknown>>>;
   prViews?: CiWaitPrObservation[];
+  runLogs?: Record<string, string>;
 }): GhJsonRunner {
   return (args) => {
     const command = JSON.stringify(args);
@@ -185,30 +211,33 @@ function fakeGh(options: {
         status: 0,
       };
     }
+    if (args[0] === "run" && args[1] === "view" && args[3] === "--log-failed") {
+      const runId = String(args[2]);
+      const log = options.runLogs?.[runId];
+      assert.ok(log, `expected queued failed log for run ${runId}`);
+      return { ok: true, stdout: log, status: 0 };
+    }
     throw new Error(`unexpected gh args: ${command}`);
   };
 }
 
-async function runFix(task: TaskEntry, audits: AuditEvent[]) {
+async function runFix(task: TaskEntry, audits: AuditEvent[], calls: AgentRunInput[] = []) {
   return runFixWorkflow(task, {
-    runner: queueRunner(
-      [],
-      [
-        completed("codex", {
-          changed_files: ["packages/workflows/src/index.ts"],
-          tests_run: [
-            {
-              command: "bun test e2e/runners/ci-fix-loop.test.ts",
-              result: "passed",
-              summary: "ok",
-            },
-          ],
-          resolved_accept_ids: [],
-          unresolved_accept_ids: [],
-          notes: "fixed CI",
-        }),
-      ],
-    ),
+    runner: queueRunner(calls, [
+      completed("codex", {
+        changed_files: ["packages/workflows/src/index.ts"],
+        tests_run: [
+          {
+            command: "bun test e2e/runners/ci-fix-loop.test.ts",
+            result: "passed",
+            summary: "ok",
+          },
+        ],
+        resolved_accept_ids: [],
+        unresolved_accept_ids: [],
+        notes: "fixed CI",
+      }),
+    ]),
     git: mockGitDeps(["fix-before", "rebased", "agent-done"], ["fix-commit"], {
       prHeadSha: "fix-remote-head",
       baseSha: "base-sha",
@@ -216,6 +245,7 @@ async function runFix(task: TaskEntry, audits: AuditEvent[]) {
     repoRoot: "/repo",
     worktreeRoot: "/repo/.autokit/worktrees/issue-95",
     auditOperation: (kind, fields) => audits.push({ kind, fields }),
+    auditFailure: (input) => recordFailure(audits, input),
   });
 }
 
@@ -322,4 +352,44 @@ function asRecord(value: unknown): Record<string, unknown> {
   assert.equal(typeof value, "object");
   assert.notEqual(value, null);
   return value as Record<string, unknown>;
+}
+
+function failedCheck(name: string, runId: string): Record<string, unknown> {
+  return {
+    name,
+    status: "COMPLETED",
+    conclusion: "FAILURE",
+    detailsUrl: `https://github.com/cattyneo/agent-autokit/actions/runs/${runId}/job/1`,
+  };
+}
+
+function failedCheckLog(gh: GhJsonRunner, check: Record<string, unknown>): string {
+  const name = String(check.name ?? "unknown check");
+  const detailsUrl = String(check.detailsUrl ?? "");
+  const runId = detailsUrl.match(/\/actions\/runs\/([0-9]+)/)?.[1];
+  if (runId === undefined) {
+    return name;
+  }
+  const result = gh(["run", "view", runId, "--log-failed"]);
+  assert.equal(result.ok, true, result.stderr);
+  return [`check: ${name}`, String(result.stdout ?? "")].join("\n");
+}
+
+function recordFailure(
+  audits: AuditEvent[],
+  input: { failure: { code: FailureCode }; payload?: Record<string, unknown> },
+): void {
+  audits.push({
+    kind: input.failure.code,
+    fields: { failure: input.failure, payload: input.payload },
+  });
+}
+
+function assertFailureAudit(audits: AuditEvent[], code: FailureCode): void {
+  const event = audits.find((entry) => entry.kind === code);
+  assert.ok(event, `expected failure audit kind: ${code}`);
+  const failure = event.fields.failure as { code?: unknown; phase?: unknown; message?: unknown };
+  assert.equal(failure.code, code);
+  assert.equal(typeof failure.phase, "string");
+  assert.equal(typeof failure.message, "string");
 }

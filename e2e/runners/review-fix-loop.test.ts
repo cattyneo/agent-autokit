@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   type AgentRunInput,
   createTaskEntry,
+  type FailureCode,
   type OperationalAuditKind,
   parseConfig,
   type TaskEntry,
@@ -18,7 +19,7 @@ import {
   type WorkflowRunner,
 } from "../../packages/workflows/src/index.ts";
 
-type AuditEvent = { kind: OperationalAuditKind; fields: Record<string, unknown> };
+type AuditEvent = { kind: OperationalAuditKind | FailureCode; fields: Record<string, unknown> };
 
 describe("review-fix loop E2E evidence", () => {
   it("passes review in one round without entering fix", async () => {
@@ -28,6 +29,7 @@ describe("review-fix loop E2E evidence", () => {
       repoRoot: "/repo",
       worktreeRoot: "/repo/.autokit/worktrees/issue-95",
       auditOperation: (kind, fields) => audits.push({ kind, fields }),
+      auditFailure: (input) => recordFailure(audits, input),
     });
 
     assert.equal(result.task.state, "ci_waiting");
@@ -60,6 +62,7 @@ describe("review-fix loop E2E evidence", () => {
     assert.equal(review.task.state, "failed");
     assert.equal(review.task.failure?.code, "review_max");
     assert.equal(review.task.review_round, 2);
+    assertFailureAudit(audits, "review_max");
     assertAuditSubsequence(audits, [
       "phase_started",
       "review_finding_seen",
@@ -103,16 +106,19 @@ describe("review-fix loop E2E evidence", () => {
       worktreeRoot: "/repo/.autokit/worktrees/issue-95",
       persistTask: (next) => persisted.push(next.runtime.phase_self_correct_done),
       auditOperation: (kind, fields) => audits.push({ kind, fields }),
+      auditFailure: (input) => recordFailure(audits, input),
     });
 
     assert.equal(result.task.state, "failed");
     assert.equal(result.task.failure?.code, "prompt_contract_violation");
+    assertFailureAudit(audits, "prompt_contract_violation");
     assert.equal(persisted.includes(true), true);
     assert.equal(calls.length, 2);
     assert.equal(audits.filter((event) => event.kind === "phase_self_correct").length, 1);
   });
 
   it("fails with phase_attempt_exceeded before rerunning a cold fix phase", async () => {
+    const audits: AuditEvent[] = [];
     const calls: AgentRunInput[] = [];
     const task = fixingTask("review");
     task.runtime.phase_attempt = 2;
@@ -132,10 +138,12 @@ describe("review-fix loop E2E evidence", () => {
       git: mockGitDeps([], []),
       repoRoot: "/repo",
       worktreeRoot: "/repo/.autokit/worktrees/issue-95",
+      auditFailure: (input) => recordFailure(audits, input),
     });
 
     assert.equal(result.task.state, "failed");
     assert.equal(result.task.failure?.code, "phase_attempt_exceeded");
+    assertFailureAudit(audits, "phase_attempt_exceeded");
     assert.equal(calls.length, 0);
   });
 });
@@ -164,6 +172,7 @@ async function runAcceptedReview(
     worktreeRoot: "/repo/.autokit/worktrees/issue-95",
     config,
     auditOperation: (kind, fields) => audits.push({ kind, fields }),
+    auditFailure: (input) => recordFailure(audits, input),
   });
 }
 
@@ -212,6 +221,25 @@ function assertAuditSubsequence(audits: AuditEvent[], expected: OperationalAudit
   );
 }
 
+function recordFailure(
+  audits: AuditEvent[],
+  input: { failure: { code: FailureCode }; payload?: Record<string, unknown> },
+): void {
+  audits.push({
+    kind: input.failure.code,
+    fields: { failure: input.failure, payload: input.payload },
+  });
+}
+
+function assertFailureAudit(audits: AuditEvent[], code: FailureCode): void {
+  const event = audits.find((entry) => entry.kind === code);
+  assert.ok(event, `expected failure audit kind: ${code}`);
+  const failure = event.fields.failure as { code?: unknown; phase?: unknown; message?: unknown };
+  assert.equal(failure.code, code);
+  assert.equal(typeof failure.phase, "string");
+  assert.equal(typeof failure.message, "string");
+}
+
 function reviewingTask(): TaskEntry {
   const task = createTaskEntry({
     issue: 95,
@@ -241,7 +269,7 @@ function fixingTask(origin: "review" | "ci"): TaskEntry {
     ...reviewingTask(),
     state: "fixing",
     runtime_phase: "fix",
-    fix: { origin, started_at: "2026-05-05T10:00:00+09:00" },
+    fix: { origin, started_at: "2026-05-05T10:00:00+09:00", ci_failure_log: null },
   };
 }
 

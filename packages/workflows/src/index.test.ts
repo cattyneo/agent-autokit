@@ -1873,7 +1873,7 @@ function fixingTask(origin: "review" | "ci") {
     ...reviewingTask(),
     state: "fixing" as const,
     runtime_phase: "fix" as const,
-    fix: { origin, started_at: "2026-05-05T10:00:00+09:00" },
+    fix: { origin, started_at: "2026-05-05T10:00:00+09:00", ci_failure_log: null },
     branch: "autokit/issue-13",
   };
 }

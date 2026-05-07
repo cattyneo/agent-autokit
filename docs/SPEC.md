@@ -2019,6 +2019,17 @@ diff <(echo "$fail_codes") <(echo "$audit_kinds") || { echo "::error::failure.co
   - **過小 scope FAIL**: 必要 permission を欠く token は doctor で FAIL (silent fail で `branch_delete_failed` / `worktree_remove_failed` 経路に化けるのを起動段階で block)
   - doctor で `gh auth status -t` / `gh api user -i` の `X-OAuth-Scopes` header / fine-grained PAT permission set を probe して上下限判定
 
+#### 11.1.1 `autokit serve` local API 認可
+
+Phase 2A の local API server は repo state / logs / diff / workflow dispatch を同一 process で扱うため、read endpoint / mutating endpoint / SSE のすべてで bearer / Host / Origin gate を path resolution より先に評価する。mutating endpoint の Content-Type gate は route 分類後、body parse / provider preflight / workflow dispatch より前に評価する:
+
+- bind は既定 `127.0.0.1`。v0.2.0 の TCP bind は `127.0.0.1` / `localhost` に限定し、`0.0.0.0` / `::` / `::1` は config opt-in 有無にかかわらず起動拒否。`[::1]` は Host / Origin 正規化 fixture として扱い、実 IPv6 listener は別途 smoke を固定するまで追加しない。
+- bearer token は `crypto.randomBytes(32)` の base64url で毎 serve 起動ごとに regenerate し、`${XDG_STATE_HOME:-~/.local/state}/autokit/serve/<repo-id>/<port>/token` mode `0600` に保存する。親 directory `<port>/` は mode `0700`。`<repo-id>` は `sha256(realpath(repoRoot)).slice(0,16)`。
+- token 提示は `Authorization: Bearer <token>` header のみ受理する。query string / cookie / form field 経由は 401。比較は `crypto.timingSafeEqual` のみ使用し、shutdown 時は当該 repo/port の token file を unlink する。
+- Host allowlist は `127.0.0.1:<PORT>` / `localhost:<PORT>` / `localhost.:<PORT>` / `[::1]:<PORT>` の case-insensitive 完全一致。prefix match / 部分一致は禁止し、allowlist 外は 403。
+- Origin は 4 状態を区別する。同一 origin (`http://127.0.0.1:<PORT>` / `http://localhost:<PORT>` / `http://localhost.:<PORT>` / `http://[::1]:<PORT>`) は 200、allowlist 外 origin は 403、literal `Origin: null` は 403、header 欠落は CLI / curl 経路として 200。
+- mutating endpoint (`POST /api/run|resume|retry|cleanup`) は `Content-Type: application/json` を必須とし、`application/x-www-form-urlencoded` / `multipart/form-data` / `text/plain` / header 欠落は 415。`Sec-Fetch-Site` は advisory とし、hard gate にはしない。
+
 ### 11.2 symlink / path 検査
 
 **run / runner spawn 直前の post-init 再検証 (TOCTOU 窓 close):**

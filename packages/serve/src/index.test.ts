@@ -5,9 +5,11 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
+import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -75,6 +77,215 @@ describe("serve auth gate", () => {
       }),
       /unsupported serve host/,
     );
+    await assert.rejects(
+      startAutokitServe({
+        repoRoot: repo,
+        host: "::",
+        port: 0,
+        stateHome,
+        now: () => NOW,
+        runWorkflow: async () => ({ status: "completed" }),
+      }),
+      /unsupported serve host/,
+    );
+    await assert.rejects(
+      startAutokitServe({
+        repoRoot: repo,
+        host: "::1",
+        port: 0,
+        stateHome,
+        now: () => NOW,
+        runWorkflow: async () => ({ status: "completed" }),
+      }),
+      /unsupported serve host/,
+    );
+  });
+
+  it("keeps token file modes stable across umask and isolates repo/port token paths", async () => {
+    const originalUmask = process.umask();
+    const stateHome = makeTempDir();
+    const servers: Awaited<ReturnType<typeof startAutokitServe>>[] = [];
+    try {
+      for (const mask of [0o022, 0o027, 0o077]) {
+        process.umask(mask);
+        const server = await startAutokitServe({
+          repoRoot: makeRepo(),
+          port: 0,
+          stateHome,
+          now: () => NOW,
+          runWorkflow: async () => ({ status: "completed" }),
+        });
+        servers.push(server);
+        assert.equal(statSync(server.tokenPath).mode & 0o777, 0o600);
+        assert.equal(statSync(join(server.tokenPath, "..")).mode & 0o777, 0o700);
+      }
+
+      assert.equal(new Set(servers.map((server) => server.tokenPath)).size, servers.length);
+      const survivor = servers[1];
+      const closed = servers.shift();
+      await closed?.close();
+      assert.equal(existsSync(survivor?.tokenPath ?? ""), true);
+    } finally {
+      process.umask(originalUmask);
+      await Promise.all(servers.map((server) => server.close()));
+    }
+  });
+
+  it("closes the listener when token file creation fails", async () => {
+    const blockedStateHome = join(makeTempDir(), "state-home-file");
+    writeFileSync(blockedStateHome, "not a directory\n");
+    const port = await getFreePort();
+
+    await assert.rejects(
+      startAutokitServe({
+        repoRoot: makeRepo(),
+        port,
+        stateHome: blockedStateHome,
+        now: () => NOW,
+        runWorkflow: async () => ({ status: "completed" }),
+      }),
+      /ENOTDIR|not a directory/,
+    );
+
+    const server = await startAutokitServe({
+      repoRoot: makeRepo(),
+      port,
+      stateHome: makeTempDir(),
+      now: () => NOW,
+      runWorkflow: async () => ({ status: "completed" }),
+    });
+    await server.close();
+  });
+
+  it("keeps bearer token comparison on timingSafeEqual", () => {
+    const source = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+    const body = source.match(/function safeTokenEqual[\s\S]*?\n}/)?.[0] ?? "";
+
+    assert.match(body, /timingSafeEqual/);
+    assert.doesNotMatch(body, /Buffer\.compare/);
+    assert.doesNotMatch(body, /supplied\s*===\s*expected|expected\s*===\s*supplied/);
+  });
+
+  it("accepts only Authorization bearer tokens and applies Host and Origin matrix before routing", async () => {
+    const server = await startAutokitServe({
+      repoRoot: makeRepo([task({ issue: 99, state: "queued" })]),
+      port: 0,
+      stateHome: makeTempDir(),
+      now: () => NOW,
+      runWorkflow: async () => ({ status: "completed" }),
+    });
+
+    assert.equal(await status(server, `/api/tasks?token=${server.token}`), 401);
+    assert.equal(await status(server, "/api/tasks", { cookie: `token=${server.token}` }), 401);
+    assert.equal(
+      await rawStatus(server, "/api/run", {
+        method: "POST",
+        headers: {
+          host: `127.0.0.1:${server.port}`,
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: `token=${server.token}`,
+      }),
+      401,
+    );
+
+    for (const host of [
+      `127.0.0.1:${server.port}`,
+      `localhost:${server.port}`,
+      `LOCALHOST:${server.port}`,
+      `localhost.:${server.port}`,
+      `[::1]:${server.port}`,
+    ]) {
+      assert.equal(await status(server, "/api/tasks", authHeaders(server, { host })), 200, host);
+    }
+    assert.equal(
+      await status(
+        server,
+        "/api/tasks",
+        authHeaders(server, { host: `evil.local:${server.port}` }),
+      ),
+      403,
+    );
+    for (const host of [
+      `localhost.evil:${server.port}`,
+      `localhost:${server.port}.evil`,
+      `127.0.0.1:${server.port}.evil`,
+      `127.0.0.1:${server.port + 1}`,
+    ]) {
+      assert.equal(await status(server, "/api/tasks", authHeaders(server, { host })), 403, host);
+    }
+
+    assert.equal(await status(server, "/api/tasks", authHeaders(server)), 200);
+    assert.equal(
+      await status(
+        server,
+        "/api/tasks",
+        authHeaders(server, { origin: `http://127.0.0.1:${server.port}` }),
+      ),
+      200,
+    );
+    assert.equal(
+      await status(
+        server,
+        "/api/tasks",
+        authHeaders(server, { origin: `http://LOCALHOST:${server.port}` }),
+      ),
+      200,
+    );
+    assert.equal(
+      await status(
+        server,
+        "/api/tasks",
+        authHeaders(server, { origin: `http://localhost.:${server.port}` }),
+      ),
+      200,
+    );
+    assert.equal(
+      await status(
+        server,
+        "/api/tasks",
+        authHeaders(server, { origin: `http://[::1]:${server.port}` }),
+      ),
+      200,
+    );
+    assert.equal(
+      await status(server, "/api/tasks", authHeaders(server, { origin: "https://evil.example" })),
+      403,
+    );
+    assert.equal(await status(server, "/api/tasks", authHeaders(server, { origin: "null" })), 403);
+    await server.close();
+  });
+
+  it("rejects mutating requests without application/json content type before dispatch", async () => {
+    const calls: ServeWorkflowInput[] = [];
+    const server = await startAutokitServe({
+      repoRoot: makeRepo([task({ issue: 99, state: "queued" })]),
+      port: 0,
+      stateHome: makeTempDir(),
+      now: () => NOW,
+      runWorkflow: async (input) => {
+        calls.push(input);
+        return { status: "completed" };
+      },
+    });
+
+    for (const path of ["/api/run", "/api/resume", "/api/retry", "/api/cleanup"]) {
+      for (const [contentType, body] of [
+        [undefined, "{}"],
+        ["text/plain", "{}"],
+        ["application/x-www-form-urlencoded", "issue=99"],
+        ["multipart/form-data; boundary=abc", "--abc"],
+      ] as const) {
+        const response = await rawStatus(server, path, {
+          method: "POST",
+          headers: authHeaders(server, contentType === undefined ? {} : { contentType }),
+          body,
+        });
+        assert.equal(response, 415, `${path} ${contentType ?? "missing"}`);
+      }
+    }
+    assert.equal(calls.length, 0);
+    await server.close();
   });
 });
 
@@ -452,10 +663,39 @@ function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), "autokit-serve-"));
 }
 
-function authHeaders(server: { token: string; port: number }): Record<string, string> {
+async function getFreePort(): Promise<number> {
+  const server = createNetServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo | null;
+  assert.notEqual(address, null);
+  const port = address.port;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error !== undefined) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+  return port;
+}
+
+function authHeaders(
+  server: { token: string; port: number },
+  overrides: { host?: string; origin?: string; contentType?: string } = {},
+): Record<string, string> {
   return {
     authorization: `Bearer ${server.token}`,
-    host: `127.0.0.1:${server.port}`,
+    host: overrides.host ?? `127.0.0.1:${server.port}`,
+    ...(overrides.origin === undefined ? {} : { origin: overrides.origin }),
+    ...(overrides.contentType === undefined ? {} : { "content-type": overrides.contentType }),
   };
 }
 
@@ -465,6 +705,16 @@ async function status(
   headers: Record<string, string> = {},
 ): Promise<number> {
   const response = await fetch(server.url(path), { headers });
+  await response.body?.cancel();
+  return response.status;
+}
+
+async function rawStatus(
+  server: { url(path: string): string; token?: string; port: number },
+  path: string,
+  init: RequestInit,
+): Promise<number> {
+  const response = await fetch(server.url(path), init);
   await response.body?.cancel();
   return response.status;
 }

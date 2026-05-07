@@ -85,6 +85,7 @@ export type CliDeps = {
   startServe?: (
     input: AutokitServeOptions,
   ) => Promise<Pick<AutokitServeServer, "host" | "port" | "tokenPath" | "close">>;
+  proc?: Pick<NodeJS.Process, "once" | "exit">;
 };
 
 export type CliQuestionInput = {
@@ -417,7 +418,7 @@ async function commandServe(
       now: deps.now,
       runWorkflow: (input) => runServeWorkflow(input, deps, yes),
     });
-    installServeSignalCleanup(server);
+    installServeSignalCleanup(server, deps.proc);
     deps.stdout.write(`serve listening\thttp://${server.host}:${server.port}\n`);
     deps.stdout.write(`token file\t${server.tokenPath}\n`);
     return 0;

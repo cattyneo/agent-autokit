@@ -7,11 +7,20 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
 
-import { buildRunnerEnv, derive_claude_perm } from "@cattyneo/autokit-core";
+import {
+  buildRunnerEnv,
+  derive_claude_perm,
+  type EffectivePermission,
+  type Phase,
+  promptContractForPhase,
+  type ResolvedEffort,
+  validateCapabilitySelection,
+} from "@cattyneo/autokit-core";
 
 import {
   buildClaudeArgs,
   buildClaudeAuthProbeArgs,
+  buildClaudeEffortProfile,
   buildClaudePathGuardSettings,
   buildClaudeRunnerEnv,
   type ClaudeChildProcess,
@@ -33,14 +42,53 @@ const baseInput = {
   prompt: "Return prompt_contract YAML",
   promptContract: "plan" as const,
   model: "auto" as const,
+  effort: resolvedEffort("medium", "plan"),
+  effective_permission: effectivePermissionForPhase("plan"),
   permissions: {
     mode: "readonly" as const,
     allowNetwork: false,
     workspaceScope: "repo" as const,
     workspaceRoot,
   },
-  timeoutMs: 1_000,
+  timeoutMs: 1_800_000,
 };
+
+function inputForPhase(phase: Phase, effort: ResolvedEffort["effort"] = "medium") {
+  const write = phase === "implement" || phase === "fix";
+  const repoScoped = phase === "plan" || phase === "plan_verify" || phase === "plan_fix";
+  const resolved = resolvedEffort(effort, phase);
+  return {
+    ...baseInput,
+    phase,
+    promptContract: promptContractForPhase(phase),
+    effort: resolved,
+    effective_permission: effectivePermissionForPhase(phase),
+    permissions: {
+      ...baseInput.permissions,
+      mode: write ? ("workspace-write" as const) : ("readonly" as const),
+      workspaceScope: repoScoped ? ("repo" as const) : ("worktree" as const),
+    },
+    timeoutMs: resolved.timeout_ms,
+  };
+}
+
+function resolvedEffort(effort: ResolvedEffort["effort"], phase: Phase = "plan"): ResolvedEffort {
+  return {
+    phase,
+    provider: "claude",
+    effort,
+    downgraded_from: null,
+    timeout_ms: effort === "high" ? 3_600_000 : effort === "low" ? 1_200_000 : 1_800_000,
+  };
+}
+
+function effectivePermissionForPhase(phase: Phase): EffectivePermission {
+  return {
+    permission_profile: validateCapabilitySelection({ phase, provider: "claude" })
+      .permission_profile,
+    claude: derive_claude_perm(phase),
+  };
+}
 
 describe("claude-runner", () => {
   it("builds read-only claude -p args with project settings and schema", () => {
@@ -55,7 +103,10 @@ describe("claude-runner", () => {
       JSON.parse(readArg(args, "--settings")),
       buildClaudePathGuardSettings(workspaceRoot, "readonly_path_guard"),
     );
-    assert.equal(args.at(-1), baseInput.prompt);
+    assert.match(args.at(-1) ?? "", /<autokit-effort-profile>/);
+    assert.match(args.at(-1) ?? "", /max_turns: 16/);
+    assert.match(args.at(-1) ?? "", /prompt_policy: default/);
+    assert.match(args.at(-1) ?? "", /Return prompt_contract YAML/);
     assert.doesNotThrow(() => JSON.parse(readArg(args, "--json-schema")));
   });
 
@@ -64,15 +115,13 @@ describe("claude-runner", () => {
       ...baseInput,
       phase: "implement",
       promptContract: "implement",
+      effort: resolvedEffort("medium", "implement"),
+      effective_permission: effectivePermissionForPhase("implement"),
       permissions: {
         mode: "workspace-write",
         allowNetwork: false,
         workspaceScope: "worktree",
         workspaceRoot,
-      },
-      effective_permission: {
-        permission_profile: "write_worktree",
-        claude: derive_claude_perm("implement"),
       },
     });
 
@@ -88,6 +137,65 @@ describe("claude-runner", () => {
     const args = buildClaudeArgs({ ...baseInput, model: "claude-sonnet-4-6" });
 
     assert.equal(readArg(args, "--model"), "claude-sonnet-4-6");
+  });
+
+  it("maps resolved effort to Claude model, max turns, timeout, and prompt policy", () => {
+    for (const phase of [
+      "plan",
+      "plan_verify",
+      "plan_fix",
+      "implement",
+      "review",
+      "supervise",
+      "fix",
+    ] as const) {
+      for (const [effort, expected] of [
+        ["auto", { model: undefined, maxTurns: 16, timeoutMs: 1_800_000, promptPolicy: "default" }],
+        ["low", { model: "sonnet", maxTurns: 8, timeoutMs: 1_200_000, promptPolicy: "concise" }],
+        [
+          "medium",
+          { model: "sonnet", maxTurns: 16, timeoutMs: 1_800_000, promptPolicy: "default" },
+        ],
+        ["high", { model: "opus", maxTurns: 32, timeoutMs: 3_600_000, promptPolicy: "detailed" }],
+      ] as const) {
+        const input = inputForPhase(phase, effort);
+        const profile = buildClaudeEffortProfile(input);
+        const args = buildClaudeArgs(input);
+        const prompt = args.at(-1) ?? "";
+
+        assert.deepEqual(profile, { effort, ...expected }, `${phase}:${effort}`);
+        assert.equal(args.includes("--effort"), false, `${phase}:${effort}`);
+        assert.equal(args.includes("--max-turns"), false, `${phase}:${effort}`);
+        if (expected.model === undefined) {
+          assert.equal(args.includes("--model"), false, `${phase}:${effort}`);
+        } else {
+          assert.equal(readArg(args, "--model"), expected.model, `${phase}:${effort}`);
+        }
+        assert.match(prompt, new RegExp(`max_turns: ${expected.maxTurns}`), `${phase}:${effort}`);
+        assert.match(prompt, new RegExp(`timeout_ms: ${expected.timeoutMs}`), `${phase}:${effort}`);
+        assert.match(
+          prompt,
+          new RegExp(`prompt_policy: ${expected.promptPolicy}`),
+          `${phase}:${effort}`,
+        );
+      }
+    }
+  });
+
+  it("preserves explicit Claude model pins over effort default model aliases", () => {
+    const args = buildClaudeArgs({ ...inputForPhase("review", "high"), model: "claude-custom" });
+
+    assert.equal(readArg(args, "--model"), "claude-custom");
+  });
+
+  it("uses the resolved effort timeout instead of recomputing the effort table default", () => {
+    const effort = { ...resolvedEffort("high", "review"), timeout_ms: 900_000 };
+    const input = { ...inputForPhase("review", "high"), effort, timeoutMs: effort.timeout_ms };
+    const profile = buildClaudeEffortProfile(input);
+    const prompt = buildClaudeArgs(input).at(-1) ?? "";
+
+    assert.equal(profile.timeoutMs, 900_000);
+    assert.match(prompt, /timeout_ms: 900000/);
   });
 
   it("adds resume by stored Claude session id", () => {
@@ -127,10 +235,8 @@ describe("claude-runner", () => {
         ...baseInput,
         phase: "plan_verify",
         promptContract: "plan-verify",
-        effective_permission: {
-          permission_profile: "readonly_repo",
-          claude: derive_claude_perm("plan_verify"),
-        },
+        effort: resolvedEffort("medium", "plan_verify"),
+        effective_permission: effectivePermissionForPhase("plan_verify"),
       }),
     );
     assert.throws(
@@ -140,6 +246,45 @@ describe("claude-runner", () => {
           permissions: { mode: "workspace-write", allowNetwork: false },
         }),
       (error) => error instanceof ClaudeRunnerError && error.code === "sandbox_violation",
+    );
+    assert.throws(
+      () => buildClaudeArgs({ ...baseInput, effort: undefined }),
+      (error) => error instanceof ClaudeRunnerError && error.code === "other",
+    );
+    assert.throws(
+      () =>
+        buildClaudeArgs({
+          ...baseInput,
+          effort: { ...resolvedEffort("high", "review"), provider: "claude" },
+        }),
+      (error) => error instanceof ClaudeRunnerError && error.code === "other",
+    );
+    assert.throws(
+      () =>
+        buildClaudeArgs({
+          ...baseInput,
+          effort: { ...resolvedEffort("high", "plan"), provider: "codex" },
+        }),
+      (error) => error instanceof ClaudeRunnerError && error.code === "other",
+    );
+    assert.throws(
+      () => buildClaudeArgs({ ...baseInput, effective_permission: undefined }),
+      (error) => error instanceof ClaudeRunnerError && error.code === "sandbox_violation",
+    );
+    assert.throws(
+      () =>
+        buildClaudeArgs({
+          ...baseInput,
+          effective_permission: {
+            permission_profile: "readonly_worktree",
+            claude: derive_claude_perm("plan"),
+          },
+        }),
+      (error) => error instanceof ClaudeRunnerError && error.code === "sandbox_violation",
+    );
+    assert.throws(
+      () => buildClaudeArgs({ ...baseInput, timeoutMs: baseInput.effort.timeout_ms - 1 }),
+      (error) => error instanceof ClaudeRunnerError && error.code === "runner_timeout",
     );
     assert.throws(
       () =>
@@ -152,9 +297,7 @@ describe("claude-runner", () => {
     assert.throws(
       () =>
         buildClaudeArgs({
-          ...baseInput,
-          phase: "review",
-          promptContract: "review",
+          ...inputForPhase("review"),
           permissions: { ...baseInput.permissions, workspaceScope: "repo" },
         }),
       (error) => error instanceof ClaudeRunnerError && error.code === "sandbox_violation",
@@ -479,10 +622,8 @@ describe("claude-runner", () => {
 
     const result = await runClaude(
       {
-        ...baseInput,
+        ...inputForPhase("review"),
         cwd: root,
-        phase: "review",
-        promptContract: "review",
         permissions: {
           ...baseInput.permissions,
           workspaceScope: "worktree",
@@ -550,9 +691,10 @@ describe("claude-runner", () => {
 
   it("kills and reports runner_timeout when the subprocess stalls", async () => {
     const child = new FakeChild({ closeOnKill: false });
+    const effort = { ...resolvedEffort("medium", "plan"), timeout_ms: 5 };
     await assert.rejects(
       runClaude(
-        { ...baseInput, timeoutMs: 5 },
+        { ...baseInput, effort, timeoutMs: effort.timeout_ms },
         {
           parentEnv: { PATH: "/bin" },
           killGraceMs: 0,

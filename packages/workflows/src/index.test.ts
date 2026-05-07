@@ -1842,14 +1842,17 @@ describe("review and supervise workflow", () => {
     assert.equal(result.task.state, "ci_waiting");
     assert.equal(result.findings[0].file, "<repo>/packages/core/src/index.ts");
     assert.equal(result.findings[0].title, "token <redacted>");
-    assert.doesNotMatch(result.findings[0].rationale, /\/Users\/tester|ghp_|sk-|raw-secret/);
-    assert.match(result.findings[0].rationale, /~\/\.codex\/auth\.json/);
+    assert.doesNotMatch(
+      result.findings[0].rationale,
+      /\/Users\/tester|\.codex\/auth\.json|ghp_|sk-|raw-secret/,
+    );
+    assert.match(result.findings[0].rationale, /<REDACTED>/);
     assert.equal(result.findings[0].suggested_fix, "<repo>/.env:4 SECRET=<REDACTED>");
     assert.equal(
       result.task.review_findings[0].reject_reasons[id],
-      "reject <REDACTED> at ~/.codex/auth.json",
+      "reject <REDACTED> at <REDACTED>",
     );
-    assert.equal(result.task.reject_history[0].reason, "reject <REDACTED> at ~/.codex/auth.json");
+    assert.equal(result.task.reject_history[0].reason, "reject <REDACTED> at <REDACTED>");
   });
 
   it("uses deterministic finding ids from normalized file and title", () => {

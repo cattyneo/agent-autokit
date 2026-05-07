@@ -1,4 +1,4 @@
-import { lstat, readFile, realpath } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -27,6 +27,29 @@ type VisibilitySelfTestResult = {
   checks: VisibilityCheck[];
 };
 
+type PromptAssetVisibilityGateOptions = {
+  assetsRootUrl?: URL;
+  mappingUrl?: URL;
+};
+
+type PromptAssetVisibilityGateResult = {
+  total: number;
+  passed: number;
+  failures: string[];
+  promptFiles: string[];
+  presetEffectivePrompts: string[];
+  markerSections: string[];
+  checks: VisibilityCheck[];
+};
+
+type PromptMappingRow = {
+  promptContract: string;
+  field: string;
+  mdSection: string;
+  promptFile: string;
+  presetEffectivePrompt: string;
+};
+
 const PROVIDERS: Provider[] = ["claude", "codex"];
 const PROMPT_CONTRACTS: PromptContract[] = [
   "plan",
@@ -42,6 +65,95 @@ const AGENTS = ["planner", "plan-verifier", "implementer", "reviewer", "supervis
 const QUESTION_REF = "Use the bundled autokit-question skill for status=need_input responses.";
 const IMPLEMENT_REF = "Use the bundled autokit-implement skill.";
 const REVIEW_REF = "Use the bundled autokit-review skill.";
+const MARKER_SECTIONS = ["## Result", "## Evidence", "## Changes", "## Test results"];
+
+export async function runPromptAssetVisibilityGate(
+  options: PromptAssetVisibilityGateOptions = {},
+): Promise<PromptAssetVisibilityGateResult> {
+  const assetsRoot = fileURLToPath(
+    options.assetsRootUrl ?? new URL("../../packages/cli/assets/", import.meta.url),
+  );
+  const mappingPath = fileURLToPath(
+    options.mappingUrl ?? new URL("../fixtures/prompt-contract/mapping.md", import.meta.url),
+  );
+  const checks: VisibilityCheck[] = [];
+  const mapping = await readMappingRows(mappingPath);
+  const promptFiles = await listPromptFiles(join(assetsRoot, "prompts"));
+  const promptFileNames = promptFiles.map((item) => item.replace(/\.md$/, ""));
+  const presetEffectivePrompts: string[] = [];
+
+  await check(checks, "prompt assets include exactly the fixed prompt contracts", async () => {
+    const unexpected = promptFileNames.filter(
+      (contract) => !(PROMPT_CONTRACTS as readonly string[]).includes(contract),
+    );
+    const missing = PROMPT_CONTRACTS.filter((contract) => !promptFileNames.includes(contract));
+    if (unexpected.length > 0 || missing.length > 0) {
+      throw new Error(
+        `unexpected prompt asset: ${unexpected.join(",") || "-"}; missing=${missing.join(",") || "-"}`,
+      );
+    }
+  });
+
+  for (const contract of PROMPT_CONTRACTS) {
+    const promptFile = `packages/cli/assets/prompts/${contract}.md`;
+    const text = await readText(assetsRoot, "prompts", `${contract}.md`);
+    await check(checks, `prompt markers: ${contract}`, async () =>
+      requireMarkerSections(`${contract}.md`, text),
+    );
+    await check(checks, `prompt mapping: ${contract}`, async () =>
+      requireMappingCoverage(mapping, {
+        contract,
+        promptFile,
+        presetEffectivePrompt: "base",
+      }),
+    );
+  }
+
+  for (const preset of await listPresetNames(join(assetsRoot, "presets"))) {
+    for (const contract of PROMPT_CONTRACTS) {
+      const overridePath = join(assetsRoot, "presets", preset, "prompts", `${contract}.md`);
+      const override = await readOptionalText(overridePath);
+      const text = override ?? (await readText(assetsRoot, "prompts", `${contract}.md`));
+      const effectivePrompt = `preset:${preset}/prompts/${contract}.md`;
+      presetEffectivePrompts.push(effectivePrompt);
+      await check(checks, `preset prompt markers: ${preset}/${contract}`, async () =>
+        requireMarkerSections(effectivePrompt, text),
+      );
+      await check(checks, `preset prompt mapping: ${preset}/${contract}`, async () =>
+        requireMappingCoverage(mapping, {
+          contract,
+          promptFile: `packages/cli/assets/prompts/${contract}.md`,
+          presetEffectivePrompt: effectivePrompt,
+        }),
+      );
+    }
+
+    for (const override of await listPromptFilesDeep(
+      join(assetsRoot, "presets", preset, "prompts"),
+    )) {
+      const contract = override.replace(/\.md$/, "");
+      await check(checks, `preset prompt contract: ${preset}/${contract}`, async () => {
+        if (!(PROMPT_CONTRACTS as readonly string[]).includes(contract)) {
+          throw new Error(`unexpected preset prompt asset: ${preset}/prompts/${contract}`);
+        }
+      });
+    }
+  }
+
+  const failures = checks
+    .filter((result) => !result.ok)
+    .map((result) => `${result.name}: ${result.message ?? "failed"}`);
+
+  return {
+    total: checks.length,
+    passed: checks.length - failures.length,
+    failures,
+    promptFiles,
+    presetEffectivePrompts,
+    markerSections: MARKER_SECTIONS,
+    checks,
+  };
+}
 
 export async function runRunnerVisibilitySelfTest(
   fixtureRootUrl = new URL("../fixtures/runner-visibility/", import.meta.url),
@@ -139,6 +251,141 @@ async function requireFile(root: string, ...segments: string[]): Promise<void> {
   const stat = await lstat(target);
   if (!stat.isFile()) {
     throw new Error(`${target} is not a file`);
+  }
+}
+
+async function listPromptFiles(root: string): Promise<string[]> {
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+      .map((entry) => entry.name)
+      .sort();
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function listPromptFilesDeep(root: string): Promise<string[]> {
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    const files = await Promise.all(
+      entries.map(async (entry) => {
+        const target = join(root, entry.name);
+        if (entry.isDirectory()) {
+          return (await listPromptFilesDeep(target)).map((item) => `${entry.name}/${item}`);
+        }
+        return entry.isFile() && entry.name.endsWith(".md") ? [entry.name] : [];
+      }),
+    );
+    return files.flat().sort();
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function listPresetNames(root: string): Promise<string[]> {
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function readOptionalText(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function requireMarkerSections(label: string, text: string): void {
+  const lines = text.split(/\r?\n/).map((line) => line.trim());
+  let lastIndex = -1;
+  for (const section of MARKER_SECTIONS) {
+    const index = lines.indexOf(section);
+    if (index === -1) {
+      throw new Error(`${label} missing marker ${section}`);
+    }
+    if (index <= lastIndex) {
+      throw new Error(`${label} marker ${section} is out of order`);
+    }
+    lastIndex = index;
+  }
+}
+
+async function readMappingRows(path: string): Promise<PromptMappingRow[]> {
+  const source = await readFile(path, "utf8");
+  const rows = source
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("|") && line.endsWith("|"))
+    .map((line) =>
+      line
+        .slice(1, -1)
+        .split("|")
+        .map((cell) => cell.trim()),
+    )
+    .filter((cells) => !cells.every((cell) => /^-+$/.test(cell)));
+  const [header, ...body] = rows;
+  if (header === undefined) {
+    throw new Error("mapping table missing header");
+  }
+  const index = (name: string) => {
+    const value = header.indexOf(name);
+    if (value === -1) {
+      throw new Error(`mapping table missing column ${name}`);
+    }
+    return value;
+  };
+  const contractIndex = index("prompt_contract");
+  const fieldIndex = index("field");
+  const sectionIndex = index("md_section");
+  const promptFileIndex = index("prompt_file");
+  const presetIndex = index("preset_effective_prompt");
+
+  return body.map((cells) => ({
+    promptContract: cells[contractIndex] ?? "",
+    field: cells[fieldIndex] ?? "",
+    mdSection: cells[sectionIndex] ?? "",
+    promptFile: cells[promptFileIndex] ?? "",
+    presetEffectivePrompt: cells[presetIndex] ?? "",
+  }));
+}
+
+function requireMappingCoverage(
+  rows: PromptMappingRow[],
+  input: { contract: string; promptFile: string; presetEffectivePrompt: string },
+): void {
+  for (const section of MARKER_SECTIONS) {
+    const found = rows.some(
+      (row) =>
+        row.promptContract === input.contract &&
+        row.mdSection === section &&
+        row.promptFile === input.promptFile &&
+        row.presetEffectivePrompt === input.presetEffectivePrompt &&
+        row.field.length > 0,
+    );
+    if (!found) {
+      throw new Error(`mapping missing for ${input.presetEffectivePrompt} ${section}`);
+    }
   }
 }
 

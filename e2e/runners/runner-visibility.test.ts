@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { cp, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { runRunnerVisibilitySelfTest } from "./runner-visibility.ts";
+import { runPromptAssetVisibilityGate, runRunnerVisibilitySelfTest } from "./runner-visibility.ts";
 
 const FIXTURE_URL = new URL("../fixtures/runner-visibility/", import.meta.url);
 
@@ -101,6 +101,83 @@ describe("runner visibility spike fixtures", () => {
   });
 });
 
+describe("prompt asset visibility gate", () => {
+  it("keeps real bundled prompt assets mapped and marker-normalized", async () => {
+    const result = await runPromptAssetVisibilityGate();
+
+    assert.deepEqual(result.failures, []);
+    assert.equal(result.promptFiles.length, 7);
+    assert.deepEqual(result.markerSections, [
+      "## Result",
+      "## Evidence",
+      "## Changes",
+      "## Test results",
+    ]);
+  });
+
+  it("fails closed when a real prompt asset omits a required marker", async () => {
+    const assetsRoot = await copyAssets();
+    await writeFile(
+      join(assetsRoot, "prompts", "plan.md"),
+      [
+        "# plan",
+        "",
+        "## Result",
+        "## Changes",
+        "## Test results",
+        "",
+        "Use skill: autokit-question",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await assertPromptGateFailure(assetsRoot, "plan.md missing marker ## Evidence");
+  });
+
+  it("fails closed when prompt files are not represented by the mapping table", async () => {
+    const assetsRoot = await copyAssets();
+    await writeFile(
+      join(assetsRoot, "prompts", "extra.md"),
+      ["# extra", "", "## Result", "## Evidence", "## Changes", "## Test results"].join("\n"),
+      "utf8",
+    );
+
+    await assertPromptGateFailure(assetsRoot, "unexpected prompt asset: extra");
+  });
+
+  it("fails closed when a bundled preset prompt override lacks mapping coverage", async () => {
+    const assetsRoot = await copyAssets();
+    const presetPromptDir = join(assetsRoot, "presets", "default", "prompts");
+    await mkdir(presetPromptDir, { recursive: true });
+    await writeFile(
+      join(presetPromptDir, "plan.md"),
+      ["# plan", "", "## Result", "## Evidence", "## Changes", "## Test results"].join("\n"),
+      "utf8",
+    );
+
+    await assertPromptGateFailure(
+      assetsRoot,
+      "mapping missing for preset:default/prompts/plan.md ## Result",
+    );
+  });
+
+  it("fails closed when a bundled preset prompt asset is nested outside the contract set", async () => {
+    const assetsRoot = await copyAssets();
+    const nestedPromptDir = join(assetsRoot, "presets", "default", "prompts", "nested");
+    await mkdir(nestedPromptDir, { recursive: true });
+    await writeFile(
+      join(nestedPromptDir, "plan.md"),
+      ["# plan", "", "## Result", "## Evidence", "## Changes", "## Test results"].join("\n"),
+      "utf8",
+    );
+
+    await assertPromptGateFailure(
+      assetsRoot,
+      "unexpected preset prompt asset: default/prompts/nested/plan",
+    );
+  });
+});
+
 async function copyFixture(): Promise<string> {
   const destination = await mkdtemp(join(tmpdir(), "autokit-runner-visibility-"));
   await cp(fileURLToPath(FIXTURE_URL), destination, {
@@ -108,6 +185,26 @@ async function copyFixture(): Promise<string> {
     verbatimSymlinks: true,
   });
   return destination;
+}
+
+async function copyAssets(): Promise<string> {
+  const destination = await mkdtemp(join(tmpdir(), "autokit-prompt-assets-"));
+  await cp(fileURLToPath(new URL("../../packages/cli/assets/", import.meta.url)), destination, {
+    recursive: true,
+    verbatimSymlinks: true,
+  });
+  return destination;
+}
+
+async function assertPromptGateFailure(assetsRoot: string, expectedFailure: string): Promise<void> {
+  const result = await runPromptAssetVisibilityGate({
+    assetsRootUrl: pathToFileURL(`${assetsRoot}/`),
+  });
+  assert.notEqual(result.failures.length, 0);
+  assert.ok(
+    result.failures.some((failure) => failure.includes(expectedFailure)),
+    `expected failure containing ${expectedFailure}, got ${result.failures.join("; ")}`,
+  );
 }
 
 async function assertSelfTestFailure(fixture: string, expectedCheck: string): Promise<void> {

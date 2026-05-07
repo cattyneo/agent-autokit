@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   capabilityPhases,
@@ -474,6 +475,18 @@ describe("codex-runner", () => {
     ]);
   });
 
+  it("matches the frozen Codex prompt_contract JSON schema snapshot", () => {
+    const snapshot = readCodexSchemaSnapshot();
+    const actual = Object.fromEntries(
+      capabilityPhases.map((phase) => [
+        promptContractForPhase(phase),
+        codexPromptContractJsonSchema(promptContractForPhase(phase)),
+      ]),
+    );
+
+    assert.deepEqual(actual, snapshot);
+  });
+
   it("emits a plan_verify output schema that keeps ok findings empty", async () => {
     let observedSchema: Record<string, unknown> | undefined;
     let outputText = "";
@@ -803,6 +816,19 @@ function readArg(args: string[], flag: string): string {
   const value = args[index + 1];
   assert.equal(typeof value, "string");
   return value;
+}
+
+function readCodexSchemaSnapshot(): unknown {
+  const candidates = [
+    new URL("./fixtures/codex-prompt-contract-schema.snapshot.json", import.meta.url),
+    new URL("../src/fixtures/codex-prompt-contract-schema.snapshot.json", import.meta.url),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(fileURLToPath(candidate))) {
+      return JSON.parse(readFileSync(candidate, "utf8"));
+    }
+  }
+  throw new Error("codex prompt_contract schema snapshot not found");
 }
 
 class FakeChild extends EventEmitter {

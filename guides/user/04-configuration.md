@@ -50,7 +50,7 @@ auto_merge: true
 | キー | デフォルト | 意味 |
 |------|-----------|------|
 | `version` | `1` | スキーマ版。`1` 固定 |
-| `parallel` | `1` | 並列数。v0.1.0 では実質 1 のみ |
+| `parallel` | `1` | 並列数。実質 `1` のみ受理する |
 | `base_branch` | `""` | 空なら `main` を使う |
 | `branch_prefix` | `"autokit/"` | 自動 branch 名 prefix |
 | `auto_merge` | `true` | GitHub auto-merge 予約を使う |
@@ -65,7 +65,7 @@ auto_merge: true
 | `merge.timeout_ms` | `1800000` | 30 分 |
 | `merge.branch_delete_grace_ms` | `5000` | merge 確定→branch 削除の猶予 |
 | `merge.worktree_remove_retry_max` | `3` | worktree 削除リトライ上限 |
-| `label_filter` | `[]` | schema は受理するが v0.1.0 では未参照。label フィルタは `autokit add --label` のみ |
+| `label_filter` | `[]` | schema は受理するが現行ランタイムでは未参照。label フィルタは `autokit add --label` のみ |
 | `runtime.max_untrusted_input_kb` | `256` | runner 入力サイズ上限 |
 | `effort.default` | `medium` | phase が effort 未指定のときの既定値 |
 | `effort.unsupported_policy` | `fail` | unsupported tuple を失敗にするか downgrade するか |
@@ -99,7 +99,7 @@ phases:
     effort: high
 ```
 
-`effort` の値は `auto` / `low` / `medium` / `high`。`minimal` / `xhigh` / `max` は v0.2.0 では受理しない。
+`effort` の値は `auto` / `low` / `medium` / `high`。`minimal` / `xhigh` / `max` は受理しない。
 
 ### `effort`
 

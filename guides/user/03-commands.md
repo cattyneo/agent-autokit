@@ -12,7 +12,7 @@
 --force-unlock         lock seizure を要求（CLI 登録のみ。実体は未参照）
 ```
 
-`--config` と `--force-unlock` はオプション登録だけ存在する。v0.2.0 の実装済み lock busy 復旧は `--force-unlock` ではなく、holder / PID を確認してからの手動復旧または recovery command で扱う。
+`--config` と `--force-unlock` はオプション登録だけ存在する。lock busy からの復旧は `--force-unlock` ではなく、holder / PID を確認してからの手動復旧または recovery command で扱う。
 
 環境変数 `AUTOKIT_ASSUME_YES=1` でも `--yes` 相当が有効になる。
 
@@ -35,7 +35,7 @@
 
 ```bash
 autokit version
-# => autokit 0.1.0
+# => autokit <version>
 ```
 
 `autokit --version` / `autokit -V` と同じ結果。

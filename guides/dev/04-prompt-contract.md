@@ -56,7 +56,7 @@ completed | need_input | paused | rate_limited | failed
 
 `rate_limited` は runner 側で挿入する集約状態。prompt-contract（LLM 出力 YAML）には現れない。
 
-v0.2.0 の `AgentRunInput` は、上記に加えて `effort` / `effective_permission` / `promptContract` を runner へ渡す。runner は provider 固有の CLI 引数へ変換するだけで、capability 判定や permission profile の緩和は行わない。
+`AgentRunInput` は、上記に加えて `effort` / `effective_permission` / `promptContract` を runner へ渡す。runner は provider 固有の CLI 引数へ変換するだけで、capability 判定や permission profile の緩和は行わない。
 
 ## 検証フロー
 
@@ -137,9 +137,9 @@ answer は `autokit_need_input_response` という JSON envelope に包まれて
 
 contract violation は runner が明示的に返す `status=paused` / `status=failed` とは別扱い。初回は audit kind `phase_self_correct` を残して同じ phase を 1 回だけ再実行し、`runtime.phase_self_correct_done=true` の再違反で `failure.code=prompt_contract_violation` の `failed` になる。これが「自由テキスト解釈」より優れている理由。
 
-## v0.2 asset gates
+## asset gates
 
-Phase 4 以降、prompt / skill / agent asset は次の gate を通る。
+prompt / skill / agent asset は次の gate を通る。
 
 | gate | 検出対象 |
 |------|----------|

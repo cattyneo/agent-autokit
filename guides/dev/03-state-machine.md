@@ -145,7 +145,7 @@ flowchart LR
 
 ## runtime field と audit-only event
 
-v0.2.0 で増えた runtime field は state-machine event を増やさず、workflow 内の checkpoint として扱う。
+runtime field は state-machine event を増やさず、workflow 内の checkpoint として扱う。
 
 | field | 用途 | state-machine との関係 |
 |-------|------|------------------------|

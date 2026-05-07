@@ -6,7 +6,7 @@
 
 - コードを読む / 拡張する開発者
 - 「なぜこの状態機械なのか」「なぜ Claude/Codex を分離したのか」を理解したい人
-- v0.2 以降に手を入れる前提で実装意図を掴みたい人
+- 内部に手を入れる前提で実装意図を掴みたい人
 
 `autokit` を **使う** 側の手順は [user-guide](../user/README.md) を参照。本ガイドは「使い方」「コマンド引数」「config フィールド一覧」を再掲しない。
 
@@ -21,7 +21,7 @@
 | 5 | [05-safety.md](./05-safety.md) | API key / auto-merge / sandbox / sanitize | flowchart |
 | 6 | [06-glossary.md](./06-glossary.md) | 用語の最低限。SPEC §1.4 へ誘導 | — |
 
-v0.2.0 の追加 surface は主に `02` (capability / effort / serve), `03` (runtime field / self-correction), `04` (asset gates), `05` (preset / serve safety) に分散している。
+主要 surface は `02` (capability / effort / serve), `03` (runtime field / self-correction), `04` (asset gates), `05` (preset / serve safety) に分散している。
 
 ## 読み方の順序
 

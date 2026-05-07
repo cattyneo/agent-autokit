@@ -71,7 +71,7 @@
 
 ## フェーズ × Provider
 
-`runtime_phase` ごとの provider / sandbox / 役割の正典は [04-configuration.md](./04-configuration.md) `phases.<phase>` セクション。v0.2.0 では 7 agent phase × 2 provider の capability table が core SoT で、`config.yaml` の `phases.<name>.provider` または `autokit run --phase ... --provider ...` で個別上書きできる。
+`runtime_phase` ごとの provider / sandbox / 役割の正典は [04-configuration.md](./04-configuration.md) `phases.<phase>` セクション。7 agent phase × 2 provider の capability table が core SoT で、`config.yaml` の `phases.<name>.provider` または `autokit run --phase ... --provider ...` で個別上書きできる。
 
 permission profile は provider ではなく phase から固定導出される:
 

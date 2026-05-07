@@ -175,7 +175,7 @@ deps は CLI 側 (`cli/executor.ts`) で組み立てられる。テストは dep
 
 ## capability / effort の所有境界
 
-v0.2.0 では provider 選択と権限を runner package 側に分散しない。
+provider 選択と権限を runner package 側に分散しない。
 
 ```mermaid
 flowchart LR

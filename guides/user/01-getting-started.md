@@ -51,9 +51,9 @@ cd /path/to/agent-autokit
 bun run build
 cd packages/cli
 bun pm pack
-npm i -g ./cattyneo-autokit-0.1.0.tgz
+npm i -g ./cattyneo-autokit-<version>.tgz   # <version> は packages/cli/package.json の version
 autokit --version
-# => autokit 0.1.0
+# => autokit <version>
 ```
 
 ### 経路 B: Checkout Link（開発時）
@@ -129,3 +129,18 @@ autokit init --force
 ## 次のステップ
 
 実際に 1 issue を流す手順は [02-quickstart.md](./02-quickstart.md) へ。
+
+## 主要機能の俯瞰
+
+本書の他章で詳説する現行 surface の早見:
+
+- capability table: 7 agent phase × 2 provider の組合せ可否と permission profile を core SoT として保持
+- effort 制御: `auto` / `low` / `medium` / `high` の 4 値。unsupported 時は `fail` (`failure.code=effort_unsupported`) または `downgrade` (1 段下降 + audit `effort_downgrade`)
+- CLI override: `autokit run --phase ... --provider ... --effort ...` で 1 run のみ phase 設定を上書き
+- diagnostics: `autokit doctor` 拡張、`autokit config show` / `config validate`、`autokit logs`、`autokit diff` (2 段 redact)
+- preset: `default` / `laravel-filament` / `next-shadcn` / `docs-create` を同梱し `.autokit/presets/` で上書き可。path traversal / blacklist / protected array gate を通す
+- `autokit serve`: `127.0.0.1` 固定 bind の HTTP API + SSE。bearer token / Host / Origin / Content-Type を必ず通す
+- 二重起動 gate: `.autokit/.lock/` directory で CLI / serve / preset apply を直列化。lock busy は exit `75` で fast-fail
+- prompt / skill / agent gate: asset gate により `.agents/prompts/<contract>.md` の本文注入と provider-visible root の整合を強制
+
+各機能の操作手順は [03-commands.md](./03-commands.md) / [04-configuration.md](./04-configuration.md) / [07-troubleshooting-faq.md](./07-troubleshooting-faq.md) を参照。

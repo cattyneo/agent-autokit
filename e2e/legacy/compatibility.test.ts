@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { parse, stringify } from "yaml";
 import { type CliDeps, runCli } from "../../packages/cli/src/index.ts";
 import {
   createTaskEntry,
@@ -18,6 +19,11 @@ import {
 const NOW = "2026-05-08T14:00:00.000Z";
 
 type AgentPhase = (typeof taskAgentPhases)[number];
+type LegacySessionFixture = {
+  phase: AgentPhase;
+  expected_last_provider: "claude" | "codex";
+  provider_sessions: Partial<Record<AgentPhase, Partial<TaskEntry["provider_sessions"]["plan"]>>>;
+};
 
 describe("Issue #115 legacy compatibility E2E gate", () => {
   it("resumes all legacy provider session fixtures through the CLI parse/write gate", async () => {
@@ -26,6 +32,14 @@ describe("Issue #115 legacy compatibility E2E gate", () => {
       .filter((entry) => entry.endsWith(".yaml"))
       .sort();
     assert.equal(fixtureFiles.length, taskAgentPhases.length * 2);
+    assert.deepEqual(
+      fixtureFiles.filter((entry) => entry.endsWith("-default-provider.yaml")).sort(),
+      taskAgentPhases.map((phase) => `${phase.replaceAll("_", "-")}-default-provider.yaml`).sort(),
+    );
+    assert.deepEqual(
+      fixtureFiles.filter((entry) => entry.endsWith("-both-sessions.yaml")).sort(),
+      taskAgentPhases.map((phase) => `${phase.replaceAll("_", "-")}-both-sessions.yaml`).sort(),
+    );
 
     for (const file of fixtureFiles) {
       const fixture = parseLegacySessionFixture(readFileSync(join(fixtureRoot, file), "utf8"));
@@ -108,6 +122,15 @@ describe("Issue #115 legacy compatibility E2E gate", () => {
         last_provider: null,
       });
     }
+    writeLegacyTasks(repo, [fresh as unknown as Record<string, unknown>]);
+    const loadedFresh = loadTasksFile(tasksPath(repo)).tasks[0];
+    for (const phase of taskAgentPhases) {
+      assert.deepEqual(loadedFresh.provider_sessions[phase], {
+        claude_session_id: null,
+        codex_session_id: null,
+        last_provider: null,
+      });
+    }
   });
 
   it("parses old config files without effort or phase timeout fields", () => {
@@ -138,15 +161,17 @@ phases:
 });
 
 function legacyPausedTask(issue: number, phase: AgentPhase, slug: string): Record<string, unknown> {
-  const task = structuredClone(
-    createTaskEntry({
-      issue,
-      slug: slug.replace(/\.yaml$/, ""),
-      title: slug,
-      labels: ["agent-ready"],
-      now: NOW,
-    }),
-  ) as unknown as Record<string, unknown>;
+  const task = parse(
+    stringify(
+      createTaskEntry({
+        issue,
+        slug: slug.replace(/\.yaml$/, ""),
+        title: slug,
+        labels: ["agent-ready"],
+        now: NOW,
+      }),
+    ),
+  ) as Record<string, unknown>;
   task.state = "paused";
   task.runtime_phase = phase;
   const runtime = task.runtime as Record<string, unknown>;
@@ -173,37 +198,27 @@ function activeStateForPhase(phase: AgentPhase): TaskEntry["state"] {
   }
 }
 
-function parseLegacySessionFixture(source: string): {
-  phase: AgentPhase;
-  expected_last_provider: "claude" | "codex";
-  provider_sessions: Partial<Record<AgentPhase, Partial<TaskEntry["provider_sessions"]["plan"]>>>;
-} {
-  const phase = matchFixtureValue(source, "phase") as AgentPhase;
-  const expectedLastProvider = matchFixtureValue(source, "expected_last_provider") as
-    | "claude"
-    | "codex";
-  const providerSession: Partial<TaskEntry["provider_sessions"]["plan"]> = {};
-  const claudeSessionId = source.match(/claude_session_id:\s*(\S+)/)?.[1];
-  const codexSessionId = source.match(/codex_session_id:\s*(\S+)/)?.[1];
-  if (claudeSessionId !== undefined) {
-    providerSession.claude_session_id = claudeSessionId;
-  }
-  if (codexSessionId !== undefined) {
-    providerSession.codex_session_id = codexSessionId;
-  }
+function parseLegacySessionFixture(source: string): LegacySessionFixture {
+  const fixture = parse(source) as Record<string, unknown>;
+  const phase = fixture.phase;
+  const expectedLastProvider = fixture.expected_last_provider;
+  assert.ok(isAgentPhase(phase), "legacy fixture phase must be an agent phase");
+  assert.ok(
+    expectedLastProvider === "claude" || expectedLastProvider === "codex",
+    "legacy fixture expected_last_provider must be claude or codex",
+  );
+  assert.equal(typeof fixture.provider_sessions, "object");
+  assert.notEqual(fixture.provider_sessions, null);
+
   return {
     phase,
     expected_last_provider: expectedLastProvider,
-    provider_sessions: { [phase]: providerSession },
+    provider_sessions: fixture.provider_sessions as LegacySessionFixture["provider_sessions"],
   };
 }
 
-function matchFixtureValue(source: string, key: string): string {
-  const value = source.match(new RegExp(`^${key}:\\s*(\\S+)`, "m"))?.[1];
-  if (value === undefined) {
-    throw new Error(`missing ${key} in legacy session fixture`);
-  }
-  return value;
+function isAgentPhase(value: unknown): value is AgentPhase {
+  return typeof value === "string" && taskAgentPhases.includes(value as AgentPhase);
 }
 
 function makeRepo(): string {
@@ -224,7 +239,7 @@ function makeRepo(): string {
 function writeLegacyTasks(repo: string, tasks: Record<string, unknown>[]): void {
   writeFileSync(
     tasksPath(repo),
-    JSON.stringify({
+    stringify({
       version: 1,
       generated_at: NOW,
       tasks,

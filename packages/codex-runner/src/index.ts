@@ -8,19 +8,23 @@ import {
   type AgentRunInput,
   type AgentRunOutput,
   buildRunnerEnv,
+  capabilityPhases,
+  derive_codex_perm,
   type FailureCode,
   formatQuestionResponsePrompt,
   type ParentEnv,
+  type Phase,
   type PromptContractId,
   promptContractForPhase,
   type ValidPromptContractPayload,
+  validateCapabilitySelection,
   validatePromptContractPayload,
 } from "@cattyneo/autokit-core";
 
 export const CODEX_RUNNER_PACKAGE = "@cattyneo/autokit-codex-runner";
 
-export const codexRunnerPhases = ["plan_verify", "implement", "fix"] as const;
-export type CodexRunnerPhase = (typeof codexRunnerPhases)[number];
+export const codexRunnerPhases = capabilityPhases;
+export type CodexRunnerPhase = Phase;
 
 export type CodexRunnerEnvOptions = {
   home?: string;
@@ -158,8 +162,10 @@ export function buildCodexArgs(input: AgentRunInput, files: CodexRunFiles): stri
     "never",
     "--sandbox",
     sandbox,
-    ...(input.phase === "plan_verify" ? ["--disable", "shell_tool"] : []),
+    ...(sandbox === "read-only" ? ["--disable", "shell_tool"] : []),
     ...(input.model === "auto" ? [] : ["--model", input.model]),
+    "-c",
+    `model_reasoning_effort=${codexReasoningEffort(input)}`,
     "exec",
   ];
 
@@ -290,7 +296,9 @@ function assertCodexInput(
       `Codex phase ${input.phase} must use prompt_contract=${expectedContract}.`,
     );
   }
-  const expectedMode = input.phase === "plan_verify" ? "readonly" : "workspace-write";
+  const row = validateCapabilitySelection({ phase: input.phase, provider: input.provider });
+  const expectedSandbox = derive_codex_perm(input.phase).sandbox;
+  const expectedMode = expectedSandbox === "read-only" ? "readonly" : "workspace-write";
   if (input.permissions.mode !== expectedMode) {
     throw new CodexRunnerError(
       "sandbox_violation",
@@ -300,7 +308,7 @@ function assertCodexInput(
   if (input.permissions.allowNetwork) {
     throw new CodexRunnerError("network_required", "Codex runner phases do not allow network.");
   }
-  const expectedScope = input.phase === "plan_verify" ? "repo" : "worktree";
+  const expectedScope = row.permission_profile === "readonly_repo" ? "repo" : "worktree";
   if (input.permissions.workspaceScope !== expectedScope) {
     throw new CodexRunnerError(
       "sandbox_violation",
@@ -318,7 +326,12 @@ function isCodexRunnerPhase(phase: string): phase is CodexRunnerPhase {
 }
 
 function sandboxForPhase(phase: CodexRunnerPhase): "read-only" | "workspace-write" {
-  return phase === "plan_verify" ? "read-only" : "workspace-write";
+  return derive_codex_perm(phase).sandbox;
+}
+
+function codexReasoningEffort(input: AgentRunInput): "low" | "medium" | "high" {
+  const effort = input.effort?.effort ?? "auto";
+  return effort === "auto" ? "medium" : effort;
 }
 
 function formatCodexPrompt(input: AgentRunInput): string {
@@ -400,7 +413,7 @@ function createCodexRunFiles(
   };
 }
 
-function codexPromptContractJsonSchema(contract: PromptContractId): Record<string, unknown> {
+export function codexPromptContractJsonSchema(contract: PromptContractId): Record<string, unknown> {
   return {
     type: "object",
     properties: {

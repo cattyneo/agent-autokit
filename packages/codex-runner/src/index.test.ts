@@ -5,11 +5,19 @@ import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
 
 import {
+  capabilityPhases,
+  type Phase,
+  promptContractForPhase,
+  type ResolvedEffort,
+} from "@cattyneo/autokit-core";
+
+import {
   buildCodexArgs,
   buildCodexAuthProbeArgs,
   buildCodexRunnerEnv,
   type CodexChildProcess,
   CodexRunnerError,
+  codexPromptContractJsonSchema,
   parseCodexFinalOutput,
   parseCodexJsonl,
   probeCodexChatGptAuth,
@@ -40,11 +48,77 @@ const runFiles = {
   cleanup: () => {},
 };
 
+function inputForPhase(phase: Phase) {
+  const write = phase === "implement" || phase === "fix";
+  const repoScoped = phase === "plan" || phase === "plan_verify" || phase === "plan_fix";
+  return {
+    ...baseInput,
+    phase,
+    promptContract: promptContractForPhase(phase),
+    permissions: {
+      ...baseInput.permissions,
+      mode: write ? ("workspace-write" as const) : ("readonly" as const),
+      workspaceScope: repoScoped ? ("repo" as const) : ("worktree" as const),
+    },
+    effort: resolvedEffort("auto", phase),
+  };
+}
+
+function resolvedEffort(
+  effort: ResolvedEffort["effort"],
+  phase: Phase = "implement",
+): ResolvedEffort {
+  return {
+    phase,
+    provider: "codex",
+    effort,
+    downgraded_from: null,
+    timeout_ms: effort === "high" ? 3_600_000 : effort === "low" ? 1_200_000 : 1_800_000,
+  };
+}
+
+function completedDataForPhase(phase: Phase): Record<string, unknown> {
+  switch (phase) {
+    case "plan":
+      return { plan_markdown: "## Plan", assumptions: [], risks: [] };
+    case "plan_verify":
+      return { result: "ok", findings: [] };
+    case "plan_fix":
+      return { plan_markdown: "## Fixed Plan", addressed_findings: [] };
+    case "implement":
+      return {
+        changed_files: ["src/a.ts"],
+        tests_run: [{ command: "bun test", result: "passed", summary: "ok" }],
+        docs_updated: false,
+        notes: "done",
+      };
+    case "review":
+      return { findings: [] };
+    case "supervise":
+      return {
+        accept_ids: [],
+        reject_ids: [],
+        reject_reasons: {},
+        fix_prompt: "Fix the accepted findings.",
+      };
+    case "fix":
+      return {
+        changed_files: ["src/a.ts"],
+        tests_run: [{ command: "bun test", result: "passed", summary: "ok" }],
+        resolved_accept_ids: [],
+        unresolved_accept_ids: [],
+        notes: "done",
+      };
+  }
+}
+
 describe("codex-runner", () => {
   it("builds codex exec args for workspace-write phases with schema and output file", () => {
     const args = buildCodexArgs(baseInput, runFiles);
 
-    assert.deepEqual(args.slice(0, 5), ["-a", "never", "--sandbox", "workspace-write", "exec"]);
+    assert.deepEqual(args.slice(0, 4), ["-a", "never", "--sandbox", "workspace-write"]);
+    assert.equal(args.includes("exec"), true);
+    assert.equal(readArg(args, "-c"), "model_reasoning_effort=medium");
     assert.equal(readArg(args, "--sandbox"), "workspace-write");
     assert.equal(readArg(args, "--output-schema"), runFiles.schemaFile);
     assert.equal(readArg(args, "-o"), runFiles.outputFile);
@@ -71,6 +145,43 @@ describe("codex-runner", () => {
     assert.equal(readArg(args, "--disable"), "shell_tool");
   });
 
+  it("accepts all capability phases with phase-derived sandbox", () => {
+    for (const phase of capabilityPhases) {
+      const args = buildCodexArgs(inputForPhase(phase), runFiles);
+      const expectedSandbox =
+        phase === "implement" || phase === "fix" ? "workspace-write" : "read-only";
+
+      assert.equal(readArg(args, "--sandbox"), expectedSandbox, phase);
+      assert.equal(args.includes("--reasoning-effort"), false);
+      assert.equal(readArg(args, "-c"), "model_reasoning_effort=medium");
+      if (expectedSandbox === "read-only") {
+        assert.equal(readArg(args, "--disable"), "shell_tool");
+      } else {
+        assert.equal(args.includes("--disable"), false);
+      }
+    }
+  });
+
+  it("maps resolved effort to Codex model_reasoning_effort config", () => {
+    for (const [effort, expected] of [
+      ["auto", "medium"],
+      ["low", "low"],
+      ["medium", "medium"],
+      ["high", "high"],
+    ] as const) {
+      const args = buildCodexArgs(
+        {
+          ...baseInput,
+          effort: resolvedEffort(effort),
+        },
+        runFiles,
+      );
+
+      assert.equal(readArg(args, "-c"), `model_reasoning_effort=${expected}`);
+      assert.equal(args.includes("--reasoning-effort"), false);
+    }
+  });
+
   it("keeps shell access available for workspace-write Codex phases", () => {
     const args = buildCodexArgs(baseInput, runFiles);
 
@@ -87,22 +198,16 @@ describe("codex-runner", () => {
       runFiles,
     );
 
-    assert.deepEqual(args.slice(0, 7), [
-      "-a",
-      "never",
-      "--sandbox",
-      "workspace-write",
-      "exec",
-      "resume",
-      "019df4ff-9c29-7d71-8321-9217c46e6d72",
-    ]);
+    assert.equal(args.includes("exec"), true);
+    assert.equal(args.includes("resume"), true);
+    assert.equal(args.includes("019df4ff-9c29-7d71-8321-9217c46e6d72"), true);
     assert.equal(args.includes("--last"), false);
     assert.equal(args.includes("--output-schema"), false);
   });
 
-  it("rejects non-Codex phases, wrong sandbox mode, network, and workspace scope", () => {
+  it("rejects non-Codex provider, wrong sandbox mode, network, and workspace scope", () => {
     assert.throws(
-      () => buildCodexArgs({ ...baseInput, phase: "review", promptContract: "review" }, runFiles),
+      () => buildCodexArgs({ ...baseInput, provider: "claude" }, runFiles),
       (error) => error instanceof CodexRunnerError && error.code === "other",
     );
     assert.throws(
@@ -253,6 +358,53 @@ describe("codex-runner", () => {
         ),
       (error) => error instanceof CodexRunnerError && error.code === "prompt_contract_violation",
     );
+  });
+
+  it("validates final payloads for every prompt contract and fails schema violations", () => {
+    for (const phase of capabilityPhases) {
+      const contract = promptContractForPhase(phase);
+      const payload = parseCodexFinalOutput(
+        JSON.stringify({
+          status: "completed",
+          summary: `${phase} ok`,
+          data: completedDataForPhase(phase),
+          question: null,
+        }),
+        contract,
+      );
+
+      assert.equal(payload.status, "completed", phase);
+      assert.deepEqual(payload.data, completedDataForPhase(phase));
+    }
+
+    assert.throws(
+      () =>
+        parseCodexFinalOutput(
+          JSON.stringify({
+            status: "completed",
+            summary: "bad",
+            data: null,
+            question: null,
+          }),
+          "implement",
+        ),
+      (error) => error instanceof CodexRunnerError && error.code === "prompt_contract_violation",
+    );
+  });
+
+  it("keeps the Codex prompt schema strict surface stable", () => {
+    const schema = codexPromptContractJsonSchema("plan-verify") as {
+      required: string[];
+      additionalProperties: boolean;
+      properties: { data: { anyOf: unknown[] }; question: { anyOf: unknown[] } };
+    };
+
+    assert.deepEqual(schema.required, ["status", "summary", "data", "question"]);
+    assert.equal(schema.additionalProperties, false);
+    assert.deepEqual(schema.properties.data.anyOf.at(-1), { type: "null" });
+    assert.deepEqual(schema.properties.question.anyOf.at(-1), { type: "null" });
+    const planVerifyDataSchema = schema.properties.data.anyOf[0] as { anyOf: unknown[] };
+    assert.equal(planVerifyDataSchema.anyOf.length, 2);
   });
 
   it("emits a plan_verify output schema that keeps ok findings empty", async () => {

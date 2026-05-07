@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
-import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { runPromptAssetVisibilityGate, runRunnerVisibilitySelfTest } from "./runner-visibility.ts";
+import {
+  runPromptAssetVisibilityGate,
+  runRunnerVisibilitySelfTest,
+  runSkillAssetQualityGate,
+} from "./runner-visibility.ts";
 
 const FIXTURE_URL = new URL("../fixtures/runner-visibility/", import.meta.url);
 
@@ -26,6 +30,17 @@ describe("runner visibility spike fixtures", () => {
       "supervise",
       "fix",
     ]);
+  });
+
+  it("keeps all phase visibility green when the fixture uses real bundled skills", async () => {
+    const fixture = await copyFixture();
+    await overlayBundledSkill(fixture, "autokit-implement");
+    await overlayBundledSkill(fixture, "autokit-review");
+
+    const result = await runRunnerVisibilitySelfTest(pathToFileURL(`${fixture}/`));
+
+    assert.deepEqual(result.failures, []);
+    assert.equal(result.passed, result.total);
   });
 
   it("fails closed when .agents skills escape the fixture root", async () => {
@@ -102,6 +117,66 @@ describe("runner visibility spike fixtures", () => {
 });
 
 describe("prompt asset visibility gate", () => {
+  it("keeps bundled skill assets aligned with prompt_contract fields and source pins", async () => {
+    const result = await runSkillAssetQualityGate();
+
+    assert.deepEqual(result.failures, []);
+    assert.deepEqual(result.skills, ["autokit-implement", "autokit-review"]);
+    assert.deepEqual(result.checkedSkillAssets, [
+      "base:skills/autokit-implement/SKILL.md",
+      "preset:default/skills/autokit-implement/SKILL.md",
+      "preset:docs-create/skills/autokit-implement/SKILL.md",
+      "preset:laravel-filament/skills/autokit-implement/SKILL.md",
+      "preset:next-shadcn/skills/autokit-implement/SKILL.md",
+      "base:skills/autokit-review/SKILL.md",
+      "preset:default/skills/autokit-review/SKILL.md",
+      "preset:docs-create/skills/autokit-review/SKILL.md",
+      "preset:laravel-filament/skills/autokit-review/SKILL.md",
+      "preset:next-shadcn/skills/autokit-review/SKILL.md",
+    ]);
+    assert.deepEqual(result.sourcePins, {
+      "autokit-implement": "866d9ebb5364a579ac7d2a8fb79bb421bf9d7052",
+      "autokit-review": "b95eddbaa3e3c671c657084d8919a0a34d031dec60a6228d08158514a742d7f5",
+    });
+  });
+
+  it("fails closed when a bundled skill omits prompt_contract fields", async () => {
+    const assetsRoot = await copyAssets();
+    await writeFile(
+      join(assetsRoot, "skills", "autokit-implement", "SKILL.md"),
+      [
+        "---",
+        "name: autokit-implement",
+        "description: incomplete fixture",
+        "---",
+        "",
+        "# autokit-implement",
+        "",
+        "Source alignment: tdd-workflow 866d9ebb5364a579ac7d2a8fb79bb421bf9d7052.",
+        "Return the prompt_contract for `implement` and `fix`.",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await assertSkillGateFailure(assetsRoot, "base:skills/autokit-implement");
+  });
+
+  it("fails closed when a bundled review skill suggests top-level findings", async () => {
+    const assetsRoot = await copyAssets();
+    const reviewPath = join(assetsRoot, "skills", "autokit-review", "SKILL.md");
+    const reviewSkill = await readFile(reviewPath, "utf8");
+    await writeFile(
+      reviewPath,
+      reviewSkill.replace(
+        "`data.findings` must be an array",
+        "`data.findings` / `findings` must be an array",
+      ),
+      "utf8",
+    );
+
+    await assertSkillGateFailure(assetsRoot, "must not contain");
+  });
+
   it("keeps real bundled prompt assets mapped and marker-normalized", async () => {
     const result = await runPromptAssetVisibilityGate();
 
@@ -201,8 +276,34 @@ async function copyAssets(): Promise<string> {
   return destination;
 }
 
+async function overlayBundledSkill(
+  fixture: string,
+  skill: "autokit-implement" | "autokit-review",
+): Promise<void> {
+  await rm(join(fixture, ".agents", "skills", skill), { recursive: true, force: true });
+  await cp(
+    fileURLToPath(new URL(`../../packages/cli/assets/skills/${skill}/`, import.meta.url)),
+    join(fixture, ".agents", "skills", skill),
+    {
+      recursive: true,
+      verbatimSymlinks: true,
+    },
+  );
+}
+
 async function assertPromptGateFailure(assetsRoot: string, expectedFailure: string): Promise<void> {
   const result = await runPromptAssetVisibilityGate({
+    assetsRootUrl: pathToFileURL(`${assetsRoot}/`),
+  });
+  assert.notEqual(result.failures.length, 0);
+  assert.ok(
+    result.failures.some((failure) => failure.includes(expectedFailure)),
+    `expected failure containing ${expectedFailure}, got ${result.failures.join("; ")}`,
+  );
+}
+
+async function assertSkillGateFailure(assetsRoot: string, expectedFailure: string): Promise<void> {
+  const result = await runSkillAssetQualityGate({
     assetsRootUrl: pathToFileURL(`${assetsRoot}/`),
   });
   assert.notEqual(result.failures.length, 0);

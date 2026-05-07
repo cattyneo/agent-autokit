@@ -7,9 +7,19 @@ description: Use for Next.js / shadcn/ui implementation and fix phases.
 
 Use this skill for `implement` and `fix` phases.
 
+Source alignment: adapted from `tdd-workflow` at commit `866d9ebb5364a579ac7d2a8fb79bb421bf9d7052` for autokit prompt_contract phases.
+
 ## Rules
-- Read the issue, plan, SSOT, routes, components, and tests before editing.
+- Read the issue, plan, SSOT, routes, components, tests, and current diff before editing.
 - Prefer established Next.js and shadcn/ui conventions over custom primitives.
-- Add focused validation for UI behavior, accessibility, responsive layout, and data boundaries when touched.
+- Use RED / GREEN / REFACTOR for UI behavior, accessibility, responsive layout, and data boundary changes when practical.
 - Never expose secrets, read provider auth files, or run live provider calls without explicit approval.
-- Return the configured prompt contract YAML with changed files, validation, and residual risks.
+- Do not run git rebase, merge, push, PR, or cleanup commands. Core owns git/gh mutations and checkpoints.
+- Delegate docs-affecting updates to `doc-updater`.
+
+## Output
+Return only the configured `prompt_contract` YAML.
+
+For `implement`, `data` must include `changed_files`, `tests_run`, `docs_updated`, and `notes`.
+For `fix`, `data` must include `changed_files`, `tests_run`, `resolved_accept_ids`, `unresolved_accept_ids`, and `notes`.
+Use `autokit-question` for unsafe or blocked `status=need_input` cases.

@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
+  type AutokitConfig,
   buildGhEnv,
   buildGhPrCloseArgs,
   buildGhPrViewArgs,
@@ -24,6 +25,7 @@ import {
   parseGhPrView,
   type RuntimePhase,
   retryCleanupTask,
+  sanitizeLogString,
   serializeConfigYaml,
   type TaskEntry,
   type TasksFile,
@@ -38,7 +40,7 @@ import {
 } from "@cattyneo/autokit-tui";
 import type { WorkflowRunner } from "@cattyneo/autokit-workflows";
 import { Command, CommanderError } from "commander";
-
+import { redactGitDiff } from "./diff.js";
 import { runProductionWorkflow } from "./executor.js";
 import { type InitOptions, promptContractAssetNames, runInit } from "./init.js";
 
@@ -229,6 +231,22 @@ function createProgram(deps: CliDeps, setExitCode: (code: number) => void): Comm
         deps.stdout.write(`${check.status}\t${check.name}\t${check.message}\n`);
       }
       setExitCode(result.ok ? 0 : 1);
+    });
+
+  program
+    .command("logs")
+    .description("show sanitized autokit logs for one issue")
+    .requiredOption("--issue <issue>", "issue number")
+    .action((options: { issue: string }) => {
+      setExitCode(commandLogs(options, deps));
+    });
+
+  program
+    .command("diff")
+    .description("show sanitized working tree diff for one issue")
+    .requiredOption("--issue <issue>", "issue number")
+    .action((options: { issue: string }) => {
+      setExitCode(commandDiff(options, deps));
     });
 
   const config = program.command("config").description("inspect autokit configuration");
@@ -649,6 +667,43 @@ function commandCleanup(options: { forceDetach: string; dryRun?: boolean }, deps
   return 0;
 }
 
+function commandLogs(options: { issue: string }, deps: CliDeps): number {
+  let issue: number;
+  try {
+    issue = parsePositiveInteger(options.issue);
+  } catch (error) {
+    deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 2;
+  }
+  try {
+    const config = loadConfigForCli(deps);
+    const lines = readSanitizedIssueLogLines(deps, issue, config);
+    deps.stdout.write(lines.length === 0 ? "" : `${lines.join("\n")}\n`);
+    return 0;
+  } catch (error) {
+    deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+}
+
+function commandDiff(options: { issue: string }, deps: CliDeps): number {
+  try {
+    parsePositiveInteger(options.issue);
+  } catch (error) {
+    deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 2;
+  }
+  try {
+    const config = loadConfigForCli(deps);
+    const rawDiff = exec(deps, "git", ["diff", "--no-ext-diff", "HEAD", "--"]);
+    deps.stdout.write(redactGitDiff(rawDiff, config, redactionPaths(deps)));
+    return 0;
+  } catch (error) {
+    deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+}
+
 export type DoctorCheck = {
   name: string;
   status: "PASS" | "WARN" | "FAIL";
@@ -826,6 +881,88 @@ function commandConfigShow(options: { matrix?: boolean }, deps: CliDeps): number
     deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
+}
+
+function readSanitizedIssueLogLines(deps: CliDeps, issue: number, config: AutokitConfig): string[] {
+  const logsDir = join(deps.cwd, ".autokit", "logs");
+  if (!existsSync(logsDir)) {
+    return [];
+  }
+  return listLogFiles(logsDir).flatMap((file) =>
+    readFileSync(file.path, "utf8")
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .flatMap((line) => renderSanitizedLogLine(line, issue, config, deps)),
+  );
+}
+
+function listLogFiles(logsDir: string): Array<{ path: string; mtimeMs: number }> {
+  return readdirSync(logsDir)
+    .filter((name) => /^\d{4}-\d{2}-\d{2}(?:-\d+)?\.log$/.test(name))
+    .map((name) => {
+      const path = join(logsDir, name);
+      return { path, mtimeMs: statSync(path).mtimeMs };
+    })
+    .sort((left, right) => left.mtimeMs - right.mtimeMs || left.path.localeCompare(right.path));
+}
+
+function renderSanitizedLogLine(
+  line: string,
+  issue: number,
+  config: AutokitConfig,
+  deps: CliDeps,
+): string[] {
+  try {
+    const parsed = JSON.parse(line) as { issue?: unknown };
+    if (parsed.issue !== issue) {
+      return [];
+    }
+    return [JSON.stringify(sanitizeLogValue(parsed, config, deps))];
+  } catch {
+    return [];
+  }
+}
+
+function redactionPaths(deps: CliDeps) {
+  return { homeDir: deps.env.HOME, repoRoot: deps.cwd };
+}
+
+function sanitizeLogValue(
+  value: unknown,
+  config: AutokitConfig,
+  deps: CliDeps,
+  key?: string,
+): unknown {
+  if (typeof value === "string") {
+    if (key !== undefined && isSensitiveLogFieldKey(key)) {
+      return "<REDACTED>";
+    }
+    return sanitizeLogString(value, config, false, redactionPaths(deps));
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeLogValue(item, config, deps, key));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, item]) => [
+        entryKey,
+        sanitizeLogValue(item, config, deps, entryKey),
+      ]),
+    );
+  }
+  return value;
+}
+
+function isSensitiveLogFieldKey(key: string): boolean {
+  const normalized = key.replace(/[_-]/g, "").toLowerCase();
+  return (
+    normalized.includes("token") ||
+    normalized.includes("secret") ||
+    normalized.includes("password") ||
+    normalized.includes("credential") ||
+    normalized.includes("privatekey") ||
+    normalized.includes("apikey")
+  );
 }
 
 function loadConfigForCli(deps: CliDeps) {

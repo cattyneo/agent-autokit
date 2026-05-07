@@ -2089,6 +2089,10 @@ Codex sandbox 仕様 URL は `docs/AGENTS.md` 経由で参照。
 
 #### 11.4.3 Claude runner の安全境界
 
+Codex runner は capability table 由来の permission profile を `codex exec` 起動引数に反映する。read-only phase (`plan` / `plan_verify` / `plan_fix` / `review` / `supervise`) は `--sandbox read-only`、write phase (`implement` / `fix`) は `--sandbox workspace-write` とし、`permissions.codex.sandbox_mode` の静的値ではなく phase から導出する。全 7 phase で共通 `validatePromptContractPayload` を使い、Codex 固有の `--output-schema` は `data` / `question` の required + null union と `plan_verify` の `result` / `findings` anyOf を維持する。
+
+Codex effort は resolved effort を `-c model_reasoning_effort=<low|medium|high>` として渡す。`effort=auto` は Codex 既定の `medium` に正規化し、現行 CLI contract では `--reasoning-effort` flag を使用しない。
+
 Claude runner は Codex のような OS 級 sandbox を持たないため、autokit が以下の境界を強制する。v0.2.0 では capability table 由来の permission profile に従い、read-only phase (`plan` / `plan_verify` / `plan_fix` / `review` / `supervise`) と write phase (`implement` / `fix`) を分けて扱う。untrusted Issue body / repo content による prompt injection で worktree 外 credential / 設定に到達することを防ぐ。
 
 ##### A. cwd / workspace 制限 (`permissions.claude.workspace_scope`)

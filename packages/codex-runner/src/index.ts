@@ -8,19 +8,24 @@ import {
   type AgentRunInput,
   type AgentRunOutput,
   buildRunnerEnv,
+  capabilityPhases,
+  derive_codex_perm,
   type FailureCode,
   formatQuestionResponsePrompt,
   type ParentEnv,
+  type PermissionProfile,
+  type Phase,
   type PromptContractId,
   promptContractForPhase,
   type ValidPromptContractPayload,
+  validateCapabilitySelection,
   validatePromptContractPayload,
 } from "@cattyneo/autokit-core";
 
 export const CODEX_RUNNER_PACKAGE = "@cattyneo/autokit-codex-runner";
 
-export const codexRunnerPhases = ["plan_verify", "implement", "fix"] as const;
-export type CodexRunnerPhase = (typeof codexRunnerPhases)[number];
+export const codexRunnerPhases = capabilityPhases;
+export type CodexRunnerPhase = Phase;
 
 export type CodexRunnerEnvOptions = {
   home?: string;
@@ -158,8 +163,10 @@ export function buildCodexArgs(input: AgentRunInput, files: CodexRunFiles): stri
     "never",
     "--sandbox",
     sandbox,
-    ...(input.phase === "plan_verify" ? ["--disable", "shell_tool"] : []),
+    ...(sandbox === "read-only" ? ["--disable", "shell_tool"] : []),
     ...(input.model === "auto" ? [] : ["--model", input.model]),
+    "-c",
+    `model_reasoning_effort=${codexReasoningEffort(input)}`,
     "exec",
   ];
 
@@ -290,7 +297,11 @@ function assertCodexInput(
       `Codex phase ${input.phase} must use prompt_contract=${expectedContract}.`,
     );
   }
-  const expectedMode = input.phase === "plan_verify" ? "readonly" : "workspace-write";
+  const row = validateCapabilitySelection({ phase: input.phase, provider: input.provider });
+  const expectedSandbox = derive_codex_perm(input.phase).sandbox;
+  assertCodexEffort(input);
+  assertCodexEffectivePermission(input, row.permission_profile, expectedSandbox);
+  const expectedMode = expectedSandbox === "read-only" ? "readonly" : "workspace-write";
   if (input.permissions.mode !== expectedMode) {
     throw new CodexRunnerError(
       "sandbox_violation",
@@ -300,7 +311,7 @@ function assertCodexInput(
   if (input.permissions.allowNetwork) {
     throw new CodexRunnerError("network_required", "Codex runner phases do not allow network.");
   }
-  const expectedScope = input.phase === "plan_verify" ? "repo" : "worktree";
+  const expectedScope = row.permission_profile === "readonly_repo" ? "repo" : "worktree";
   if (input.permissions.workspaceScope !== expectedScope) {
     throw new CodexRunnerError(
       "sandbox_violation",
@@ -318,7 +329,48 @@ function isCodexRunnerPhase(phase: string): phase is CodexRunnerPhase {
 }
 
 function sandboxForPhase(phase: CodexRunnerPhase): "read-only" | "workspace-write" {
-  return phase === "plan_verify" ? "read-only" : "workspace-write";
+  return derive_codex_perm(phase).sandbox;
+}
+
+function codexReasoningEffort(input: AgentRunInput): "low" | "medium" | "high" {
+  const effort = input.effort?.effort ?? "auto";
+  return effort === "auto" ? "medium" : effort;
+}
+
+function assertCodexEffort(input: AgentRunInput): void {
+  if (input.effort === undefined) {
+    throw new CodexRunnerError("other", `Codex phase ${input.phase} requires resolved effort.`);
+  }
+  if (input.effort.phase !== input.phase || input.effort.provider !== "codex") {
+    throw new CodexRunnerError("other", `Codex phase ${input.phase} resolved effort drift.`);
+  }
+}
+
+function assertCodexEffectivePermission(
+  input: AgentRunInput,
+  expectedProfile: PermissionProfile,
+  expectedSandbox: "read-only" | "workspace-write",
+): void {
+  if (input.effective_permission === undefined) {
+    throw new CodexRunnerError(
+      "sandbox_violation",
+      `Codex phase ${input.phase} requires effective permission.`,
+    );
+  }
+  if (input.effective_permission.permission_profile !== expectedProfile) {
+    throw new CodexRunnerError(
+      "sandbox_violation",
+      `Codex phase ${input.phase} permission_profile drift.`,
+    );
+  }
+  const actualCodex = input.effective_permission.codex;
+  if (
+    actualCodex === undefined ||
+    actualCodex.sandbox !== expectedSandbox ||
+    actualCodex.network !== "off"
+  ) {
+    throw new CodexRunnerError("sandbox_violation", `Codex phase ${input.phase} permission drift.`);
+  }
 }
 
 function formatCodexPrompt(input: AgentRunInput): string {
@@ -400,7 +452,7 @@ function createCodexRunFiles(
   };
 }
 
-function codexPromptContractJsonSchema(contract: PromptContractId): Record<string, unknown> {
+export function codexPromptContractJsonSchema(contract: PromptContractId): Record<string, unknown> {
   return {
     type: "object",
     properties: {
@@ -477,12 +529,15 @@ function dataJsonSchemaForCodex(contract: PromptContractId): Record<string, unkn
         },
       });
     case "supervise":
-      return objectSchema({
-        accept_ids: stringArraySchema(50),
-        reject_ids: stringArraySchema(50),
-        reject_reasons: { type: "object", additionalProperties: { type: "string" } },
-        fix_prompt: { type: "string", maxLength: 32 * 1024 },
-      });
+      return objectSchema(
+        {
+          accept_ids: stringArraySchema(50),
+          reject_ids: stringArraySchema(50),
+          reject_reasons: { type: "object", additionalProperties: { type: "string" } },
+          fix_prompt: { type: "string", maxLength: 32 * 1024 },
+        },
+        ["accept_ids", "reject_ids", "reject_reasons"],
+      );
     case "fix":
       return objectSchema({
         changed_files: stringArraySchema(200),
@@ -494,11 +549,14 @@ function dataJsonSchemaForCodex(contract: PromptContractId): Record<string, unkn
   }
 }
 
-function objectSchema(properties: Record<string, unknown>): Record<string, unknown> {
+function objectSchema(
+  properties: Record<string, unknown>,
+  required: string[] = Object.keys(properties),
+): Record<string, unknown> {
   return {
     type: "object",
     properties,
-    required: Object.keys(properties),
+    required,
     additionalProperties: false,
   };
 }

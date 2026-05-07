@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -24,6 +25,7 @@ import {
   type TaskEntry,
   type TaskState,
   type TasksFile,
+  tryAcquireRunLock,
   writeTasksFileAtomic,
 } from "@cattyneo/autokit-core";
 
@@ -80,6 +82,10 @@ describe("cli task commands", () => {
 
     assert.equal(init.dryRun, false);
     assert.equal(existsSync(join(root, ".autokit", "tasks.yaml")), true);
+    assert.equal(
+      readFileSync(join(root, ".autokit", ".gitignore"), "utf8"),
+      "*\n!.gitignore\n!config.yaml\n",
+    );
     assert.equal(existsSync(join(root, ".autokit", "audit-hmac-key")), true);
     assert.equal(existsSync(join(root, ".agents", "prompts", "plan.md")), true);
     assert.equal(existsSync(join(root, ".agents", "skills", "autokit-question", "SKILL.md")), true);
@@ -439,6 +445,132 @@ describe("cli task commands", () => {
     assert.equal(calls.length, 0);
   });
 
+  it("fast-fails write commands when the process lock is busy without mutating state", async () => {
+    const initRoot = makeTempDir();
+    createBusyLock(initRoot);
+    const initHarness = makeCliHarness(initRoot, { execFile: () => "ok" });
+    assert.equal(await runCli(["init"], initHarness.deps), TEMPFAIL_EXIT_CODE);
+    assert.match(initHarness.stderr(), /autokit lock busy/);
+    assert.equal(existsSync(join(initRoot, ".autokit", "config.yaml")), false);
+
+    const addRoot = makeTempDir();
+    createBusyLock(addRoot);
+    let fetched = false;
+    const addHarness = makeCliHarness(addRoot, {
+      fetchIssue: () => {
+        fetched = true;
+        return { number: 9, title: "AK-009", state: "OPEN", labels: ["agent-ready"] };
+      },
+    });
+    assert.equal(await runCli(["add", "9", "-y"], addHarness.deps), TEMPFAIL_EXIT_CODE);
+    assert.equal(fetched, false);
+    assert.equal(existsSync(tasksPath(addRoot)), false);
+
+    const runRoot = makeTempDir();
+    writeTasks(runRoot, [task({ issue: 9, state: "queued" })]);
+    const runBefore = readFileSync(tasksPath(runRoot), "utf8");
+    createBusyLock(runRoot);
+    let dispatched = false;
+    const runHarness = makeCliHarness(runRoot, {
+      runWorkflow: async () => {
+        dispatched = true;
+        return [];
+      },
+    });
+    assert.equal(await runCli(["run"], runHarness.deps), TEMPFAIL_EXIT_CODE);
+    assert.equal(dispatched, false);
+    assert.equal(readFileSync(tasksPath(runRoot), "utf8"), runBefore);
+
+    const resumeRoot = makeTempDir();
+    writeTasks(resumeRoot, [task({ issue: 9, state: "paused" })]);
+    const resumeBefore = readFileSync(tasksPath(resumeRoot), "utf8");
+    createBusyLock(resumeRoot);
+    const resumeHarness = makeCliHarness(resumeRoot);
+    assert.equal(await runCli(["resume", "9"], resumeHarness.deps), TEMPFAIL_EXIT_CODE);
+    assert.equal(readFileSync(tasksPath(resumeRoot), "utf8"), resumeBefore);
+
+    const resumeMissingRoot = makeTempDir();
+    writeTasks(resumeMissingRoot, [task({ issue: 10, state: "paused" })]);
+    createBusyLock(resumeMissingRoot);
+    const resumeMissingHarness = makeCliHarness(resumeMissingRoot);
+    assert.equal(await runCli(["resume", "9"], resumeMissingHarness.deps), TEMPFAIL_EXIT_CODE);
+    assert.doesNotMatch(resumeMissingHarness.stderr(), /not found/);
+
+    const resumeNotPausedRoot = makeTempDir();
+    writeTasks(resumeNotPausedRoot, [task({ issue: 9, state: "queued" })]);
+    createBusyLock(resumeNotPausedRoot);
+    const resumeNotPausedHarness = makeCliHarness(resumeNotPausedRoot);
+    assert.equal(await runCli(["resume", "9"], resumeNotPausedHarness.deps), TEMPFAIL_EXIT_CODE);
+    assert.doesNotMatch(resumeNotPausedHarness.stderr(), /not paused/);
+
+    const retryRoot = makeTempDir();
+    writeTasks(retryRoot, [retryCleanupPausedTask(9)]);
+    const retryBefore = readFileSync(tasksPath(retryRoot), "utf8");
+    createBusyLock(retryRoot);
+    const retryHarness = makeCliHarness(retryRoot, {
+      execFile: () => {
+        throw new Error("unexpected retry side effect");
+      },
+    });
+    assert.equal(await runCli(["retry"], retryHarness.deps), TEMPFAIL_EXIT_CODE);
+    assert.equal(readFileSync(tasksPath(retryRoot), "utf8"), retryBefore);
+
+    const cleanupRoot = makeTempDir();
+    writeTasks(cleanupRoot, [forceDetachTask({ issue: 9, state: "cleaning" })]);
+    const cleanupBefore = readFileSync(tasksPath(cleanupRoot), "utf8");
+    createBusyLock(cleanupRoot);
+    const cleanupHarness = makeCliHarness(cleanupRoot, {
+      execFile: () => {
+        throw new Error("unexpected cleanup side effect");
+      },
+    });
+    assert.equal(
+      await runCli(["cleanup", "--force-detach", "9"], cleanupHarness.deps),
+      TEMPFAIL_EXIT_CODE,
+    );
+    assert.equal(readFileSync(tasksPath(cleanupRoot), "utf8"), cleanupBefore);
+  });
+
+  it("reports lock release failures instead of treating the command as successful", async () => {
+    const root = makeTempDir();
+    const harness = makeCliHarness(root, {
+      initProject: () => {
+        writeFileSync(join(root, ".autokit", ".lock", "sidecar"), "unexpected", { mode: 0o600 });
+        return { changed: [], skipped: [], dryRun: false };
+      },
+    });
+
+    assert.equal(await runCli(["init"], harness.deps), 1);
+    assert.match(harness.stderr(), /autokit lock release failed/);
+    assert.equal(existsSync(join(root, ".autokit", ".lock", "sidecar")), true);
+  });
+
+  it("redacts lock holder host when config parsing fails after host_redact was requested", async () => {
+    const root = makeTempDir();
+    writeConfig(
+      root,
+      `
+version: 1
+serve:
+  lock:
+    host_redact: true
+unknown_config_key: true
+`,
+    );
+    let holderHost = "";
+    const harness = makeCliHarness(root, {
+      initProject: () => {
+        holderHost = JSON.parse(
+          readFileSync(join(root, ".autokit", ".lock", "holder.json"), "utf8"),
+        ).host;
+        return { changed: [], skipped: [], dryRun: false };
+      },
+    });
+
+    assert.equal(await runCli(["init"], harness.deps), 0);
+    assert.match(holderHost, /^[a-f0-9]{16}$/);
+  });
+
   it("rejects resume of retry_cleanup_failed paused tasks with tempfail", async () => {
     const root = makeTempDir();
     writeTasks(root, [
@@ -475,6 +607,7 @@ describe("cli task commands", () => {
 describe("cli doctor/retry/cleanup gates", () => {
   it("fails doctor when API key env is exported and warns on missing config only", async () => {
     const root = makeTempDir();
+    writeAutokitGitignore(root);
     const okExec: ExecFile = () => "ok";
     const passHarness = makeCliHarness(root, { execFile: okExec });
 
@@ -495,6 +628,7 @@ describe("cli doctor/retry/cleanup gates", () => {
 
   it("warns when deprecated Claude allowed_tools is present in config", async () => {
     const root = makeTempDir();
+    writeAutokitGitignore(root);
     mkdirSync(join(root, ".autokit"), { recursive: true });
     writeFileSync(
       join(root, ".autokit", "config.yaml"),
@@ -506,6 +640,62 @@ describe("cli doctor/retry/cleanup gates", () => {
     assert.match(
       harness.stdout(),
       /WARN\tconfig\tpermissions\.claude\.allowed_tools is deprecated/,
+    );
+  });
+
+  it("fails doctor when .autokit/.gitignore is missing or does not protect state", async () => {
+    const missingRoot = makeTempDir();
+    const missingHarness = makeCliHarness(missingRoot, { execFile: () => "ok" });
+
+    assert.equal(await runCli(["doctor"], missingHarness.deps), 1);
+    assert.match(missingHarness.stdout(), /FAIL\t.autokit gitignore\t.autokit\/.gitignore missing/);
+
+    const wrongRoot = makeTempDir();
+    mkdirSync(join(wrongRoot, ".autokit"), { recursive: true });
+    writeFileSync(join(wrongRoot, ".autokit", ".gitignore"), "!config.yaml\n", { mode: 0o600 });
+    const wrongHarness = makeCliHarness(wrongRoot, { execFile: () => "ok" });
+
+    assert.equal(await runCli(["doctor"], wrongHarness.deps), 1);
+    assert.match(wrongHarness.stdout(), /FAIL\t.autokit gitignore\tmust contain/);
+
+    const extraRoot = makeTempDir();
+    mkdirSync(join(extraRoot, ".autokit"), { recursive: true });
+    writeFileSync(
+      join(extraRoot, ".autokit", ".gitignore"),
+      "*\n!.gitignore\n!config.yaml\n!tasks.yaml\n!.lock/\n!.lock/holder.json\n",
+      { mode: 0o600 },
+    );
+    const extraHarness = makeCliHarness(extraRoot, { execFile: () => "ok" });
+
+    assert.equal(await runCli(["doctor"], extraHarness.deps), 1);
+    assert.match(extraHarness.stdout(), /FAIL\t.autokit gitignore\tmust not contain extra rules/);
+  });
+
+  it("fails doctor when .autokit lock modes expose holder metadata", async () => {
+    const dirRoot = makeTempDir();
+    writeAutokitGitignore(dirRoot);
+    mkdirSync(join(dirRoot, ".autokit", ".lock"), { recursive: true, mode: 0o755 });
+    chmodSync(join(dirRoot, ".autokit", ".lock"), 0o755);
+    const dirHarness = makeCliHarness(dirRoot, { execFile: () => "ok" });
+
+    assert.equal(await runCli(["doctor"], dirHarness.deps), 1);
+    assert.match(
+      dirHarness.stdout(),
+      /FAIL\t.autokit lock mode\t.autokit\/.lock must be mode 0700/,
+    );
+
+    const holderRoot = makeTempDir();
+    writeAutokitGitignore(holderRoot);
+    mkdirSync(join(holderRoot, ".autokit", ".lock"), { recursive: true, mode: 0o700 });
+    chmodSync(join(holderRoot, ".autokit", ".lock"), 0o700);
+    writeFileSync(join(holderRoot, ".autokit", ".lock", "holder.json"), "{}", { mode: 0o644 });
+    chmodSync(join(holderRoot, ".autokit", ".lock", "holder.json"), 0o644);
+    const holderHarness = makeCliHarness(holderRoot, { execFile: () => "ok" });
+
+    assert.equal(await runCli(["doctor"], holderHarness.deps), 1);
+    assert.match(
+      holderHarness.stdout(),
+      /FAIL\t.autokit lock mode\t.autokit\/.lock\/holder.json must be mode 0600/,
     );
   });
 
@@ -922,6 +1112,27 @@ function writeTasks(root: string, tasks: TaskEntry[]): void {
 function writeConfig(root: string, yaml: string): void {
   mkdirSync(join(root, ".autokit"), { recursive: true });
   writeFileSync(join(root, ".autokit", "config.yaml"), yaml, { mode: 0o600 });
+}
+
+function writeAutokitGitignore(root: string): void {
+  mkdirSync(join(root, ".autokit"), { recursive: true });
+  writeFileSync(join(root, ".autokit", ".gitignore"), "*\n!.gitignore\n!config.yaml\n", {
+    mode: 0o600,
+  });
+}
+
+function createBusyLock(root: string): void {
+  const result = tryAcquireRunLock(root, {
+    hooks: {
+      now: () => new Date("2026-05-07T09:00:00.000Z"),
+      randomToken: () => "busy-token",
+      hostname: () => "busy-host",
+      pid: process.pid,
+      getProcessLstart: () => "BUSY",
+      isProcessAlive: () => true,
+    },
+  });
+  assert.equal(result.acquired, true);
 }
 
 function tasksPath(root: string): string {

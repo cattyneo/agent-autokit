@@ -111,6 +111,17 @@ export {
 } from "./path-safety.js";
 export { buildAutoMergeArgs, buildDisableAutoMergeArgs, shouldPauseForHeadMismatch } from "./pr.js";
 export type {
+  PublicRunLockHolder,
+  RunLock,
+  RunLockHolder,
+  RunLockHooks,
+  TryAcquireRunLockOptions,
+  TryAcquireRunLockResult,
+  WaitAcquireRunLockOptions,
+  WaitAcquireRunLockResult,
+} from "./process-lock.js";
+export { releaseRunLock, tryAcquireRunLock, waitAcquireRunLock } from "./process-lock.js";
+export type {
   PullRequestObservation,
   ReconcileAction,
   ReconcileObservation,

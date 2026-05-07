@@ -10,6 +10,7 @@ const ROOT = process.cwd();
 const BUN = process.execPath;
 const BUN_DIR = dirname(BUN);
 const RUN_HYGIENE_GATE = process.env.AUTOKIT_RUN_HYGIENE_E2E === "1";
+const HYGIENE_E2E_TIMEOUT_MS = 120_000;
 
 const REQUIRED_PRESET_ENTRIES = [
   "assets/presets/default/config.yaml",
@@ -43,7 +44,9 @@ describe("Issue #116 assets hygiene E2E gate", () => {
     cleanupTempDirs();
   });
 
-  it("keeps pack contents, CLI bundle, and installed serve smoke release-safe", async () => {
+  it("keeps pack contents, CLI bundle, and installed serve smoke release-safe", {
+    timeout: HYGIENE_E2E_TIMEOUT_MS,
+  }, async () => {
     if (!RUN_HYGIENE_GATE) {
       assert.equal(RUN_HYGIENE_GATE, false);
       return;

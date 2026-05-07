@@ -1578,6 +1578,8 @@ autokit 同梱 skill (`autokit-implement` / `autokit-review` / `autokit-question
 
 skill 内容実装 PR は本表に従って SPEC + PLAN を根拠 SoT として参照する。独立した normative 章 (skill 内容の完全 normative SPEC 化) は v0.2 以降の課題 (本 v0.1.0 では PLAN 重要原則 + AC §13.5 で SoT 確定済)。
 
+Preset 由来の skill override は `autokit preset apply` で `.agents/skills/` に配置される場合のみ許可する。override 後も `autokit-implement` / `autokit-review` / `autokit-question` の skill 名、prompt からの参照契約、`status=need_input` 規約、sanitize / runner 権限境界は本節の SoT に従う。
+
 ---
 
 ## 9. Runner / CLI 連携

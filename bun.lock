@@ -8,6 +8,7 @@
         "@cattyneo/autokit-claude-runner": "workspace:*",
         "@cattyneo/autokit-codex-runner": "workspace:*",
         "@cattyneo/autokit-core": "workspace:*",
+        "@cattyneo/autokit-serve": "workspace:*",
         "@cattyneo/autokit-tui": "workspace:*",
         "@cattyneo/autokit-workflows": "workspace:*",
       },
@@ -51,6 +52,13 @@
         "pino": "^10.3.1",
         "yaml": "^2.8.4",
         "zod": "^4.4.3",
+      },
+    },
+    "packages/serve": {
+      "name": "@cattyneo/autokit-serve",
+      "version": "0.1.0",
+      "dependencies": {
+        "@cattyneo/autokit-core": "workspace:*",
       },
     },
     "packages/tui": {
@@ -102,6 +110,8 @@
     "@cattyneo/autokit-codex-runner": ["@cattyneo/autokit-codex-runner@workspace:packages/codex-runner"],
 
     "@cattyneo/autokit-core": ["@cattyneo/autokit-core@workspace:packages/core"],
+
+    "@cattyneo/autokit-serve": ["@cattyneo/autokit-serve@workspace:packages/serve"],
 
     "@cattyneo/autokit-tui": ["@cattyneo/autokit-tui@workspace:packages/tui"],
 

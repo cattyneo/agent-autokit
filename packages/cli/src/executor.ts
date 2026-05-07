@@ -10,6 +10,7 @@ import {
   type AgentRunOutput,
   type AutokitConfig,
   type AutokitLogger,
+  assertProductionApiKeyEnvUnset,
   buildAutoMergeArgs,
   buildDisableAutoMergeArgs,
   buildGhEnv,
@@ -73,6 +74,7 @@ export type PhaseOverrideInput = Omit<PhaseOverride, "expires_at_run_id">;
 export type RunProductionWorkflowOptions = {
   cwd: string;
   env: NodeJS.ProcessEnv;
+  issue?: number;
   answerQuestion?: (input: WorkflowQuestionInput) => Promise<string> | string;
   execFile?: WorkflowExecFile;
   runner?: WorkflowRunner;
@@ -88,12 +90,10 @@ type AppliedPhaseOverride = {
 };
 
 const DEFAULT_MAX_STEPS = 100;
-const API_KEY_ENV_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"] as const;
-
 export async function runProductionWorkflow(
   options: RunProductionWorkflowOptions,
 ): Promise<TaskEntry[]> {
-  assertApiKeyEnvUnset(options.env);
+  assertProductionApiKeyEnvUnset(options.env);
   const tasksFilePath = tasksPath(options.cwd);
   if (!existsSync(tasksFilePath)) {
     return [];
@@ -110,7 +110,7 @@ export async function runProductionWorkflow(
     const execFile = options.execFile ?? defaultExecFile(options.cwd, options.env);
     tasksFile = loadTasksFile(tasksFilePath);
     const activeTasksFile = tasksFile;
-    task = selectActiveTask(activeTasksFile.tasks);
+    task = selectActiveTask(activeTasksFile.tasks, options.issue);
     if (task === undefined) {
       return activeTasksFile.tasks;
     }
@@ -325,13 +325,6 @@ export async function runProductionWorkflow(
   }
 }
 
-function assertApiKeyEnvUnset(env: NodeJS.ProcessEnv): void {
-  const present = API_KEY_ENV_NAMES.filter((name) => env[name] !== undefined && env[name] !== "");
-  if (present.length > 0) {
-    throw new Error(`${present.join(",")} must not be exported`);
-  }
-}
-
 function createRunId(now?: () => string): string {
   return `run-${now?.() ?? new Date().toISOString()}`;
 }
@@ -437,8 +430,13 @@ function createWorkflowLogger(
   });
 }
 
-function selectActiveTask(tasks: TaskEntry[]): TaskEntry | undefined {
-  return tasks.find((task) => task.state !== "merged" && task.state !== "failed");
+function selectActiveTask(tasks: TaskEntry[], issue?: number): TaskEntry | undefined {
+  return tasks.find(
+    (task) =>
+      task.state !== "merged" &&
+      task.state !== "failed" &&
+      (issue === undefined || task.issue === issue),
+  );
 }
 
 function isTerminalOrWaiting(task: TaskEntry): boolean {

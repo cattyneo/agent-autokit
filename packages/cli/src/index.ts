@@ -35,6 +35,13 @@ import {
   writeTasksFileAtomic,
 } from "@cattyneo/autokit-core";
 import {
+  type AutokitServeOptions,
+  type AutokitServeServer,
+  type ServeRunStatus,
+  type ServeWorkflowInput,
+  startAutokitServe,
+} from "@cattyneo/autokit-serve";
+import {
   createNeedInputAutoAnswer,
   formatRunFrame,
   promptQuestion,
@@ -75,6 +82,9 @@ export type CliDeps = {
   workflowMaxSteps?: number;
   askQuestion?: (input: CliQuestionInput) => Promise<string> | string;
   initProject?: (input: InitOptions) => { changed: string[]; skipped: string[]; dryRun: boolean };
+  startServe?: (
+    input: AutokitServeOptions,
+  ) => Promise<Pick<AutokitServeServer, "host" | "port" | "tokenPath" | "close">>;
 };
 
 export type CliQuestionInput = {
@@ -88,6 +98,7 @@ export type PhaseOverrideInput = Omit<PhaseOverride, "expires_at_run_id">;
 
 type RunWorkflowInput = {
   yes: boolean;
+  issue?: number;
   phaseOverride?: PhaseOverrideInput;
   answerQuestion: (input: CliQuestionInput) => Promise<string> | string;
 };
@@ -236,6 +247,17 @@ function createProgram(deps: CliDeps, setExitCode: (code: number) => void): Comm
     });
 
   program
+    .command("serve")
+    .description("start the local autokit HTTP API server")
+    .option("--host <host>", "bind host", "127.0.0.1")
+    .option("--port <port>", "bind port", "0")
+    .action(async (options: { host: string; port: string }) => {
+      setExitCode(
+        await commandServe(options, deps, program.opts<{ yes?: boolean }>().yes === true),
+      );
+    });
+
+  program
     .command("logs")
     .description("show sanitized autokit logs for one issue")
     .requiredOption("--issue <issue>", "issue number")
@@ -373,6 +395,119 @@ function commandInitLocked(options: { dryRun?: boolean; force?: boolean }, deps:
     deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
   }
+}
+
+async function commandServe(
+  options: { host: string; port: string },
+  deps: CliDeps,
+  yes: boolean,
+): Promise<number> {
+  const port = Number(options.port);
+  if (!Number.isInteger(port) || port < 0 || port > 65_535) {
+    deps.stderr.write("invalid port\n");
+    return 2;
+  }
+  try {
+    const starter = deps.startServe ?? startAutokitServe;
+    const server = await starter({
+      repoRoot: deps.cwd,
+      env: deps.env,
+      host: options.host,
+      port,
+      now: deps.now,
+      runWorkflow: (input) => runServeWorkflow(input, deps, yes),
+    });
+    installServeSignalCleanup(server);
+    deps.stdout.write(`serve listening\thttp://${server.host}:${server.port}\n`);
+    deps.stdout.write(`token file\t${server.tokenPath}\n`);
+    return 0;
+  } catch (error) {
+    deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+}
+
+async function runServeWorkflow(
+  input: ServeWorkflowInput,
+  deps: CliDeps,
+  yes: boolean,
+): Promise<{
+  status: Exclude<ServeRunStatus, "accepted" | "running" | "resume_required">;
+  cleaned?: number;
+}> {
+  if (input.operation === "resume") {
+    const code = await commandResumeLocked(input.issue, deps, yes);
+    return { status: serveStatusFromExitCode(code) };
+  }
+  if (input.operation === "retry") {
+    const code = commandRetryLocked(
+      input.issue === undefined ? undefined : String(input.issue),
+      {},
+      deps,
+    );
+    return { status: serveStatusFromExitCode(code) };
+  }
+  if (input.operation === "cleanup") {
+    if (input.issue === undefined) {
+      throw new Error("cleanup requires issue");
+    }
+    const code = commandCleanupLocked(
+      input.issue,
+      { forceDetach: String(input.issue), dryRun: false },
+      { ...deps, confirm: () => true },
+    );
+    return { status: serveStatusFromExitCode(code), cleaned: code === 0 ? 1 : 0 };
+  }
+  const tasks = await runProductionWorkflow({
+    cwd: deps.cwd,
+    env: deps.env,
+    issue: input.issue,
+    execFile: deps.execFile,
+    runner: deps.workflowRunner,
+    maxSteps: deps.workflowMaxSteps,
+    now: deps.now,
+    phaseOverride:
+      input.phase === undefined
+        ? undefined
+        : { phase: input.phase, provider: input.provider, effort: input.effort },
+    answerQuestion: (question) => answerCliQuestion(question, deps, yes),
+  });
+  return { status: workflowStatusForServe(tasks) };
+}
+
+function serveStatusFromExitCode(
+  code: number,
+): Exclude<ServeRunStatus, "accepted" | "running" | "resume_required"> {
+  if (code === 0) {
+    return "completed";
+  }
+  if (code === TEMPFAIL_EXIT_CODE) {
+    return "paused";
+  }
+  return "failed";
+}
+
+function workflowStatusForServe(
+  tasks: TaskEntry[],
+): Exclude<ServeRunStatus, "accepted" | "running" | "resume_required"> {
+  if (tasks.some((task) => task.state === "failed")) {
+    return "failed";
+  }
+  if (tasks.some((task) => task.state === "paused" || task.state === "cleaning")) {
+    return "paused";
+  }
+  return tasks.every((task) => task.state === "merged") ? "completed" : "interrupted";
+}
+
+function installServeSignalCleanup(
+  server: Pick<AutokitServeServer, "close">,
+  proc: Pick<NodeJS.Process, "once" | "exit"> = process,
+): void {
+  const closeAndExit = () => {
+    void server.close().finally(() => proc.exit(0));
+  };
+  proc.once("SIGINT", closeAndExit);
+  proc.once("SIGTERM", closeAndExit);
 }
 
 function withWriteCommandLock(deps: CliDeps, action: () => number, skip = false): number {
@@ -527,7 +662,7 @@ function commandAddLocked(
 async function commandWorkflowStatus(
   deps: CliDeps,
   yes = false,
-  options: { phaseOverride?: PhaseOverrideInput } = {},
+  options: { phaseOverride?: PhaseOverrideInput; targetIssue?: number } = {},
 ): Promise<number> {
   try {
     const runWorkflow =
@@ -540,11 +675,13 @@ async function commandWorkflowStatus(
           runner: deps.workflowRunner,
           maxSteps: deps.workflowMaxSteps,
           now: deps.now,
+          issue: input.issue,
           phaseOverride: input.phaseOverride,
           answerQuestion: input.answerQuestion,
         }));
     const tasks = await runWorkflow({
       yes,
+      issue: options.targetIssue,
       phaseOverride: options.phaseOverride,
       answerQuestion: (input) => answerCliQuestion(input, deps, yes),
     });
@@ -598,40 +735,46 @@ async function commandResume(issue: string | undefined, deps: CliDeps): Promise<
     return 2;
   }
 
-  return withWriteCommandLockAsync(deps, async () => {
-    const tasksFile = loadTasksOrEmpty(deps);
-    const tasks = tasksFile.tasks;
-    if (targetIssue !== undefined) {
-      const explicitTarget = tasks.find((task) => task.issue === targetIssue);
-      if (explicitTarget === undefined) {
-        deps.stderr.write(`issue #${targetIssue} not found\n`);
-        return 1;
-      }
-      if (explicitTarget.state !== "paused") {
-        deps.stderr.write(`issue #${targetIssue} is not paused\n`);
-        return 1;
-      }
-    }
-    const target = [...tasks]
-      .reverse()
-      .find(
-        (task) =>
-          task.state === "paused" && (targetIssue === undefined || task.issue === targetIssue),
-      );
-    if (target?.failure?.code === "retry_cleanup_failed") {
-      deps.stderr.write(`issue #${target.issue} must be retried with autokit retry\n`);
-      return TEMPFAIL_EXIT_CODE;
-    }
-    if (target === undefined) {
-      return getWorkflowExitCode(tasks);
-    }
+  return withWriteCommandLockAsync(deps, () => commandResumeLocked(targetIssue, deps));
+}
 
-    const index = tasks.findIndex((task) => task.issue === target.issue);
-    tasksFile.tasks[index] = transitionTask(target, { type: "resume" });
-    tasksFile.generated_at = now(deps);
-    writeTasksFileAtomic(tasksPath(deps), tasksFile);
-    return commandWorkflowStatus(deps);
-  });
+async function commandResumeLocked(
+  targetIssue: number | undefined,
+  deps: CliDeps,
+  yes = false,
+): Promise<number> {
+  const tasksFile = loadTasksOrEmpty(deps);
+  const tasks = tasksFile.tasks;
+  if (targetIssue !== undefined) {
+    const explicitTarget = tasks.find((task) => task.issue === targetIssue);
+    if (explicitTarget === undefined) {
+      deps.stderr.write(`issue #${targetIssue} not found\n`);
+      return 1;
+    }
+    if (explicitTarget.state !== "paused") {
+      deps.stderr.write(`issue #${targetIssue} is not paused\n`);
+      return 1;
+    }
+  }
+  const target = [...tasks]
+    .reverse()
+    .find(
+      (task) =>
+        task.state === "paused" && (targetIssue === undefined || task.issue === targetIssue),
+    );
+  if (target?.failure?.code === "retry_cleanup_failed") {
+    deps.stderr.write(`issue #${target.issue} must be retried with autokit retry\n`);
+    return TEMPFAIL_EXIT_CODE;
+  }
+  if (target === undefined) {
+    return getWorkflowExitCode(tasks);
+  }
+
+  const index = tasks.findIndex((task) => task.issue === target.issue);
+  tasksFile.tasks[index] = transitionTask(target, { type: "resume" });
+  tasksFile.generated_at = now(deps);
+  writeTasksFileAtomic(tasksPath(deps), tasksFile);
+  return commandWorkflowStatus(deps, yes, { targetIssue: target.issue });
 }
 
 function commandRetry(

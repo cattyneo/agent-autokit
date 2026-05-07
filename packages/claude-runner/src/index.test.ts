@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { realpathSync } from "node:fs";
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
+
+import { derive_claude_perm } from "@cattyneo/autokit-core";
 
 import {
   buildClaudeArgs,
@@ -16,6 +20,7 @@ import {
   runClaude,
   type SpawnClaudeProcess,
   validateClaudeToolPathInput,
+  validateClaudeToolUseInput,
 } from "./index.ts";
 
 const workspaceRoot = realpathSync.native(process.cwd());
@@ -46,10 +51,35 @@ describe("claude-runner", () => {
     assert.deepEqual(readArg(args, "--setting-sources"), "project");
     assert.deepEqual(
       JSON.parse(readArg(args, "--settings")),
-      buildClaudePathGuardSettings(workspaceRoot),
+      buildClaudePathGuardSettings(workspaceRoot, "readonly_path_guard"),
     );
     assert.equal(args.at(-1), baseInput.prompt);
     assert.doesNotThrow(() => JSON.parse(readArg(args, "--json-schema")));
+  });
+
+  it("builds write-profile args from capability-derived Claude permission", () => {
+    const args = buildClaudeArgs({
+      ...baseInput,
+      phase: "implement",
+      promptContract: "implement",
+      permissions: {
+        mode: "workspace-write",
+        allowNetwork: false,
+        workspaceScope: "worktree",
+        workspaceRoot,
+      },
+      effective_permission: {
+        permission_profile: "write_worktree",
+        claude: derive_claude_perm("implement"),
+      },
+    });
+
+    assert.deepEqual(readArg(args, "--tools"), "Read,Grep,Glob,Edit,Write,Bash");
+    assert.deepEqual(readArg(args, "--disallowedTools"), "WebFetch,WebSearch");
+    assert.deepEqual(
+      JSON.parse(readArg(args, "--settings")),
+      buildClaudePathGuardSettings(workspaceRoot, "write_path_guard"),
+    );
   });
 
   it("passes explicit configured models to the Claude CLI", () => {
@@ -89,10 +119,17 @@ describe("claude-runner", () => {
     );
   });
 
-  it("rejects non-Claude phases and non-readonly permissions before spawn", () => {
-    assert.throws(
-      () => buildClaudeArgs({ ...baseInput, phase: "implement", promptContract: "implement" }),
-      (error) => error instanceof ClaudeRunnerError && error.code === "other",
+  it("accepts all capability phases and rejects permission drift before spawn", () => {
+    assert.doesNotThrow(() =>
+      buildClaudeArgs({
+        ...baseInput,
+        phase: "plan_verify",
+        promptContract: "plan-verify",
+        effective_permission: {
+          permission_profile: "readonly_repo",
+          claude: derive_claude_perm("plan_verify"),
+        },
+      }),
     );
     assert.throws(
       () =>
@@ -120,9 +157,23 @@ describe("claude-runner", () => {
         }),
       (error) => error instanceof ClaudeRunnerError && error.code === "sandbox_violation",
     );
+    assert.throws(
+      () =>
+        buildClaudeArgs({
+          ...baseInput,
+          effective_permission: {
+            permission_profile: "readonly_repo",
+            claude: {
+              ...derive_claude_perm("plan"),
+              allowed_tools: ["Read", "Grep", "Glob", "Edit"],
+            },
+          },
+        }),
+      (error) => error instanceof ClaudeRunnerError && error.code === "sandbox_violation",
+    );
   });
 
-  it("validates Read/Grep/Glob tool paths against the workspace root", () => {
+  it("validates read-only and write hook tool inputs against path and command policy", () => {
     assert.deepEqual(
       validateClaudeToolPathInput({
         tool_name: "Read",
@@ -145,6 +196,71 @@ describe("claude-runner", () => {
       workspaceRoot,
     });
     assert.equal(deniedGlob.ok, false);
+
+    assert.deepEqual(
+      validateClaudeToolUseInput({
+        hook: "write_path_guard",
+        tool_name: "Write",
+        tool_input: { file_path: "src/foo.ts", content: "ok" },
+        workspaceRoot,
+      }),
+      { ok: true },
+    );
+    assert.equal(
+      validateClaudeToolUseInput({
+        hook: "write_path_guard",
+        tool_name: "Write",
+        tool_input: { file_path: ".env", content: "secret" },
+        workspaceRoot,
+      }).ok,
+      false,
+    );
+    assert.equal(
+      validateClaudeToolUseInput({
+        hook: "readonly_path_guard",
+        tool_name: "Edit",
+        tool_input: { file_path: "src/foo.ts" },
+        workspaceRoot,
+      }).ok,
+      false,
+    );
+    assert.equal(
+      validateClaudeToolUseInput({
+        hook: "write_path_guard",
+        tool_name: "Bash",
+        tool_input: { command: "git push origin HEAD" },
+        workspaceRoot,
+      }).ok,
+      false,
+    );
+    const allowedBash = validateClaudeToolUseInput({
+      hook: "write_path_guard",
+      tool_name: "Bash",
+      tool_input: { command: "git status --short" },
+      workspaceRoot,
+    });
+    assert.equal(allowedBash.ok, true);
+    if (!allowedBash.ok) {
+      assert.fail("expected Bash command to pass guard");
+    }
+    assert.match(String(allowedBash.updatedInput?.command ?? ""), /node -e/);
+  });
+
+  it("denies package scripts that bypass guarded command policy", () => {
+    const root = mkdtempSync(join(tmpdir(), "autokit-claude-package-"));
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: { test: "/usr/bin/git commit -m bad" } }),
+    );
+
+    const denied = validateClaudeToolUseInput({
+      hook: "write_path_guard",
+      tool_name: "Bash",
+      tool_input: { command: "bun test" },
+      workspaceRoot: root,
+    });
+
+    assert.equal(denied.ok, false);
   });
 
   it("rejects API key env and scrubs runner child env", () => {
@@ -214,7 +330,8 @@ describe("claude-runner", () => {
     );
   });
 
-  it("runs Claude through a mock subprocess and buildRunnerEnv", async () => {
+  it("runs Claude through a mock subprocess and isolated runtime env", async () => {
+    const root = mkdtempSync(join(tmpdir(), "autokit-claude-runner-"));
     let observedEnv: Record<string, string> | undefined;
     const spawn: SpawnClaudeProcess = (_command, _args, options) => {
       observedEnv = options.env;
@@ -237,18 +354,40 @@ describe("claude-runner", () => {
     const result = await runClaude(
       {
         ...baseInput,
+        cwd: root,
         phase: "review",
         promptContract: "review",
-        permissions: { ...baseInput.permissions, workspaceScope: "worktree" },
+        permissions: {
+          ...baseInput.permissions,
+          workspaceScope: "worktree",
+          workspaceRoot: root,
+        },
       },
       {
-        parentEnv: { PATH: "/bin", GH_TOKEN: "github", RANDOM_USER_ENV: "secret" },
+        parentEnv: {
+          PATH: "/bin",
+          HOME: "/Users/example",
+          GH_TOKEN: "github",
+          XDG_CONFIG_HOME: "/Users/example/.config",
+          RANDOM_USER_ENV: "secret",
+        },
         spawn,
       },
     );
 
     assert.equal(result.status, "completed");
     assert.equal(observedEnv?.PATH, "/bin");
+    assert.match(
+      observedEnv?.HOME ?? "",
+      /autokit-claude-runner-.+\/\.autokit\/runner-home\/review\/home/,
+    );
+    assert.match(
+      observedEnv?.XDG_CONFIG_HOME ?? "",
+      /\/\.autokit\/runner-home\/review\/xdg-config/,
+    );
+    assert.match(observedEnv?.GH_CONFIG_DIR ?? "", /\/\.autokit\/runner-home\/review\/gh/);
+    assert.equal(observedEnv?.GIT_CONFIG_GLOBAL, "/dev/null");
+    assert.equal(observedEnv?.GIT_CONFIG_NOSYSTEM, "1");
     assert.equal(observedEnv?.GH_TOKEN, undefined);
     assert.equal(observedEnv?.RANDOM_USER_ENV, undefined);
   });

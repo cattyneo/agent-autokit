@@ -187,6 +187,26 @@ extra: true
     );
   });
 
+  it("fail-closes deprecated Claude allowed_tools outside the read-only hard cap", () => {
+    const config = parseConfigYaml(`
+version: 1
+permissions:
+  claude:
+    allowed_tools: ["Read", "Grep"]
+`);
+
+    assert.deepEqual(config.permissions.claude.allowed_tools, ["Read", "Grep"]);
+    assertConfigError(
+      `
+version: 1
+permissions:
+  claude:
+    allowed_tools: ["Read", "Edit"]
+`,
+      "permissions.claude.allowed_tools",
+    );
+  });
+
   it("accepts only the Phase 1 effort levels", () => {
     for (const effort of ["auto", "low", "medium", "high"] as const) {
       const config = parseConfigYaml(`

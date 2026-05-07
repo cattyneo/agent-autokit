@@ -10,12 +10,15 @@
 - Apple Silicon macOS 環境
 - `gh` CLI が `repo` / `workflow` 権限で認証済み
 
-## v0.1.0 制約サマリ
+## v0.1.0 / v0.2.0 制約サマリ
 
 - private MVP。registry 公開なし
 - 対象 repository は `cattyneo/agent-autokit-e2e-fixture` 系のレイアウト
 - 並列実行は固定 `parallel: 1`
 - API key 環境変数（`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CODEX_API_KEY`）が **export されていないこと**
+- v0.2.0 では capability / effort / preset / `autokit serve` / prompt asset gate が追加されるが、live provider は引き続き subscription auth 前提
+- `autokit serve` は local API server。既定 bind は `127.0.0.1` で、bearer token / Host / Origin / Content-Type gate を通す
+- preset は `default` / `laravel-filament` / `next-shadcn` / `docs-create` を同梱し、repo-local `.autokit/presets/` で上書き可能
 
 詳細は [`README.md`](../../README.md) の Support Matrix を参照。
 

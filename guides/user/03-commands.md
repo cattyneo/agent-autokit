@@ -8,11 +8,11 @@
 -V, --version          バージョン表示（autokit version と等価）
 -y, --yes              非対話デフォルト回答（一部コマンドで参照）
 -v, --verbose          デバッグログ
---config <path>        config.yaml 上書き（CLI 登録のみ。実体は v0.1.0 で未参照）
---force-unlock         lock seizure を要求（CLI 登録のみ。実体は v0.1.0 で未参照）
+--config <path>        config.yaml 上書き（CLI 登録のみ。実体は未参照）
+--force-unlock         lock seizure を要求（CLI 登録のみ。実体は未参照）
 ```
 
-`--config` と `--force-unlock` はオプション登録だけ存在する。実装が完了するまでユーザーが指定する必要は無い。
+`--config` と `--force-unlock` はオプション登録だけ存在する。v0.2.0 の実装済み lock busy 復旧は `--force-unlock` ではなく、holder / PID を確認してからの手動復旧または recovery command で扱う。
 
 環境変数 `AUTOKIT_ASSUME_YES=1` でも `--yes` 相当が有効になる。
 
@@ -23,7 +23,7 @@
 | `0` | 正常終了 / 全タスク `merged` | `version`, `init`, `list`, `doctor`(PASS), `run`(全 merge) |
 | `1` | 失敗 / 引数誤り / 該当なし | doctor FAIL, status no-running-task, retry でも failed 残る |
 | `2` | コマンド構文エラー | range parse 失敗, positive integer 期待箇所に非数 |
-| `75` | resumable（後で `autokit resume`/`run` 再実行） | `run`/`resume`/`retry` で `paused` / `cleaning` 残存 |
+| `75` | resumable（後で `autokit resume`/`run` 再実行） | `run`/`resume`/`retry` で `paused` / `cleaning` 残存、または lock busy |
 
 `75` は POSIX の `EX_TEMPFAIL`。CI で「リトライ可能」を判別する用途。
 
@@ -101,6 +101,46 @@ autokit doctor
 
 ---
 
+## `autokit preset`
+
+bundled preset と repository-local preset を扱う。
+
+```bash
+autokit preset list
+autokit preset show <name>
+autokit preset apply <name> [--allow-protected-replace]
+```
+
+| サブコマンド | 用途 |
+|-------------|------|
+| `list` | `default` / `laravel-filament` / `next-shadcn` / `docs-create` と local preset を一覧表示 |
+| `show <name>` | path / content blacklist と public redactor を通した安全な内容表示 |
+| `apply <name>` | `.agents/` と `.autokit/config.yaml` に反映。apply 後 doctor 相当検証を行う |
+
+探索順は `.autokit/presets/<name>` の local preset が優先、その後 bundled preset。`apply` は state-changing command なので `.autokit/.lock/` を取得し、lock busy なら exit `75` で `.agents` / `tasks.yaml` を変更しない。
+
+安全制約:
+
+- 絶対 path / `..` / symlink / NUL byte / `.agents` 外 realpath は `preset_path_traversal` で fail-closed。
+- `.env*` / `.codex/**` / `.claude/credentials*` / private key / token-like content は `preset_blacklist_hit` で fail-closed。
+- `logging.redact_patterns` / `init.backup_blacklist` / `permissions.claude.allowed_tools` は protected array。通常 apply では防御を弱められない。
+- `--allow-protected-replace` は protected replacement を明示許可するが、capability table 由来 hard cap を超える権限昇格は引き続き拒否される。
+
+---
+
+## `autokit config show`
+
+実効 config と capability matrix を表示する。
+
+```bash
+autokit config show
+autokit config show --matrix
+```
+
+`--matrix` は 7 agent phase × 2 provider の許可組、permission profile、effort 解決対象を確認する用途。`ci_wait` / `merge` は core-only なので matrix には出ない。
+
+---
+
 ## `autokit add`
 
 GitHub Open issue を取得し `.autokit/tasks.yaml` に追加する。
@@ -158,7 +198,7 @@ autokit status
 
 active = `queued` / `merged` / `failed` 以外の最初の 1 件。該当なしなら `no running task` を stderr に出して exit 1。
 
-JSON は `{ issue, state, runtime_phase, review_round, ci_fix_round, resolved_model, failure }`。
+JSON は `{ issue, state, runtime_phase, review_round, ci_fix_round, resolved_model, failure }` と runtime 由来の要約を返す。`resolved_effort` / `phase_override` / `provider_sessions` の詳細は `.autokit/tasks.yaml` の task entry で確認する。
 
 ---
 
@@ -167,7 +207,7 @@ JSON は `{ issue, state, runtime_phase, review_round, ci_fix_round, resolved_mo
 ワークフロー本体を実行。
 
 ```bash
-autokit run
+autokit run [--phase <phase> (--provider <provider>|--effort <effort>)]
 ```
 
 挙動:
@@ -179,7 +219,60 @@ autokit run
 
 途中で runner が `need_input` を返すと `paused` に入る。グローバル `-y` を渡すと auto-answer 経路（`createNeedInputAutoAnswer`）に切り替わるが、active runner question payload が無いケースでは `-y` でも進めない（warn ログを出して paused のまま終わる）。
 
+### 1 run override
+
+`--phase` と `--provider` / `--effort` で 1 回だけ provider / effort を上書きできる。
+
+```bash
+autokit run --phase plan --provider codex
+autokit run --phase implement --effort high
+autokit run --phase review --provider claude --effort low
+```
+
+制約:
+
+- `--provider` / `--effort` は `--phase` 必須。違反は exit `2`。
+- `--phase` は `plan` / `plan_verify` / `plan_fix` / `implement` / `review` / `supervise` / `fix` のみ。`ci_wait` / `merge` は指定不可。
+- `provider` は `claude` / `codex`、`effort` は `auto` / `low` / `medium` / `high` のみ。
+- permission profile は CLI から変更できない。phase の capability table から固定導出される。
+
 failure 詳細は [06-recovery.md](./06-recovery.md)。
+
+---
+
+## `autokit serve`
+
+local HTTP API / SSE server を起動する。
+
+```bash
+autokit serve [--host 127.0.0.1] [--port 0]
+```
+
+起動時に `serve listening` と `token file` を出力する。token は毎起動で再生成され、`Authorization: Bearer <token>` ヘッダのみ受理する。
+
+主な endpoint:
+
+| endpoint | 用途 |
+|----------|------|
+| `GET /api/tasks` / `GET /api/tasks/:issue` | bearer + Host gate 付き状態参照 |
+| `GET /api/tasks/:issue/logs` / `diff` | sanitize 済み logs / diff |
+| `POST /api/run` / `resume` / `retry` / `cleanup` | state-changing 操作。`application/json` 必須 |
+| `GET /api/events` | SSE。`task_state` / `phase_started` / `phase_finished` / `audit` / `runner_stdout`(debug) / `heartbeat` / `error` |
+
+Host allowlist は `127.0.0.1:<port>` / `localhost:<port>` / `[::1]:<port>`。Origin は同一オリジンまたは欠落のみ許可し、`Origin: null` と allowlist 外 Origin は 403。
+
+---
+
+## `autokit logs` / `autokit diff`
+
+issue 単位で sanitize 済み evidence を表示する。
+
+```bash
+autokit logs --issue <issue>
+autokit diff --issue <issue>
+```
+
+`logs` は rotated log を結合して redactor を通す。`diff` は path blacklist hunk を除去し、非ブラックリスト path の token-like content も redact する。
 
 ---
 

@@ -56,16 +56,20 @@ completed | need_input | paused | rate_limited | failed
 
 `rate_limited` は runner 側で挿入する集約状態。prompt-contract（LLM 出力 YAML）には現れない。
 
+v0.2.0 の `AgentRunInput` は、上記に加えて `effort` / `effective_permission` / `promptContract` を runner へ渡す。runner は provider 固有の CLI 引数へ変換するだけで、capability 判定や permission profile の緩和は行わない。
+
 ## 検証フロー
 
 ```mermaid
 flowchart TB
   Stdout["子プロセス stdout"]
   Stdout --> ParseY["parsePromptContractYaml<br/>(yaml.parseDocument)"]
-  ParseY -- syntax error --> Fail1["payload reject<br/>→ failed"]
+  ParseY -- syntax error --> Retry1["prompt_contract_violation<br/>初回は self-correction retry"]
   ParseY -- ok --> Obj["JS object"]
   Obj --> Vali["validatePromptContractPayload"]
-  Vali -- errors --> Fail2["status=failed<br/>summary=[violation]"]
+  Vali -- errors --> Retry2["prompt_contract_violation<br/>初回は self-correction retry"]
+  Retry1 --> FinalFail["再発時のみ failed"]
+  Retry2 --> FinalFail
   Vali -- ok --> Sw{status?}
   Sw -- completed --> ReqData["data 必須<br/>question 禁止"]
   Sw -- need_input --> ReqQ["question 必須<br/>data 任意"]
@@ -124,14 +128,28 @@ answer は `autokit_need_input_response` という JSON envelope に包まれて
 
 | 起こりうる runner 事故 | contract 検証で起きること |
 |----------------------|-------------------------|
-| 出力が markdown のみ | yaml parse 失敗 → failed |
-| `status: success` | enum 違反 → failed |
-| `completed` と書きつつ `data` なし | required violation → failed |
-| `completed` で `question` も付ける | mutual exclusion violation → failed |
-| `need_input` で question.text が空 | bounded string violation → failed |
+| 出力が markdown のみ | yaml parse 失敗 → 初回は self-correction retry、再発時 failed |
+| `status: success` | enum 違反 → 初回は self-correction retry、再発時 failed |
+| `completed` と書きつつ `data` なし | required violation → 初回は self-correction retry、再発時 failed |
+| `completed` で `question` も付ける | mutual exclusion violation → 初回は self-correction retry、再発時 failed |
+| `need_input` で question.text が空 | bounded string violation → 初回は self-correction retry、再発時 failed |
 | 回答済みなのに同じ質問を繰返 | session resume + envelope で一度きり |
 
-**reject すれば paused に落ちて人手判断に委ねられる**。これが「自由テキスト解釈」より優れている理由。
+contract violation は runner が明示的に返す `status=paused` / `status=failed` とは別扱い。初回は audit kind `phase_self_correct` を残して同じ phase を 1 回だけ再実行し、`runtime.phase_self_correct_done=true` の再違反で `failure.code=prompt_contract_violation` の `failed` になる。これが「自由テキスト解釈」より優れている理由。
+
+## v0.2 asset gates
+
+Phase 4 以降、prompt / skill / agent asset は次の gate を通る。
+
+| gate | 検出対象 |
+|------|----------|
+| prompt asset visibility | `.agents/prompts/<contract>.md` が phase mapping と一致し、runner prompt に実本文が注入される |
+| preset effective prompt | bundled preset の prompt overlay 後も prompt-contract mapping と marker 順序が壊れない |
+| payload fixture | `validatePromptContractPayload` が全 phase の valid fixture を通す |
+| Codex schema snapshot | `codexPromptContractJsonSchema(contract)` が frozen JSON snapshot と deepEqual |
+| skill / agent visibility | `autokit-implement` / `autokit-review` / bundled agents が provider-visible root と capability boundary を満たす |
+
+この gate は schema 変更を禁止するものではない。schema 変更が必要な場合は SPEC §9.3 と snapshot を同 PR で更新し、reviewer に意図を明示する。
 
 ## 関連
 

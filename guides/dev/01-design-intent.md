@@ -7,7 +7,7 @@
 | # | 決断 | 却下した代替 | 理由 |
 |---|------|--------------|------|
 | 1 | **ローカル CLI runtime** | SaaS / GitHub App | subscription 認証を端末で完結。秘密情報が外部に出ない。個人の手元で完結する開発フロー前提 |
-| 2 | **Claude (read-only) と Codex (workspace-write) を分離** | 単一 runner / どちらか一方 | 「読む側」と「書く側」を sandbox 上分離 → 設計のミスで write 権限が漏れない。レビュー視点の中立性確保 |
+| 2 | **permission profile は phase から導出** | provider 固定の read/write 分離 | v0.2.0 では 7 agent phase × 2 provider を許可しつつ、`review`/`supervise` は provider に関係なく readonly に固定して中立性を保つ |
 | 3 | **subscription 認証のみ** (`ANTHROPIC_API_KEY` 等は禁止) | API key 併用許容 | 課金経路の二重化を防ぐ。CLI ローカルの auth 状態を一元化 |
 | 4 | **9 ステップの細分化** = runtime_phase 7（`plan`/`plan_verify`/`plan_fix`/`implement`/`review`/`supervise`/`fix`） + GitHub 操作 2（`ci_wait`/`merge`） | 「単一の implement→review→merge」 | runtime_phase ごとに provider と prompt を切替可能。失敗時の再開単位を最小化 |
 | 4a | **`supervise` フェーズの分離** | review 結果をそのまま採用 | findings の取捨選択を別 prompt に分け、誤検知の伝播を抑える |
@@ -18,7 +18,7 @@
 | 9 | **`audit-hmac-key` で sanitize 監査** | 監査なし / 平文ログ | 永続化 / 投稿前の機微情報 sanitize の通過証跡を残す。鍵を持たない側からは改竄不能 |
 | 10 | **`init` は rollback 必須 + backup blacklist** | べき等 in-place 上書き | 失敗時に部分書き込みで repo を破壊しない。認証ファイルを誤バックアップしない |
 | 11 | **`parallel: 1` 固定 (v0.1.0)** | 多並列 | 状態機械の不変条件が確認しきれない / 監査ログの順序保証が複雑化 |
-| 12 | **monorepo 6 packages** | 単一パッケージ | runner 入れ替え・workflows 単独テストの境界を明示。`core` を runner と独立させる |
+| 12 | **monorepo 7 packages** | 単一パッケージ | runner 入れ替え・workflows/serve 単独テストの境界を明示。`core` を runner / serve と独立させる |
 | 13 | **TUI を独立パッケージ (`tui`)** | CLI と一体 | TUI を入れ替え可能 / non-TTY 環境でも core ロジックを動かせる |
 | 14 | **private MVP / registry 公開無し (v0.1.0)** | 即 OSS 公開 | 仕様未確定 / 安全側の検証が完了するまでは fixture に近い repo に限定 |
 

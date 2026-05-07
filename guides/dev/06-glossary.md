@@ -7,6 +7,10 @@
 | **runtime** | `autokit run` の処理本体 |
 | **runner** | 子プロセス起動の薄いラッパ。Claude / Codex の 2 種 |
 | **provider** | runner の種別 (`claude` / `codex`) |
+| **capability table** | 7 runtime_phase × 2 provider の許可組と permission profile を持つ core SoT |
+| **permission profile** | phase から導出される権限境界 (`readonly_repo` / `readonly_worktree` / `write_worktree`) |
+| **effort** | runner の推論強度 profile (`auto` / `low` / `medium` / `high`) |
+| **resolved_effort** | phase/provider/model/effort/timeout の最終解決結果。`tasks.yaml.runtime` に保存 |
 | **runtime_phase** | LLM 呼出単位。7 種 (`plan`, `plan_verify`, `plan_fix`, `implement`, `review`, `supervise`, `fix`) |
 | **workflow ステップ** | state-machine の active state 単位。9 種 = runtime_phase 7 + GitHub 操作 2 (`ci_wait`, `merge`) |
 | **state** | task の状態。12 種（active 9 + waiting 1 (`paused`) + terminal 2 (`merged`/`failed`)） |
@@ -22,6 +26,9 @@
 | **EX_TEMPFAIL (75)** | POSIX 上の「再実行可能な失敗」を表す終了コード |
 | **need_input** | runner が回答待ちで停止した状態を表す `AgentRunStatus` |
 | **prompt contract asset** | `.agents/prompts/<contract>.md` |
+| **preset** | `.agents/` と `config.yaml` に適用する prompt / skill / agent / config の bundle |
+| **serve** | local HTTP API / SSE server。CLI workflow を bearer / Host / Origin / lock gate 越しに起動する |
+| **cross-process lock** | `.autokit/.lock/` directory で CLI / serve / preset apply を直列化する lock |
 | **provider link** | `.claude/{agents,skills}` / `.codex/{agents,skills}` から `.agents/` への symlink |
 | **backup blacklist** | `init` 時にバックアップしないパス集合 |
 | **active task** | `merged` / `failed` 以外の state を持つ task |

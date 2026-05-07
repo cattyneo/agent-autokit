@@ -26,6 +26,8 @@ export const failureCodes = [
   "manual_merge_required",
   "pre_pr_active_orphan",
   "effort_unsupported",
+  "preset_path_traversal",
+  "preset_blacklist_hit",
   "other",
 ] as const;
 

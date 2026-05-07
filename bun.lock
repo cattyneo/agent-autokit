@@ -35,7 +35,9 @@
       },
       "dependencies": {
         "commander": "14.0.3",
+        "minimatch": "^10.2.5",
         "react-devtools-core": "^6.1.2",
+        "yaml": "^2.8.4",
       },
     },
     "packages/codex-runner": {

@@ -14,6 +14,7 @@ import {
   type FailureCode,
   formatQuestionResponsePrompt,
   type ParentEnv,
+  type PermissionProfile,
   type PromptContractId,
   parsePromptContractYaml,
   promptContractForPhase,
@@ -52,6 +53,16 @@ export type ClaudeAuthProbeOptions = ClaudeRunnerDeps & {
 export type ClaudeAuthProbeResult = {
   ok: true;
   stdout: string;
+};
+
+export type ClaudePromptPolicy = "concise" | "default" | "detailed";
+
+export type ClaudeEffortProfile = {
+  effort: "auto" | "low" | "medium" | "high";
+  model: string | undefined;
+  maxTurns: number;
+  timeoutMs: number;
+  promptPolicy: ClaudePromptPolicy;
 };
 
 export type SpawnClaudeProcess = (
@@ -153,6 +164,7 @@ export function buildClaudeArgs(input: AgentRunInput): string[] {
   assertClaudeInput(input);
 
   const permission = claudePermissionForInput(input);
+  const effortProfile = buildClaudeEffortProfile(input);
   const schema = promptContractJsonSchema(input.promptContract);
   const args = [
     "-p",
@@ -172,8 +184,8 @@ export function buildClaudeArgs(input: AgentRunInput): string[] {
     JSON.stringify(schema),
   ];
 
-  if (input.model !== "auto") {
-    args.push("--model", input.model);
+  if (effortProfile.model !== undefined) {
+    args.push("--model", effortProfile.model);
   }
 
   if (input.resume?.claudeSessionId !== undefined) {
@@ -182,6 +194,49 @@ export function buildClaudeArgs(input: AgentRunInput): string[] {
 
   args.push(formatClaudePrompt(input));
   return args;
+}
+
+export function buildClaudeEffortProfile(input: AgentRunInput): ClaudeEffortProfile {
+  assertClaudeEffort(input);
+  const effort = input.effort;
+  if (effort === undefined) {
+    throw new ClaudeRunnerError("other", `Claude phase ${input.phase} requires resolved effort.`);
+  }
+  const explicitModel = input.model === "auto" ? undefined : input.model;
+  switch (effort.effort) {
+    case "auto":
+      return {
+        effort: "auto",
+        model: explicitModel,
+        maxTurns: 16,
+        timeoutMs: effort.timeout_ms,
+        promptPolicy: "default",
+      };
+    case "low":
+      return {
+        effort: "low",
+        model: explicitModel ?? "sonnet",
+        maxTurns: 8,
+        timeoutMs: effort.timeout_ms,
+        promptPolicy: "concise",
+      };
+    case "medium":
+      return {
+        effort: "medium",
+        model: explicitModel ?? "sonnet",
+        maxTurns: 16,
+        timeoutMs: effort.timeout_ms,
+        promptPolicy: "default",
+      };
+    case "high":
+      return {
+        effort: "high",
+        model: explicitModel ?? "opus",
+        maxTurns: 32,
+        timeoutMs: effort.timeout_ms,
+        promptPolicy: "detailed",
+      };
+  }
 }
 
 export function parseClaudeCliJson(
@@ -269,20 +324,14 @@ function assertClaudeInput(input: AgentRunInput): void {
   }
   const row = validateCapabilitySelection({ phase: input.phase, provider: input.provider });
   const expectedPermission = derive_claude_perm(input.phase);
+  assertClaudeEffort(input);
+  assertClaudeEffectivePermission(input, row.permission_profile);
   const actualPermission = claudePermissionForInput(input);
   if (!isClaudePermissionWithinCap(actualPermission, expectedPermission)) {
     throw new ClaudeRunnerError(
       "sandbox_violation",
       `Claude phase ${input.phase} permission exceeds capability hard cap.`,
     );
-  }
-  if (input.effective_permission?.permission_profile !== undefined) {
-    if (input.effective_permission.permission_profile !== row.permission_profile) {
-      throw new ClaudeRunnerError(
-        "sandbox_violation",
-        `Claude phase ${input.phase} permission_profile drift.`,
-      );
-    }
   }
   const expectedContract = promptContractForPhase(input.phase);
   if (input.promptContract !== expectedContract) {
@@ -320,6 +369,33 @@ function assertClaudeInput(input: AgentRunInput): void {
 
 function claudePermissionForInput(input: AgentRunInput): ClaudePermission {
   return input.effective_permission?.claude ?? derive_claude_perm(input.phase);
+}
+
+function assertClaudeEffort(input: AgentRunInput): void {
+  if (input.effort === undefined) {
+    throw new ClaudeRunnerError("other", `Claude phase ${input.phase} requires resolved effort.`);
+  }
+  if (input.effort.phase !== input.phase || input.effort.provider !== "claude") {
+    throw new ClaudeRunnerError("other", `Claude phase ${input.phase} resolved effort drift.`);
+  }
+}
+
+function assertClaudeEffectivePermission(
+  input: AgentRunInput,
+  expectedProfile: PermissionProfile,
+): void {
+  if (input.effective_permission === undefined || input.effective_permission.claude === undefined) {
+    throw new ClaudeRunnerError(
+      "sandbox_violation",
+      `Claude phase ${input.phase} requires effective permission.`,
+    );
+  }
+  if (input.effective_permission.permission_profile !== expectedProfile) {
+    throw new ClaudeRunnerError(
+      "sandbox_violation",
+      `Claude phase ${input.phase} permission_profile drift.`,
+    );
+  }
 }
 
 function isClaudePermissionWithinCap(actual: ClaudePermission, cap: ClaudePermission): boolean {
@@ -444,10 +520,29 @@ export function buildClaudePathGuardSettings(
 
 function formatClaudePrompt(input: AgentRunInput): string {
   try {
-    return formatQuestionResponsePrompt(input);
+    const prompt = formatQuestionResponsePrompt(input);
+    return `${formatClaudeEffortProfilePrompt(buildClaudeEffortProfile(input))}\n\n${prompt}`;
   } catch (error) {
     throw new ClaudeRunnerError("prompt_contract_violation", errorToMessage(error));
   }
+}
+
+function formatClaudeEffortProfilePrompt(profile: ClaudeEffortProfile): string {
+  const policyInstruction =
+    profile.promptPolicy === "concise"
+      ? "Keep the response focused and stop as soon as the prompt_contract output can be produced."
+      : profile.promptPolicy === "detailed"
+        ? "Use the additional turn budget for careful verification before producing the prompt_contract output."
+        : "Use the default level of detail and produce the prompt_contract output when ready.";
+  return [
+    "<autokit-effort-profile>",
+    `effort: ${profile.effort}`,
+    `max_turns: ${profile.maxTurns}`,
+    `timeout_ms: ${profile.timeoutMs}`,
+    `prompt_policy: ${profile.promptPolicy}`,
+    `instruction: ${policyInstruction}`,
+    "</autokit-effort-profile>",
+  ].join("\n");
 }
 
 function parseJsonObject(stdout: string): Record<string, unknown> {

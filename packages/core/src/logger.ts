@@ -42,6 +42,7 @@ export const operationalAuditKinds = [
   "effort_downgrade",
   "phase_self_correct",
   "phase_started",
+  "phase_completed",
   "review_finding_seen",
   "fix_started",
   "fix_finished",

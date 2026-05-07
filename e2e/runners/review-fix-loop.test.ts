@@ -37,7 +37,7 @@ describe("review-fix loop E2E evidence", () => {
     assert.equal(result.task.review_round, 0);
     assert.deepEqual(
       audits.map((event) => event.kind),
-      ["phase_started"],
+      ["phase_started", "phase_completed"],
     );
   });
 

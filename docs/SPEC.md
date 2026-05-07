@@ -1903,6 +1903,7 @@ audit イベントは info level で必ず記録する。**`paused` 遷移時の
 | `effort_downgrade` | workflow phase start で未サポート effort を `effort.unsupported_policy=downgrade` により下位 effort へ解決 |
 | `phase_self_correct` | 初回 prompt_contract 違反時に `runtime.phase_self_correct_done=false -> true` を永続化し、同一 phase を self-correction retry する直前 |
 | `phase_started` | review-fix / ci-fix loop 内で review phase runner dispatch を開始 |
+| `phase_completed` | workflow phase runner が `completed` を返し、prompt_contract schema validation と phase 固有 validation を通過した直後 |
 | `review_finding_seen` | review phase が新規 finding を観測し、supervise / fix 判定へ渡す直前 |
 | `fix_started` | review-origin または ci-origin の fix phase を開始し、fix checkpoint を作成する直前 |
 | `fix_finished` | fix push 完了後、`fixing -> reviewing` へ戻す直前 |

@@ -421,7 +421,7 @@ export async function runReviewSuperviseWorkflow(
   task = reviewCompleted.task;
   findings = assignFindingIds(sanitizeReviewFindings(reviewCompleted.data.findings, options));
   if (findings.length > 0) {
-    emitLoopAudit(options, "review_finding_seen", {
+    emitWorkflowAudit(options, "review_finding_seen", {
       issue: task.issue,
       phase: "review",
       count: findings.length,
@@ -637,7 +637,7 @@ export async function runFixWorkflow(
   const prNumber = task.pr.number;
 
   if (task.git.checkpoints.fix.before_sha === null) {
-    emitLoopAudit(options, "fix_started", {
+    emitWorkflowAudit(options, "fix_started", {
       issue: task.issue,
       phase: "fix",
       origin: task.fix.origin,
@@ -709,13 +709,13 @@ export async function runFixWorkflow(
   if (task.git.checkpoints.fix.after_sha === null) {
     task.git.checkpoints.fix.after_sha = requirePrHead(task);
     const origin = task.fix.origin;
-    emitLoopAudit(options, "fix_finished", {
+    emitWorkflowAudit(options, "fix_finished", {
       issue: task.issue,
       phase: "fix",
       origin,
       head_sha: task.git.checkpoints.fix.after_sha,
     });
-    emitLoopAudit(options, "review_started", {
+    emitWorkflowAudit(options, "review_started", {
       issue: task.issue,
       phase: "review",
       origin,
@@ -727,13 +727,13 @@ export async function runFixWorkflow(
     await persistTask(task, options);
   } else if (task.state === "fixing") {
     const origin = task.fix.origin;
-    emitLoopAudit(options, "fix_finished", {
+    emitWorkflowAudit(options, "fix_finished", {
       issue: task.issue,
       phase: "fix",
       origin,
       head_sha: task.git.checkpoints.fix.after_sha,
     });
-    emitLoopAudit(options, "review_started", {
+    emitWorkflowAudit(options, "review_started", {
       issue: task.issue,
       phase: "review",
       origin,
@@ -1013,6 +1013,13 @@ async function runCompletedPhase<T>(
       continue;
     }
 
+    emitWorkflowAudit(options, "phase_completed", {
+      issue: currentTask.issue,
+      phase,
+      provider: effectiveProviderForPhase(currentTask, phase, options.config ?? DEFAULT_CONFIG),
+      state: currentTask.state,
+      runtime_phase: currentTask.runtime_phase,
+    });
     return { ok: true, task: currentTask, output: runnerResult.output, data: data.value };
   }
 }
@@ -1049,7 +1056,7 @@ function buildAgentRunInput(
         ciFailureLog: phase === "fix" ? (task.fix.ci_failure_log ?? undefined) : undefined,
       }) ?? defaultPrompt(task, phase),
     promptContract: promptContractForPhase(phase),
-    model: task.runtime.resolved_model[phase] ?? "auto",
+    model: task.runtime.resolved_model[phase] ?? config.phases[phase].model,
     effort: resolvedEffort,
     effective_permission: effectivePermission,
     resume: resumeForPhase(task, phase, provider),
@@ -1214,7 +1221,7 @@ async function runPhase(
         currentTask = prepared.task;
       }
       if (phase === "review") {
-        emitLoopAudit(options, "phase_started", {
+        emitWorkflowAudit(options, "phase_started", {
           issue: currentTask.issue,
           phase,
           state: currentTask.state,
@@ -1444,9 +1451,15 @@ function emitEffortDowngradeAudit(
   });
 }
 
-function emitLoopAudit(
+function emitWorkflowAudit(
   options: WorkflowOptions,
-  kind: "phase_started" | "review_finding_seen" | "fix_started" | "fix_finished" | "review_started",
+  kind:
+    | "phase_started"
+    | "phase_completed"
+    | "review_finding_seen"
+    | "fix_started"
+    | "fix_finished"
+    | "review_started",
   fields: Record<string, unknown>,
 ): void {
   const sanitized = Object.fromEntries(

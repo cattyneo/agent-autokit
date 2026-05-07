@@ -141,6 +141,146 @@ phases:
     assert.doesNotMatch(logText, /sk-/);
   });
 
+  it("persists one-run phase override and clears it with start/end audits", async () => {
+    const root = makeTempDir();
+    writeFastConfig(root);
+    writePromptAssets(root);
+    writeTasks(root, [task(58)]);
+    const calls: AgentRunInput[] = [];
+    const commands: string[] = [];
+
+    const tasks = await runProductionWorkflow({
+      cwd: root,
+      env: {},
+      execFile: mockExecFile(commands),
+      runner: queueRunner(calls),
+      maxSteps: 1,
+      now: () => NOW,
+      phaseOverride: { phase: "plan", provider: "codex", effort: "high" },
+    });
+
+    assert.equal(calls[0].phase, "plan");
+    assert.equal(calls[0].provider, "codex");
+    assert.equal(calls[0].effective_permission?.permission_profile, "readonly_repo");
+    assert.equal(calls[0].effort?.effort, "high");
+    assert.equal(tasks[0].runtime.phase_override, null);
+    assert.equal(tasks[0].provider_sessions.plan.last_provider, null);
+    const persisted = loadTasksFile(tasksPath(root)).tasks[0];
+    assert.equal(persisted.runtime.phase_override, null);
+    assert.equal(persisted.provider_sessions.plan.last_provider, null);
+    const logText = readFileSync(join(root, ".autokit", "logs", "2026-05-05.log"), "utf8");
+    assert.match(logText, /"kind":"phase_override_started"/);
+    assert.match(logText, /"kind":"phase_override_ended"/);
+  });
+
+  it("keeps permission profile fixed when overriding implement to Claude", async () => {
+    const root = makeTempDir();
+    writeFastConfig(root);
+    writePromptAssets(root);
+    writeTasks(root, [task(58)]);
+    const calls: AgentRunInput[] = [];
+
+    await runProductionWorkflow({
+      cwd: root,
+      env: {},
+      execFile: mockExecFile([]),
+      runner: async (input) => {
+        calls.push(input);
+        switch (input.phase) {
+          case "plan":
+            return completed(input.provider, {
+              plan_markdown: "## Plan",
+              assumptions: [],
+              risks: [],
+            });
+          case "plan_verify":
+            return completed(input.provider, { result: "ok", findings: [] });
+          case "implement":
+            return completed(input.provider, {
+              changed_files: [],
+              tests_run: [],
+              docs_updated: false,
+              notes: "implemented",
+            });
+          case "review":
+            return completed(input.provider, { findings: [] });
+          default:
+            throw new Error(`unexpected phase: ${input.phase}`);
+        }
+      },
+      maxSteps: 20,
+      now: () => NOW,
+      phaseOverride: { phase: "implement", provider: "claude" },
+    });
+
+    const implementCall = calls.find((call) => call.phase === "implement");
+    assert.ok(implementCall);
+    assert.equal(implementCall.provider, "claude");
+    assert.equal(implementCall.effective_permission?.permission_profile, "write_worktree");
+    assert.equal(implementCall.permissions.workspaceScope, "worktree");
+  });
+
+  it("clears one-run phase override when a post-workflow write fails", async () => {
+    const root = makeTempDir();
+    writeFastConfig(root);
+    writePromptAssets(root);
+    const nextTask = task(58);
+    nextTask.plan.path = "blocked/plan.md";
+    writeTasks(root, [nextTask]);
+    writeFileSync(join(root, "blocked"), "not a directory", { mode: 0o600 });
+
+    await assert.rejects(
+      () =>
+        runProductionWorkflow({
+          cwd: root,
+          env: {},
+          execFile: mockExecFile([]),
+          runner: queueRunner([]),
+          maxSteps: 1,
+          now: () => NOW,
+          phaseOverride: { phase: "plan", provider: "codex" },
+        }),
+      /ENOTDIR|EEXIST/,
+    );
+
+    const persisted = loadTasksFile(tasksPath(root)).tasks[0];
+    assert.equal(persisted.runtime.phase_override, null);
+    assert.equal(persisted.provider_sessions.plan.last_provider, null);
+    const logText = readFileSync(join(root, ".autokit", "logs", "2026-05-05.log"), "utf8");
+    assert.match(logText, /"kind":"phase_override_started"/);
+    assert.match(logText, /"kind":"phase_override_ended"/);
+  });
+
+  it("fails closed on stale phase overrides before runner dispatch", async () => {
+    const root = makeTempDir();
+    writeFastConfig(root);
+    const staleTask = task(94);
+    staleTask.runtime.phase_override = {
+      phase: "plan",
+      provider: "codex",
+      expires_at_run_id: `run-${NOW}`,
+    };
+    writeTasks(root, [staleTask]);
+    const calls: AgentRunInput[] = [];
+
+    await assert.rejects(
+      () =>
+        runProductionWorkflow({
+          cwd: root,
+          env: {},
+          execFile: mockExecFile([]),
+          runner: async (input) => {
+            calls.push(input);
+            return completed(input.provider, { plan_markdown: "unexpected" });
+          },
+          maxSteps: 1,
+          now: () => NOW,
+        }),
+      /stale phase_override for #94/,
+    );
+    assert.equal(calls.length, 0);
+  });
+
   it("does not mark remote branch deletion as complete for non-gone git errors", async () => {
     const root = makeTempDir();
     writeFastConfig(root);

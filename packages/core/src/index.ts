@@ -45,7 +45,7 @@ export type {
   EffortResolutionResult,
   PhaseOverride,
 } from "./effort-resolver.js";
-export { resolveEffort } from "./effort-resolver.js";
+export { effortLevels, resolveEffort } from "./effort-resolver.js";
 export type { ChildEnv, ParentEnv, RunnerEnvOptions } from "./env-allowlist.js";
 export { buildGhEnv, buildRunnerEnv } from "./env-allowlist.js";
 export type { GhPrView, GhPrViewJson } from "./gh.js";

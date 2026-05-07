@@ -7,18 +7,27 @@ import {
   buildGhPrViewArgs,
   buildGitBranchDeleteArgs,
   buildGitWorktreeRemoveArgs,
+  capabilityPhases,
+  capabilityProviders,
   createTaskEntry,
   DEFAULT_CONFIG,
+  type EffortLevel,
+  effortLevels,
   type GhPrView,
   loadTasksFile,
   makeFailure,
+  type Phase,
+  type PhaseOverride,
   type PromptContractQuestion,
+  type Provider,
   parseConfigYaml,
   parseGhPrView,
   type RuntimePhase,
   retryCleanupTask,
+  serializeConfigYaml,
   type TaskEntry,
   type TasksFile,
+  validateCapabilitySelection,
   writeTasksFileAtomic,
 } from "@cattyneo/autokit-core";
 import {
@@ -57,10 +66,7 @@ export type CliDeps = {
   fetchIssue?: (issue: number) => IssueMetadata | null;
   fetchOpenIssues?: () => IssueMetadata[];
   confirm?: (message: string) => boolean;
-  runWorkflow?: (input: {
-    yes: boolean;
-    answerQuestion: (input: CliQuestionInput) => Promise<string> | string;
-  }) => Promise<TaskEntry[]> | TaskEntry[];
+  runWorkflow?: (input: RunWorkflowInput) => Promise<TaskEntry[]> | TaskEntry[];
   workflowRunner?: WorkflowRunner;
   workflowMaxSteps?: number;
   askQuestion?: (input: CliQuestionInput) => Promise<string> | string;
@@ -72,6 +78,14 @@ export type CliQuestionInput = {
   phase: RuntimePhase;
   question: PromptContractQuestion;
   turn: number;
+};
+
+export type PhaseOverrideInput = Omit<PhaseOverride, "expires_at_run_id">;
+
+type RunWorkflowInput = {
+  yes: boolean;
+  phaseOverride?: PhaseOverrideInput;
+  answerQuestion: (input: CliQuestionInput) => Promise<string> | string;
 };
 
 export function getAutokitVersion(): string {
@@ -217,6 +231,15 @@ function createProgram(deps: CliDeps, setExitCode: (code: number) => void): Comm
       setExitCode(result.ok ? 0 : 1);
     });
 
+  const config = program.command("config").description("inspect autokit configuration");
+  config
+    .command("show")
+    .description("show effective autokit configuration")
+    .option("--matrix", "show phase/provider/effort permission matrix")
+    .action((options: { matrix?: boolean }) => {
+      setExitCode(commandConfigShow(options, deps));
+    });
+
   program
     .command("add")
     .description("add GitHub issues to tasks.yaml")
@@ -246,9 +269,19 @@ function createProgram(deps: CliDeps, setExitCode: (code: number) => void): Comm
   program
     .command("run")
     .description("dispatch run entrypoint without workflow internals")
-    .action(async () => {
+    .option("--phase <phase>", "limit provider/effort override to one agent phase")
+    .option("--provider <provider>", "override provider for one run")
+    .option("--effort <effort>", "override effort for one run")
+    .action(async (options: RawPhaseOverrideOptions) => {
+      const phaseOverride = parsePhaseOverrideOptions(options, deps);
+      if (phaseOverride === "invalid") {
+        setExitCode(2);
+        return;
+      }
       setExitCode(
-        await commandWorkflowStatus(deps, program.opts<{ yes?: boolean }>().yes === true),
+        await commandWorkflowStatus(deps, program.opts<{ yes?: boolean }>().yes === true, {
+          phaseOverride,
+        }),
       );
     });
 
@@ -385,14 +418,15 @@ function commandAdd(
   return hadActiveConflict ? 1 : 0;
 }
 
-async function commandWorkflowStatus(deps: CliDeps, yes = false): Promise<number> {
+async function commandWorkflowStatus(
+  deps: CliDeps,
+  yes = false,
+  options: { phaseOverride?: PhaseOverrideInput } = {},
+): Promise<number> {
   try {
     const runWorkflow =
       deps.runWorkflow ??
-      ((input: {
-        yes: boolean;
-        answerQuestion: (input: CliQuestionInput) => Promise<string> | string;
-      }) =>
+      ((input: RunWorkflowInput) =>
         runProductionWorkflow({
           cwd: deps.cwd,
           env: deps.env,
@@ -400,10 +434,12 @@ async function commandWorkflowStatus(deps: CliDeps, yes = false): Promise<number
           runner: deps.workflowRunner,
           maxSteps: deps.workflowMaxSteps,
           now: deps.now,
+          phaseOverride: input.phaseOverride,
           answerQuestion: input.answerQuestion,
         }));
     const tasks = await runWorkflow({
       yes,
+      phaseOverride: options.phaseOverride,
       answerQuestion: (input) => answerCliQuestion(input, deps, yes),
     });
     deps.stdout.write(
@@ -626,8 +662,69 @@ export function runDoctor(deps: CliDeps): { ok: boolean; checks: DoctorCheck[] }
   checks.push(checkEnvUnset(deps));
   checks.push(checkDotEnv(deps));
   checks.push(checkConfig(deps));
+  checks.push(checkStalePhaseOverride(deps));
   checks.push(checkPromptContracts(deps));
   return { ok: checks.every((check) => check.status !== "FAIL"), checks };
+}
+
+type RawPhaseOverrideOptions = {
+  phase?: string;
+  provider?: string;
+  effort?: string;
+};
+
+function parsePhaseOverrideOptions(
+  options: RawPhaseOverrideOptions,
+  deps: CliDeps,
+): PhaseOverrideInput | undefined | "invalid" {
+  try {
+    return validatePhaseOverride(options);
+  } catch (error) {
+    deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return "invalid";
+  }
+}
+
+export function validatePhaseOverride(
+  options: RawPhaseOverrideOptions,
+): PhaseOverrideInput | undefined {
+  if (
+    options.phase === undefined &&
+    (options.provider !== undefined || options.effort !== undefined)
+  ) {
+    throw new Error("--provider and --effort require --phase");
+  }
+  if (options.phase === undefined) {
+    return undefined;
+  }
+  if (options.provider === undefined && options.effort === undefined) {
+    throw new Error("--phase requires --provider or --effort");
+  }
+  if (!(capabilityPhases as readonly string[]).includes(options.phase)) {
+    throw new Error(`unsupported override phase: ${options.phase}`);
+  }
+  const phase = options.phase as Phase;
+  let provider: Provider | undefined;
+  if (options.provider !== undefined) {
+    provider = parseOverrideProvider(options.provider);
+    validateCapabilitySelection({ phase, provider });
+  }
+  const effort = options.effort === undefined ? undefined : parseOverrideEffort(options.effort);
+  return { phase, provider, effort };
+}
+
+function parseOverrideProvider(value: string): Provider {
+  if (!(capabilityProviders as readonly string[]).includes(value)) {
+    throw new Error(`unsupported override provider: ${value}`);
+  }
+  return value as Provider;
+}
+
+function parseOverrideEffort(value: string): EffortLevel {
+  if (!(effortLevels as readonly string[]).includes(value)) {
+    throw new Error(`unsupported override effort: ${value}`);
+  }
+  return value as EffortLevel;
 }
 
 function checkCommand(deps: CliDeps, name: string, command: string, args: string[]): DoctorCheck {
@@ -691,6 +788,70 @@ function checkConfig(deps: CliDeps): DoctorCheck {
       message: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+function checkStalePhaseOverride(deps: CliDeps): DoctorCheck {
+  const path = tasksPath(deps);
+  if (!existsSync(path)) {
+    return { name: "phase override", status: "PASS", message: "none" };
+  }
+  try {
+    const tasks = loadTasksFile(path).tasks;
+    const stale = tasks.find((task) => task.runtime.phase_override !== null);
+    if (stale === undefined) {
+      return { name: "phase override", status: "PASS", message: "none" };
+    }
+    return {
+      name: "phase override",
+      status: "FAIL",
+      message: `stale phase_override for #${stale.issue}`,
+    };
+  } catch (error) {
+    return {
+      name: "phase override",
+      status: "FAIL",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function commandConfigShow(options: { matrix?: boolean }, deps: CliDeps): number {
+  try {
+    const config = loadConfigForCli(deps);
+    deps.stdout.write(
+      options.matrix === true ? renderConfigMatrix(config) : serializeConfigYaml(config),
+    );
+    return 0;
+  } catch (error) {
+    deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+}
+
+function loadConfigForCli(deps: CliDeps) {
+  const path = join(deps.cwd, ".autokit", "config.yaml");
+  if (!existsSync(path)) {
+    return DEFAULT_CONFIG;
+  }
+  return parseConfigYaml(readFileSync(path, "utf8"));
+}
+
+function renderConfigMatrix(config = DEFAULT_CONFIG): string {
+  const rows = ["phase\tprovider\teffort\tprompt_contract\tpermission_profile"];
+  for (const phase of capabilityPhases) {
+    const provider = config.phases[phase].provider;
+    const row = validateCapabilitySelection({ phase, provider });
+    rows.push(
+      [
+        phase,
+        provider,
+        config.phases[phase].effort ?? config.effort.default,
+        config.phases[phase].prompt_contract,
+        row.permission_profile,
+      ].join("\t"),
+    );
+  }
+  return `${rows.join("\n")}\n`;
 }
 
 function checkPromptContracts(deps: CliDeps): DoctorCheck {

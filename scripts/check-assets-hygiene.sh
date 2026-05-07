@@ -15,13 +15,39 @@ if [ ! -d "$ROOT_DIR/packages/cli/dist" ]; then
   exit 1
 fi
 
-pack_output="$(cd "$ROOT_DIR/packages/cli" && bun pm pack --dry-run 2>&1)"
+if [ -n "${AUTOKIT_ASSETS_HYGIENE_BUN_PACK_OUTPUT_FILE:-}" ]; then
+  pack_output="$(cat "$AUTOKIT_ASSETS_HYGIENE_BUN_PACK_OUTPUT_FILE")"
+else
+  pack_output="$(cd "$ROOT_DIR/packages/cli" && bun pm pack --dry-run 2>&1)"
+fi
 printf '%s\n' "$pack_output"
 
-npm_pack_output="$(cd "$ROOT_DIR/packages/cli" && npm --cache "${AUTOKIT_NPM_CACHE:-/tmp/autokit-npm-cache}" pack --dry-run 2>&1)"
+if [ -n "${AUTOKIT_ASSETS_HYGIENE_NPM_PACK_OUTPUT_FILE:-}" ]; then
+  npm_pack_output="$(cat "$AUTOKIT_ASSETS_HYGIENE_NPM_PACK_OUTPUT_FILE")"
+else
+  npm_pack_output="$(cd "$ROOT_DIR/packages/cli" && npm --cache "${AUTOKIT_NPM_CACHE:-/tmp/autokit-npm-cache}" pack --dry-run 2>&1)"
+fi
 printf '%s\n' "$npm_pack_output"
 
 violations=0
+required_bun_entries=(
+  "assets/presets/default/config.yaml"
+  "assets/presets/default/skills/autokit-implement/SKILL.md"
+  "assets/presets/laravel-filament/config.yaml"
+  "assets/presets/laravel-filament/skills/autokit-review/SKILL.md"
+  "assets/presets/next-shadcn/config.yaml"
+  "assets/presets/next-shadcn/prompts/implement.md"
+  "assets/presets/docs-create/config.yaml"
+  "assets/presets/docs-create/agents/reviewer.md"
+)
+
+for entry in "${required_bun_entries[@]}"; do
+  if ! grep -F -- "$entry" <<< "$pack_output" >/dev/null; then
+    echo "::error::required bun pack entry missing: $entry"
+    violations=$((violations + 1))
+  fi
+done
+
 while IFS= read -r entry; do
   case "$entry" in
     *__MACOSX*|*.DS_Store*|*.claude/state*|*.claude/sessions*|*.claude/credentials*|*.codex/auth*|*.codex/credentials*|*.env|*.env.*|*.pem|*id_rsa*)

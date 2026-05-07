@@ -33,6 +33,7 @@ generated_at: ""
 tasks: []
 `;
 
+const AUTOKIT_GITIGNORE = "*\n!.gitignore\n!config.yaml\n";
 const AUDIT_HMAC_KEY = ".autokit/audit-hmac-key";
 const INIT_AUDIT_LOG = ".autokit/init-audit.jsonl";
 
@@ -94,6 +95,7 @@ export function runInit(cwd: string, options: InitOptions = {}): InitResult {
   const plannedChanges = [
     ".autokit/config.yaml",
     ".autokit/tasks.yaml",
+    ".autokit/.gitignore",
     ...assetFiles.map((file) => join(".agents", file).split(sep).join("/")),
     ...PROVIDER_LINKS.map((link) => link.path),
     ...MARKER_FILES,
@@ -111,6 +113,7 @@ export function runInit(cwd: string, options: InitOptions = {}): InitResult {
     mkdirSafe(root, relativePath(root, join(backupDir, "staging")));
     writeNewFile(root, ".autokit/config.yaml", DEFAULT_CONFIG_YAML, changed, skipped, created);
     writeNewFile(root, ".autokit/tasks.yaml", DEFAULT_TASKS_YAML, changed, skipped, created);
+    writeNewFile(root, ".autokit/.gitignore", AUTOKIT_GITIGNORE, changed, skipped, created);
 
     for (const file of assetFiles) {
       const relativeTarget = join(".agents", file);
@@ -252,6 +255,7 @@ function validateWriteParents(root: string): void {
   const targets = [
     ".autokit/config.yaml",
     ".autokit/tasks.yaml",
+    ".autokit/.gitignore",
     AUDIT_HMAC_KEY,
     INIT_AUDIT_LOG,
     ".autokit/.backup",

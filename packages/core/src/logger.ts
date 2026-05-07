@@ -49,6 +49,7 @@ export const operationalAuditKinds = [
   "review_started",
   "phase_override_started",
   "phase_override_ended",
+  "serve_lock_busy",
 ] as const;
 
 export type FailureAuditKind = (typeof failureAuditKinds)[number];

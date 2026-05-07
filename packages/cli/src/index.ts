@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   type AutokitConfig,
@@ -30,6 +30,7 @@ import {
   type TaskEntry,
   type TasksFile,
   transitionTask,
+  tryAcquireRunLock,
   validateCapabilitySelection,
   writeTasksFileAtomic,
 } from "@cattyneo/autokit-core";
@@ -298,9 +299,11 @@ function createProgram(deps: CliDeps, setExitCode: (code: number) => void): Comm
         return;
       }
       setExitCode(
-        await commandWorkflowStatus(deps, program.opts<{ yes?: boolean }>().yes === true, {
-          phaseOverride,
-        }),
+        await withWriteCommandLockAsync(deps, () =>
+          commandWorkflowStatus(deps, program.opts<{ yes?: boolean }>().yes === true, {
+            phaseOverride,
+          }),
+        ),
       );
     });
 
@@ -334,6 +337,14 @@ function createProgram(deps: CliDeps, setExitCode: (code: number) => void): Comm
 }
 
 function commandInit(options: { dryRun?: boolean; force?: boolean }, deps: CliDeps): number {
+  return withWriteCommandLock(
+    deps,
+    () => commandInitLocked(options, deps),
+    options.dryRun === true,
+  );
+}
+
+function commandInitLocked(options: { dryRun?: boolean; force?: boolean }, deps: CliDeps): number {
   try {
     if (deps.initProject === undefined) {
       for (const check of [
@@ -364,22 +375,98 @@ function commandInit(options: { dryRun?: boolean; force?: boolean }, deps: CliDe
   }
 }
 
+function withWriteCommandLock(deps: CliDeps, action: () => number, skip = false): number {
+  if (skip) {
+    return action();
+  }
+  const lock = tryAcquireRunLock(deps.cwd, { config: loadConfigForLock(deps) });
+  if (!lock.acquired) {
+    deps.stderr.write("autokit lock busy; another autokit command or serve process is active\n");
+    return TEMPFAIL_EXIT_CODE;
+  }
+  let result = 1;
+  try {
+    result = action();
+  } finally {
+    if (!lock.lock.release()) {
+      deps.stderr.write(
+        "autokit lock release failed; inspect .autokit/.lock for unexpected files before manual removal\n",
+      );
+      result = result === 0 ? 1 : result;
+    }
+  }
+  return result;
+}
+
+async function withWriteCommandLockAsync(
+  deps: CliDeps,
+  action: () => Promise<number>,
+): Promise<number> {
+  const lock = tryAcquireRunLock(deps.cwd, { config: loadConfigForLock(deps) });
+  if (!lock.acquired) {
+    deps.stderr.write("autokit lock busy; another autokit command or serve process is active\n");
+    return TEMPFAIL_EXIT_CODE;
+  }
+  let result = 1;
+  try {
+    result = await action();
+  } finally {
+    if (!lock.lock.release()) {
+      deps.stderr.write(
+        "autokit lock release failed; inspect .autokit/.lock for unexpected files before manual removal\n",
+      );
+      result = result === 0 ? 1 : result;
+    }
+  }
+  return result;
+}
+
+function loadConfigForLock(deps: CliDeps): AutokitConfig {
+  try {
+    return loadConfigForCli(deps);
+  } catch {
+    return {
+      ...DEFAULT_CONFIG,
+      serve: {
+        ...DEFAULT_CONFIG.serve,
+        lock: {
+          ...DEFAULT_CONFIG.serve.lock,
+          host_redact: true,
+        },
+      },
+    };
+  }
+}
+
 function commandAdd(
   range: string,
   options: { label: string[]; force?: boolean; dryRun?: boolean; yes?: boolean },
   deps: CliDeps,
 ): number {
-  let targets: IssueMetadata[];
+  let parsedRange: number[] | "all";
   try {
-    const parsedRange = parseIssueRange(range);
-    targets =
-      parsedRange === "all"
-        ? fetchOpenIssues(deps)
-        : parsedRange.map((issue) => fetchIssue(deps, issue)).filter((issue) => issue !== null);
+    parsedRange = parseIssueRange(range);
   } catch (error) {
     deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 2;
   }
+
+  return withWriteCommandLock(
+    deps,
+    () => commandAddLocked(parsedRange, options, deps),
+    options.dryRun === true,
+  );
+}
+
+function commandAddLocked(
+  parsedRange: number[] | "all",
+  options: { label: string[]; force?: boolean; dryRun?: boolean; yes?: boolean },
+  deps: CliDeps,
+): number {
+  const targets =
+    parsedRange === "all"
+      ? fetchOpenIssues(deps)
+      : parsedRange.map((issue) => fetchIssue(deps, issue)).filter((issue) => issue !== null);
 
   const requiredLabels = options.label ?? [];
   const tasksFile = loadTasksOrEmpty(deps);
@@ -503,8 +590,6 @@ async function answerCliQuestion(
 }
 
 async function commandResume(issue: string | undefined, deps: CliDeps): Promise<number> {
-  const tasksFile = loadTasksOrEmpty(deps);
-  const tasks = tasksFile.tasks;
   let targetIssue: number | undefined;
   try {
     targetIssue = issue === undefined ? undefined : parsePositiveInteger(issue);
@@ -512,39 +597,52 @@ async function commandResume(issue: string | undefined, deps: CliDeps): Promise<
     deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 2;
   }
-  if (targetIssue !== undefined) {
-    const explicitTarget = tasks.find((task) => task.issue === targetIssue);
-    if (explicitTarget === undefined) {
-      deps.stderr.write(`issue #${targetIssue} not found\n`);
-      return 1;
-    }
-    if (explicitTarget.state !== "paused") {
-      deps.stderr.write(`issue #${targetIssue} is not paused\n`);
-      return 1;
-    }
-  }
-  const target = [...tasks]
-    .reverse()
-    .find(
-      (task) =>
-        task.state === "paused" && (targetIssue === undefined || task.issue === targetIssue),
-    );
-  if (target?.failure?.code === "retry_cleanup_failed") {
-    deps.stderr.write(`issue #${target.issue} must be retried with autokit retry\n`);
-    return TEMPFAIL_EXIT_CODE;
-  }
-  if (target === undefined) {
-    return getWorkflowExitCode(tasks);
-  }
 
-  const index = tasks.findIndex((task) => task.issue === target.issue);
-  tasksFile.tasks[index] = transitionTask(target, { type: "resume" });
-  tasksFile.generated_at = now(deps);
-  writeTasksFileAtomic(tasksPath(deps), tasksFile);
-  return commandWorkflowStatus(deps);
+  return withWriteCommandLockAsync(deps, async () => {
+    const tasksFile = loadTasksOrEmpty(deps);
+    const tasks = tasksFile.tasks;
+    if (targetIssue !== undefined) {
+      const explicitTarget = tasks.find((task) => task.issue === targetIssue);
+      if (explicitTarget === undefined) {
+        deps.stderr.write(`issue #${targetIssue} not found\n`);
+        return 1;
+      }
+      if (explicitTarget.state !== "paused") {
+        deps.stderr.write(`issue #${targetIssue} is not paused\n`);
+        return 1;
+      }
+    }
+    const target = [...tasks]
+      .reverse()
+      .find(
+        (task) =>
+          task.state === "paused" && (targetIssue === undefined || task.issue === targetIssue),
+      );
+    if (target?.failure?.code === "retry_cleanup_failed") {
+      deps.stderr.write(`issue #${target.issue} must be retried with autokit retry\n`);
+      return TEMPFAIL_EXIT_CODE;
+    }
+    if (target === undefined) {
+      return getWorkflowExitCode(tasks);
+    }
+
+    const index = tasks.findIndex((task) => task.issue === target.issue);
+    tasksFile.tasks[index] = transitionTask(target, { type: "resume" });
+    tasksFile.generated_at = now(deps);
+    writeTasksFileAtomic(tasksPath(deps), tasksFile);
+    return commandWorkflowStatus(deps);
+  });
 }
 
 function commandRetry(
+  range: string | undefined,
+  options: { recoverCorruption?: string },
+  deps: CliDeps,
+): number {
+  return withWriteCommandLock(deps, () => commandRetryLocked(range, options, deps));
+}
+
+function commandRetryLocked(
   range: string | undefined,
   options: { recoverCorruption?: string },
   deps: CliDeps,
@@ -624,6 +722,19 @@ function commandCleanup(options: { forceDetach: string; dryRun?: boolean }, deps
     deps.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     return 2;
   }
+
+  return withWriteCommandLock(
+    deps,
+    () => commandCleanupLocked(issue, options, deps),
+    options.dryRun === true,
+  );
+}
+
+function commandCleanupLocked(
+  issue: number,
+  options: { forceDetach: string; dryRun?: boolean },
+  deps: CliDeps,
+): number {
   const tasksFile = loadTasksOrEmpty(deps);
   const task = tasksFile.tasks.find((entry) => entry.issue === issue);
   if (task === undefined) {
@@ -726,6 +837,8 @@ export function runDoctor(deps: CliDeps): { ok: boolean; checks: DoctorCheck[] }
   checks.push(checkCommand(deps, "gh auth", "gh", ["auth", "status"]));
   checks.push(checkEnvUnset(deps));
   checks.push(checkDotEnv(deps));
+  checks.push(checkAutokitGitignore(deps));
+  checks.push(checkAutokitLockModes(deps));
   checks.push(checkConfig(deps));
   checks.push(checkStalePhaseOverride(deps));
   checks.push(checkPromptContracts(deps));
@@ -827,6 +940,89 @@ function checkDotEnv(deps: CliDeps): DoctorCheck {
   return leakedFiles.length === 0
     ? { name: "cwd .env", status: "PASS", message: "no API keys found" }
     : { name: "cwd .env", status: "FAIL", message: `${leakedFiles.join(",")} contains API keys` };
+}
+
+function checkAutokitGitignore(deps: CliDeps): DoctorCheck {
+  const path = join(deps.cwd, ".autokit", ".gitignore");
+  if (!existsSync(path)) {
+    return {
+      name: ".autokit gitignore",
+      status: "FAIL",
+      message: ".autokit/.gitignore missing",
+    };
+  }
+  const lines = readFileSync(path, "utf8")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const required = ["*", "!.gitignore", "!config.yaml"];
+  const missing = required.filter((line) => !lines.includes(line));
+  if (missing.length > 0) {
+    return {
+      name: ".autokit gitignore",
+      status: "FAIL",
+      message: `must contain ${missing.join(",")}`,
+    };
+  }
+  const extra = lines.filter((line) => !required.includes(line));
+  if (extra.length > 0) {
+    return {
+      name: ".autokit gitignore",
+      status: "FAIL",
+      message: `must not contain extra rules ${extra.join(",")}`,
+    };
+  }
+  return { name: ".autokit gitignore", status: "PASS", message: "protected" };
+}
+
+function checkAutokitLockModes(deps: CliDeps): DoctorCheck {
+  const lockDir = join(deps.cwd, ".autokit", ".lock");
+  if (!existsSync(lockDir)) {
+    return { name: ".autokit lock mode", status: "PASS", message: "absent" };
+  }
+  try {
+    const lockStat = lstatSync(lockDir);
+    if (!lockStat.isDirectory()) {
+      return {
+        name: ".autokit lock mode",
+        status: "FAIL",
+        message: ".autokit/.lock must be a directory",
+      };
+    }
+    if ((lockStat.mode & 0o777) !== 0o700) {
+      return {
+        name: ".autokit lock mode",
+        status: "FAIL",
+        message: ".autokit/.lock must be mode 0700",
+      };
+    }
+    const holderPath = join(lockDir, "holder.json");
+    if (!existsSync(holderPath)) {
+      return { name: ".autokit lock mode", status: "PASS", message: "directory protected" };
+    }
+    const holderStat = lstatSync(holderPath);
+    if (!holderStat.isFile()) {
+      return {
+        name: ".autokit lock mode",
+        status: "FAIL",
+        message: ".autokit/.lock/holder.json must be a file",
+      };
+    }
+    if ((holderStat.mode & 0o777) !== 0o600) {
+      return {
+        name: ".autokit lock mode",
+        status: "FAIL",
+        message: ".autokit/.lock/holder.json must be mode 0600",
+      };
+    }
+    return { name: ".autokit lock mode", status: "PASS", message: "protected" };
+  } catch (error) {
+    return {
+      name: ".autokit lock mode",
+      status: "FAIL",
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function checkConfig(deps: CliDeps): DoctorCheck {

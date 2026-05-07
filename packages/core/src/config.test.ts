@@ -36,6 +36,9 @@ describe("core config schema", () => {
     assert.equal(resolveRunnerTimeout(config, "plan"), 600_000);
     assert.equal(resolveRunnerTimeout(config, "plan_verify"), 600_000);
     assert.equal(config.init.backup_blacklist.includes(".autokit/audit-hmac-key"), true);
+    assert.equal(config.serve.lock.host_redact, false);
+    assert.equal(config.serve.sse.max_connections, 8);
+    assert.equal(config.serve.sse.heartbeat_ms, 15_000);
   });
 
   it("parses the full config surface used by AK-005", () => {
@@ -126,6 +129,12 @@ logging:
   max_total_size_mb: 100
   redact_patterns:
     - "secret-[0-9]+"
+serve:
+  lock:
+    host_redact: true
+  sse:
+    max_connections: 3
+    heartbeat_ms: 5000
 init:
   backup_dir: ".autokit/custom-backup"
   backup_mode: "0750"
@@ -147,6 +156,9 @@ init:
     assert.equal(resolveRunnerTimeout(config, "plan"), 1);
     assert.equal(resolveRunnerTimeout(config, "supervise"), 6);
     assert.equal(config.logging.level, "debug");
+    assert.equal(config.serve.lock.host_redact, true);
+    assert.equal(config.serve.sse.max_connections, 3);
+    assert.equal(config.serve.sse.heartbeat_ms, 5_000);
     assert.deepEqual(config.init.backup_blacklist, [".custom-secret"]);
   });
 

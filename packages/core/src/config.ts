@@ -121,6 +121,21 @@ const configSchema = z
         max_untrusted_input_kb: positiveInteger.default(256),
       })
       .prefault({}),
+    serve: z
+      .strictObject({
+        lock: z
+          .strictObject({
+            host_redact: z.boolean().default(false),
+          })
+          .prefault({}),
+        sse: z
+          .strictObject({
+            max_connections: positiveInteger.default(8),
+            heartbeat_ms: positiveInteger.default(15_000),
+          })
+          .prefault({}),
+      })
+      .prefault({}),
     effort: z
       .strictObject({
         default: effortLevelSchema.default("medium"),

@@ -35,6 +35,23 @@ export const WORKFLOWS_PACKAGE = "@cattyneo/autokit-workflows";
 
 export type WorkflowRunner = (input: AgentRunInput) => Promise<AgentRunOutput>;
 
+export type WorkflowEvent =
+  | {
+      kind: "phase_started";
+      issue: number;
+      phase: Phase;
+      provider: Provider;
+      effort?: EffortLevel;
+      at: string;
+    }
+  | {
+      kind: "runner_stdout";
+      issue: number;
+      phase: Phase;
+      chunk: string;
+      at: string;
+    };
+
 export type WorkflowPromptInput = {
   task: TaskEntry;
   phase: RuntimePhase;
@@ -64,6 +81,7 @@ export type WorkflowOptions = {
   persistTask?: (task: TaskEntry) => Promise<void> | void;
   auditOperation?: (kind: OperationalAuditKind, fields: Record<string, unknown>) => void;
   auditFailure?: (input: AuditFailureInput) => void;
+  workflowEvent?: (event: WorkflowEvent) => void;
   now?: () => string;
   homeDir?: string;
 };
@@ -1075,6 +1093,15 @@ function buildAgentRunInput(
           : config.permissions.codex.home_isolation,
     },
     timeoutMs: options.timeoutMs ?? resolvedEffort.timeout_ms,
+    onStdout: (chunk) => {
+      options.workflowEvent?.({
+        kind: "runner_stdout",
+        issue: task.issue,
+        phase,
+        chunk,
+        at: workflowNow(options),
+      });
+    },
   };
 }
 
@@ -1228,6 +1255,7 @@ async function runPhase(
           review_round: currentTask.review_round,
         });
       }
+      emitPhaseStartedEvent(currentTask, phase, options);
       const output = await options.runner(
         buildAgentRunInput(
           currentTask,
@@ -1472,6 +1500,21 @@ function emitWorkflowAudit(
     ]),
   );
   options.auditOperation?.(kind, sanitized);
+}
+
+function emitPhaseStartedEvent(task: TaskEntry, phase: Phase, options: WorkflowOptions): void {
+  options.workflowEvent?.({
+    kind: "phase_started",
+    issue: task.issue,
+    phase,
+    provider: effectiveProviderForPhase(task, phase, options.config ?? DEFAULT_CONFIG),
+    effort: task.runtime.resolved_effort?.effort,
+    at: workflowNow(options),
+  });
+}
+
+function workflowNow(options: WorkflowOptions): string {
+  return options.now?.() ?? new Date().toISOString();
 }
 
 function resolvedEffortEquals(

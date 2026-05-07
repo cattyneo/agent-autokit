@@ -60,6 +60,8 @@ export type ServeWorkflowInput = {
   effort?: EffortLevel;
   merged_only?: boolean;
   run_id: string;
+  emitEvent?: (event: ServeSseEventInput) => string | null;
+  auditOperation?: (kind: OperationalAuditKind, fields: Record<string, unknown>) => void;
 };
 
 export type ServeWorkflowResult = {
@@ -78,6 +80,9 @@ export type AutokitServeOptions = {
   runWorkflow: (input: ServeWorkflowInput) => Promise<ServeWorkflowResult> | ServeWorkflowResult;
   readDiff?: (input: { cwd: string; issue: number }) => string;
   auditOperation?: (kind: OperationalAuditKind, fields: Record<string, unknown>) => void;
+  hooks?: {
+    writeSseFrame?: (response: ServerResponse, frame: string) => boolean;
+  };
 };
 
 export type AutokitServeServer = {
@@ -87,9 +92,54 @@ export type AutokitServeServer = {
   token: string;
   tokenPath: string;
   url: (path: string) => string;
+  publishEvent: (event: ServeSseEventInput) => string | null;
   waitForIdle: () => Promise<void>;
   close: () => Promise<void>;
 };
+
+export const serveSseEventKinds = [
+  "task_state",
+  "phase_started",
+  "phase_finished",
+  "audit",
+  "runner_stdout",
+  "heartbeat",
+  "error",
+] as const;
+
+export type ServeSseEventKind = (typeof serveSseEventKinds)[number];
+
+export type ServeSseEventInput =
+  | {
+      kind: "task_state";
+      data: { issue: number; state: string; runtime_phase: string | null; updated_at: string };
+    }
+  | {
+      kind: "phase_started" | "phase_finished";
+      data: {
+        issue: number;
+        phase: string;
+        provider?: string;
+        effort?: string;
+        at: string;
+      };
+    }
+  | {
+      kind: "audit";
+      data: {
+        kind: string;
+        issue?: number;
+        message?: string;
+        details?: Record<string, unknown>;
+        at: string;
+      };
+    }
+  | {
+      kind: "runner_stdout";
+      data: { issue: number; phase: string; chunk: string; at: string; truncated?: boolean };
+    }
+  | { kind: "heartbeat"; data: Record<string, never> }
+  | { kind: "error"; data: { code: string; message: string } };
 
 type RunRecord = {
   run_id: string;
@@ -110,6 +160,9 @@ const LOG_DIFF_DEFAULT_MAX_BYTES = 16_384;
 const LOG_DIFF_HARD_MAX_BYTES = 65_536;
 const BODY_MAX_BYTES = 65_536;
 const DIFF_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const SSE_REPLAY_CAPACITY = 64;
+const SSE_FRAME_MAX_BYTES = 65_536;
+const SSE_TRUNCATED_CHUNK_MAX_BYTES = 60_000;
 const mutatingPaths = new Set(["/api/run", "/api/resume", "/api/retry", "/api/cleanup"]);
 const allowedBindHosts = new Set(["127.0.0.1", "localhost"]);
 
@@ -122,7 +175,7 @@ export async function startAutokitServe(options: AutokitServeOptions): Promise<A
   const repoId = repoIdFor(repoRoot);
   markInterruptedRunsResumeRequired(env, options.stateHome, repoId, options);
   const pending = new Set<Promise<void>>();
-  const sseClients = new Set<ServerResponse>();
+  const token = randomBytes(32).toString("base64url");
   const logger = createAutokitLogger({
     logDir: join(repoRoot, ".autokit", "logs"),
     config,
@@ -130,7 +183,15 @@ export async function startAutokitServe(options: AutokitServeOptions): Promise<A
   });
   const auditOperation =
     options.auditOperation ?? ((kind, fields) => logger.auditOperation(kind, fields));
-  const token = randomBytes(32).toString("base64url");
+  const sseHub = new SseHub({
+    config,
+    env,
+    repoRoot,
+    now: () => now(options),
+    getToken: () => token,
+    auditOperation,
+    writeFrame: options.hooks?.writeSseFrame,
+  });
   let actualPort = 0;
   let tokenPath = "";
 
@@ -145,9 +206,12 @@ export async function startAutokitServe(options: AutokitServeOptions): Promise<A
       repoId,
       getPort: () => actualPort,
       getToken: () => token,
-      auditOperation,
+      auditOperation: (kind, fields) => {
+        auditOperation(kind, fields);
+        publishAuditSseEvents(sseHub, kind, fields, now(options));
+      },
       pending,
-      sseClients,
+      sseHub,
     });
   });
 
@@ -160,9 +224,7 @@ export async function startAutokitServe(options: AutokitServeOptions): Promise<A
     actualPort = address.port;
     tokenPath = writeServeToken(stateHome(env, options.stateHome), repoId, actualPort, token);
   } catch (error) {
-    for (const client of sseClients) {
-      client.end();
-    }
+    sseHub.close();
     await closeServer(server).catch(() => {});
     if (tokenPath !== "") {
       unlinkIfExists(tokenPath);
@@ -178,15 +240,14 @@ export async function startAutokitServe(options: AutokitServeOptions): Promise<A
     token,
     tokenPath,
     url: (path) => `http://${host}:${actualPort}${path}`,
+    publishEvent: (event) => sseHub.publish(event),
     waitForIdle: async () => {
       while (pending.size > 0) {
         await Promise.all([...pending]);
       }
     },
     close: async () => {
-      for (const client of sseClients) {
-        client.end();
-      }
+      sseHub.close();
       await closeServer(server);
       unlinkIfExists(tokenPath);
       logger.close();
@@ -206,7 +267,7 @@ type RequestContext = {
   getToken: () => string;
   auditOperation: (kind: OperationalAuditKind, fields: Record<string, unknown>) => void;
   pending: Set<Promise<void>>;
-  sseClients: Set<ServerResponse>;
+  sseHub: SseHub;
 };
 
 async function handleRequest(context: RequestContext): Promise<void> {
@@ -254,7 +315,7 @@ async function handleRequest(context: RequestContext): Promise<void> {
       return;
     }
     if (context.request.method === "GET" && path === "/api/events") {
-      handleEvents(context.response, context.sseClients);
+      handleEvents(context.request, context.response, context.sseHub);
       return;
     }
     if (context.request.method === "POST" && mutatingPaths.has(path)) {
@@ -405,6 +466,8 @@ async function handleMutation(context: RequestContext, path: string): Promise<vo
     effort: parsed.effort,
     merged_only: parsed.merged_only,
     run_id: runId,
+    emitEvent: (event) => context.sseHub.publish(event),
+    auditOperation: context.auditOperation,
   };
 
   if (operation === "cleanup") {
@@ -414,6 +477,7 @@ async function handleMutation(context: RequestContext, path: string): Promise<vo
       record.cleaned = result.cleaned ?? 0;
       record.updated_at = now(context.options);
       atomicWriteJson(recordPath, record, 0o600);
+      publishTaskState(context, parsed.issue);
       if (!lock.lock.release()) {
         markLockReleaseFailed(record, recordPath, context.options);
         sendError(context.response, 500, "lock_release_failed", "run lock release failed");
@@ -457,15 +521,18 @@ async function runCoordinator(
     record.status = "running";
     record.updated_at = now(context.options);
     atomicWriteJson(recordPath, record, 0o600);
+    publishTaskState(context, input.issue);
     const result = await context.options.runWorkflow(input);
     record.status = result.status ?? "completed";
     record.cleaned = result.cleaned;
     record.updated_at = now(context.options);
     atomicWriteJson(recordPath, record, 0o600);
+    publishTaskState(context, input.issue);
   } catch {
     record.status = "failed";
     record.updated_at = now(context.options);
     atomicWriteJson(recordPath, record, 0o600);
+    publishTaskState(context, input.issue);
   } finally {
     if (!release()) {
       markLockReleaseFailed(record, recordPath, context.options);
@@ -558,14 +625,516 @@ function handleDiff(context: RequestContext, issue: number, params: URLSearchPar
   sendJson(context.response, 200, { ok: true, issue, diff: bounded.value, ...bounded.meta });
 }
 
-function handleEvents(response: ServerResponse, sseClients: Set<ServerResponse>): void {
-  sseClients.add(response);
-  response.on("close", () => sseClients.delete(response));
-  response.statusCode = 200;
-  response.setHeader("content-type", "text/event-stream; charset=utf-8");
-  response.setHeader("cache-control", "no-cache");
-  response.flushHeaders();
-  response.write(": autokit serve connected\n\n");
+function handleEvents(request: IncomingMessage, response: ServerResponse, sseHub: SseHub): void {
+  sseHub.connect(response, headerValue(request.headers["last-event-id"]));
+}
+
+type SseBufferedFrame = {
+  id: string;
+  kind: ServeSseEventKind;
+  text: string;
+};
+
+type SseClient = {
+  response: ServerResponse;
+  closed: boolean;
+};
+
+type SseHubOptions = {
+  config: AutokitConfig;
+  env: NodeJS.ProcessEnv;
+  repoRoot: string;
+  getToken: () => string;
+  now: () => string;
+  auditOperation?: (kind: OperationalAuditKind, fields: Record<string, unknown>) => void;
+  writeFrame?: (response: ServerResponse, frame: string) => boolean;
+};
+
+class SseHub {
+  private readonly clients = new Set<SseClient>();
+  private readonly buffer: SseBufferedFrame[] = [];
+  private readonly options: SseHubOptions;
+  private nextId = 1;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  constructor(options: SseHubOptions) {
+    this.options = options;
+  }
+
+  publish(event: ServeSseEventInput): string | null {
+    if (event.kind === "runner_stdout" && this.options.config.logging.level !== "debug") {
+      return null;
+    }
+    const frame = this.createFrame(event);
+    this.buffer.push(frame);
+    if (this.buffer.length > SSE_REPLAY_CAPACITY) {
+      this.buffer.shift();
+    }
+    for (const client of [...this.clients]) {
+      this.writeFrame(client, frame);
+    }
+    return frame.id;
+  }
+
+  connect(response: ServerResponse, lastEventId: string | undefined): void {
+    if (this.clients.size >= this.options.config.serve.sse.max_connections) {
+      sendError(response, 503, "sse_connection_limit", "too many event streams");
+      return;
+    }
+    const client: SseClient = { response, closed: false };
+    this.clients.add(client);
+    response.on("close", () => this.removeClient(client));
+    response.statusCode = 200;
+    response.setHeader("content-type", "text/event-stream; charset=utf-8");
+    response.setHeader("x-content-type-options", "nosniff");
+    response.setHeader("cache-control", "no-cache, no-transform");
+    response.flushHeaders();
+    this.replay(client, lastEventId);
+    this.ensureHeartbeat();
+  }
+
+  close(): void {
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    for (const client of [...this.clients]) {
+      this.closeClient(client);
+    }
+  }
+
+  private replay(client: SseClient, lastEventId: string | undefined): void {
+    if (lastEventId === undefined || lastEventId.length === 0) {
+      return;
+    }
+    const index = this.buffer.findIndex((frame) => frame.id === lastEventId);
+    if (index === -1) {
+      this.writeFrame(
+        client,
+        this.createFrame({
+          kind: "error",
+          data: { code: "replay_unavailable", message: "SSE replay unavailable; reload required" },
+        }),
+      );
+      return;
+    }
+    for (const frame of this.buffer.slice(index + 1)) {
+      if (client.closed) {
+        return;
+      }
+      this.writeFrame(client, frame);
+    }
+  }
+
+  private ensureHeartbeat(): void {
+    if (this.heartbeatTimer !== null) {
+      return;
+    }
+    this.heartbeatTimer = setInterval(() => {
+      if (this.clients.size === 0) {
+        if (this.heartbeatTimer !== null) {
+          clearInterval(this.heartbeatTimer);
+          this.heartbeatTimer = null;
+        }
+        return;
+      }
+      this.publish({ kind: "heartbeat", data: {} });
+    }, this.options.config.serve.sse.heartbeat_ms);
+    this.heartbeatTimer.unref?.();
+  }
+
+  private createFrame(event: ServeSseEventInput): SseBufferedFrame {
+    const id = String(this.nextId);
+    this.nextId += 1;
+    const redactedData = sanitizeSseValue(event.data, this.options) as Record<string, unknown>;
+    const capped = capSsePayload(event.kind, redactedData);
+    const text = formatSseFrame(id, capped.kind, capped.data);
+    if (Buffer.byteLength(text, "utf8") <= SSE_FRAME_MAX_BYTES) {
+      return {
+        id,
+        kind: capped.kind,
+        text,
+      };
+    }
+    return {
+      id,
+      kind: "error",
+      text: formatSseFrame(id, "error", {
+        code: "event_too_large",
+        message: "SSE event payload too large; payload omitted",
+      }),
+    };
+  }
+
+  private writeFrame(client: SseClient, frame: SseBufferedFrame): void {
+    if (client.closed) {
+      return;
+    }
+    let ok = false;
+    try {
+      ok =
+        this.options.writeFrame?.(client.response, frame.text) ?? client.response.write(frame.text);
+    } catch {
+      this.options.auditOperation?.("sse_write_failed", {
+        reason: "write_exception",
+        event: frame.kind,
+      });
+      this.closeClient(client);
+      return;
+    }
+    if (!ok) {
+      this.writeBackpressureAndClose(client, frame.kind);
+    }
+  }
+
+  private writeBackpressureAndClose(client: SseClient, failedEvent: ServeSseEventKind): void {
+    if (client.closed) {
+      return;
+    }
+    this.options.auditOperation?.("sse_write_failed", {
+      reason: "backpressure",
+      event: failedEvent,
+    });
+    const frame = this.createFrame({
+      kind: "error",
+      data: { code: "backpressure", message: "SSE backpressure; reconnect required" },
+    });
+    try {
+      this.options.writeFrame?.(client.response, frame.text) ?? client.response.write(frame.text);
+    } catch {
+      // The client is already unhealthy; close it without surfacing to workflow callers.
+    }
+    this.closeClient(client);
+  }
+
+  private closeClient(client: SseClient): void {
+    if (client.closed) {
+      return;
+    }
+    client.closed = true;
+    this.clients.delete(client);
+    try {
+      client.response.end();
+    } catch {
+      client.response.destroy();
+    }
+    if (this.clients.size === 0 && this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  private removeClient(client: SseClient): void {
+    client.closed = true;
+    this.clients.delete(client);
+    if (this.clients.size === 0 && this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+}
+
+function publishAuditSseEvents(
+  sseHub: SseHub,
+  kind: OperationalAuditKind,
+  fields: Record<string, unknown>,
+  at: string,
+): void {
+  const issue = optionalNumberField(fields.issue);
+  const phase = optionalStringField(fields.phase ?? fields.runtime_phase);
+  if (kind === "phase_started" && issue !== undefined && phase !== undefined) {
+    sseHub.publish({
+      kind: "phase_started",
+      data: {
+        issue,
+        phase,
+        ...optionalSseStringFields(fields),
+        at,
+      },
+    });
+    return;
+  }
+  if (kind === "phase_completed" && issue !== undefined && phase !== undefined) {
+    sseHub.publish({
+      kind: "phase_finished",
+      data: {
+        issue,
+        phase,
+        ...optionalSseStringFields(fields),
+        at,
+      },
+    });
+    return;
+  }
+  sseHub.publish({
+    kind: "audit",
+    data: {
+      kind,
+      ...(issue === undefined ? {} : { issue }),
+      message: String(kind),
+      details: fields,
+      at,
+    },
+  });
+}
+
+function publishTaskState(context: RequestContext, issue: number | undefined): void {
+  if (issue === undefined) {
+    return;
+  }
+  const task = findTask(context.repoRoot, issue);
+  if (task === undefined) {
+    return;
+  }
+  context.sseHub.publish({
+    kind: "task_state",
+    data: {
+      issue: task.issue,
+      state: task.state,
+      runtime_phase: task.runtime_phase,
+      updated_at: now(context.options),
+    },
+  });
+}
+
+function sanitizeSseValue(
+  value: unknown,
+  options: SseHubOptions,
+  key?: string,
+  parentKey?: string,
+): unknown {
+  if (key === "data" || (parentKey === "prompt_contract" && key === "data")) {
+    return "<REDACTED>";
+  }
+  if (typeof value === "string") {
+    const jsonRedacted = redactJsonLikeSensitiveValues(value);
+    const redacted =
+      key === "diff" || jsonRedacted.includes("diff --git ")
+        ? redactGitDiff(jsonRedacted, options.config, redactionPaths(options))
+        : jsonRedacted;
+    return redactLiteralSecrets(
+      sanitizeLogString(redacted, options.config, false, redactionPaths(options)),
+      options,
+    );
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeSseValue(entry, options, key, parentKey));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entryValue]) => {
+        if (isSensitiveKey(entryKey)) {
+          return [entryKey, "<REDACTED>"];
+        }
+        return [entryKey, sanitizeSseValue(entryValue, options, entryKey, key)];
+      }),
+    );
+  }
+  return value;
+}
+
+function formatSseFrame(
+  id: string,
+  kind: ServeSseEventKind,
+  data: Record<string, unknown>,
+): string {
+  return `id: ${id}\nevent: ${kind}\ndata: ${JSON.stringify(data)}\n\n`;
+}
+
+function capSsePayload(
+  kind: ServeSseEventKind,
+  data: Record<string, unknown>,
+): { kind: ServeSseEventKind; data: Record<string, unknown> } {
+  const text = formatSseFrame("0", kind, data);
+  if (Buffer.byteLength(text, "utf8") <= SSE_FRAME_MAX_BYTES) {
+    return { kind, data };
+  }
+  if (kind === "runner_stdout" && typeof data.chunk === "string") {
+    return {
+      kind,
+      data: {
+        ...data,
+        chunk: truncateUtf8(data.chunk, SSE_TRUNCATED_CHUNK_MAX_BYTES),
+        truncated: true,
+      },
+    };
+  }
+  if (kind === "audit") {
+    return {
+      kind,
+      data: {
+        ...data,
+        message:
+          typeof data.message === "string"
+            ? truncateUtf8(data.message, 8_192)
+            : "audit payload truncated",
+        details: { truncated: true },
+      },
+    };
+  }
+  return { kind, data };
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  const buffer = Buffer.from(value, "utf8");
+  if (buffer.byteLength <= maxBytes) {
+    return value;
+  }
+  return `${buffer
+    .subarray(0, maxBytes)
+    .toString("utf8")
+    .replace(/\uFFFD$/, "")}...[truncated]`;
+}
+
+function redactJsonLikeSensitiveValues(value: string): string {
+  const keyPattern =
+    /"(?:api[_-]?key|apiKey|client[_-]?secret|clientSecret|credentials?|secret|password|private[_-]?key|privateKey|data)"\s*:/gi;
+  let result = "";
+  let cursor = 0;
+  for (const match of value.matchAll(keyPattern)) {
+    const matchIndex = match.index ?? 0;
+    result += value.slice(cursor, matchIndex);
+    result += match[0];
+    const valueStart = skipWhitespace(value, matchIndex + match[0].length);
+    result += value.slice(matchIndex + match[0].length, valueStart);
+    const valueEnd = findJsonLikeValueEnd(value, valueStart);
+    result += '"<REDACTED>"';
+    cursor = valueEnd;
+  }
+  result += value.slice(cursor);
+  return result;
+}
+
+function skipWhitespace(value: string, index: number): number {
+  let cursor = index;
+  while (cursor < value.length && /\s/.test(value[cursor] ?? "")) {
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function findJsonLikeValueEnd(value: string, start: number): number {
+  const first = value[start];
+  if (first === '"') {
+    return findJsonStringEnd(value, start);
+  }
+  if (first === "{" || first === "[") {
+    return findBalancedJsonEnd(value, start, first === "{" ? "}" : "]");
+  }
+  let cursor = start;
+  while (cursor < value.length && !/[\s,}\]]/.test(value[cursor] ?? "")) {
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function findJsonStringEnd(value: string, start: number): number {
+  let escaped = false;
+  for (let cursor = start + 1; cursor < value.length; cursor += 1) {
+    const char = value[cursor];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      return cursor + 1;
+    }
+  }
+  return value.length;
+}
+
+function findBalancedJsonEnd(value: string, start: number, close: "}" | "]"): number {
+  const open = value[start];
+  const stack = [close];
+  let inString = false;
+  let escaped = false;
+  for (let cursor = start + 1; cursor < value.length; cursor += 1) {
+    const char = value[cursor];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      stack.push("}");
+      continue;
+    }
+    if (char === "[") {
+      stack.push("]");
+      continue;
+    }
+    if (char === stack[stack.length - 1]) {
+      stack.pop();
+      if (stack.length === 0) {
+        return cursor + 1;
+      }
+    }
+  }
+  return open === "{" || open === "[" ? value.length : start;
+}
+
+function redactLiteralSecrets(value: string, options: SseHubOptions): string {
+  return [
+    options.getToken(),
+    options.env.ANTHROPIC_API_KEY,
+    options.env.OPENAI_API_KEY,
+    options.env.CODEX_API_KEY,
+  ]
+    .filter((secret): secret is string => secret !== undefined && secret.length > 0)
+    .reduce(
+      (redacted, secret) => redacted.replace(new RegExp(escapeRegExp(secret), "g"), "<REDACTED>"),
+      value,
+    );
+}
+
+function redactionPaths(options: SseHubOptions): { homeDir?: string; repoRoot?: string } {
+  return { homeDir: options.env.HOME, repoRoot: options.repoRoot };
+}
+
+function optionalNumberField(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+}
+
+function optionalStringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function optionalSseStringFields(fields: Record<string, unknown>): {
+  provider?: string;
+  effort?: string;
+} {
+  return {
+    ...(optionalStringField(fields.provider) === undefined
+      ? {}
+      : { provider: optionalStringField(fields.provider) }),
+    ...(optionalStringField(fields.effort) === undefined
+      ? {}
+      : { effort: optionalStringField(fields.effort) }),
+  };
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
 }
 
 function validateMutationBody(
@@ -1128,6 +1697,10 @@ function unlinkIfExists(path: string): void {
       throw error;
     }
   }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 class BodyTooLargeError extends Error {

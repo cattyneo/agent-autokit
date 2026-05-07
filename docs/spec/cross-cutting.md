@@ -76,6 +76,7 @@ AC「`failure.message` に `$HOME` 絶対パスが含まれない fixture」「b
 | `preset_apply_rollback_finished` | backup 復元が完了し、apply 前 manifest と一致した時 | Phase 3 §2 |
 | `preset_apply_rollback_failed` | backup 復元失敗 / timeout / manifest 不一致で壊れた `.agents` が残り得る時 | Phase 3 §2 |
 | `serve_lock_busy` | `autokit serve` 経路で cross-process lock (atomic directory lock) 取得失敗時 (HTTP 409 fast-path、`failure.code` 不発火) | Phase 2 §1.2 |
+| `sse_write_failed` | SSE client write が backpressure または write exception で失敗し、対象 client を close した時 (workflow / mutation の成否には波及させない) | Phase 2 §3 |
 
 ### 2.2 失敗系 audit kind (§10.2.2.2 への追加候補、`failure.code` 1:1)
 

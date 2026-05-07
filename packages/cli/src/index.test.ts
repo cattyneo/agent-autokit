@@ -179,6 +179,87 @@ describe("cli exit code contract", () => {
     assert.equal(loaded.find((entry) => entry.issue === 11)?.state, "merged");
     assert.ok(execs.some((entry) => entry.startsWith("gh pr view 31")));
   });
+
+  it("bridges production workflow events and audit operations to serve workflow hooks", async () => {
+    const root = makeTempDir();
+    writeTasks(root, [task({ issue: 9, state: "queued" })]);
+    const events: Array<{ kind: string; data: Record<string, unknown> }> = [];
+    const audits: Array<{ kind: string; fields: Record<string, unknown> }> = [];
+    const runnerCalls: AgentRunInput[] = [];
+    const harness = makeCliHarness(root, {
+      workflowMaxSteps: 1,
+      workflowRunner: async (input) => {
+        runnerCalls.push(input);
+        input.onStdout?.(
+          '{"status":"completed","data":{"summary":"plain-prompt-secret"},"api_key":"credential-json-literal"}',
+        );
+        if (input.phase === "plan_verify") {
+          return {
+            status: "completed",
+            summary: "verified",
+            structured: { result: "ok", findings: [] },
+          };
+        }
+        return {
+          status: "completed",
+          summary: "planned",
+          structured: { plan_markdown: "## Plan", assumptions: [], risks: [] },
+        };
+      },
+      execFile: (command, args) => {
+        if (command === "git" && args.join(" ") === "rev-parse HEAD") {
+          return "head-sha";
+        }
+        assert.deepEqual(
+          [command, ...args],
+          ["gh", "issue", "view", "9", "--json", "number,title,body,labels,state,url"],
+        );
+        return JSON.stringify({ number: 9, title: "AK-009", body: "Issue body" });
+      },
+      startServe: async (input) => {
+        await input.runWorkflow({
+          repoRoot: root,
+          operation: "run",
+          issue: 9,
+          run_id: "run-serve",
+          emitEvent: (event) => {
+            events.push(event);
+            return String(events.length);
+          },
+          auditOperation: (kind, fields) => {
+            audits.push({ kind, fields });
+          },
+        });
+        return {
+          host: input.host ?? "127.0.0.1",
+          port: 49152,
+          tokenPath: "/tmp/token",
+          close: async () => {},
+        };
+      },
+    });
+
+    assert.equal(await runCli(["serve", "--port", "0"], harness.deps), 0);
+    assert.deepEqual(
+      runnerCalls.map((call) => call.phase),
+      ["plan", "plan_verify"],
+    );
+    assert.ok(
+      events.some((event) => event.kind === "phase_started" && event.data.phase === "plan"),
+    );
+    assert.ok(
+      events.some(
+        (event) =>
+          event.kind === "runner_stdout" &&
+          String(event.data.chunk).includes("credential-json-literal"),
+      ),
+    );
+    assert.ok(
+      audits.some(
+        (audit) => audit.kind === "phase_completed" && audit.fields.phase === "plan_verify",
+      ),
+    );
+  });
 });
 
 describe("cli task commands", () => {

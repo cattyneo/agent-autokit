@@ -235,7 +235,7 @@ SSE frame payload:
 | `task_state` | `{ "issue": number, "state": string, "runtime_phase": string, "updated_at": string }` |
 | `phase_started` / `phase_finished` | `{ "issue": number, "phase": string, "provider"?: string, "effort"?: string, "at": string }` |
 | `audit` | `{ "kind": string, "issue"?: number, "message"?: string, "details"?: object, "at": string }` (redact 済み) |
-| `runner_stdout` | `{ "issue": number, "phase": string, "chunk": string, "at": string }` (debug + redact 済み) |
+| `runner_stdout` | `{ "issue": number, "phase": string, "chunk": string, "at": string, "truncated"?: boolean }` (debug + redact 済み) |
 | `heartbeat` | `{}` |
 | `error` | `{ "code": string, "message": string }` |
 
@@ -250,6 +250,7 @@ logs / events は logger 出力後の sanitize 済み event のみ配信。生 s
 - `~/.claude/credentials*` の値 (同)
 - `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CODEX_API_KEY` の値 (CLAUDE.md / SPEC §11.1)
 - prompt_contract `data` payload (構造化 field 含めて) は SSE 出力前に同 redactor (`phase1-core-cli-runner.md` §9.1 public redaction API) を **必ず通す**
+- JSON-like な `data` / credential key (`api_key`, `client_secret`, `private_key` 等) を含む stdout 文字列も raw 表示しない
 - diff は `phase1-core-cli-runner.md` §9.2 の **2 段 redact** (path-based hunk 除去 + 全 hunk body content redaction) 後を配信
 
 レスポンスヘッダ: `Content-Type: text/event-stream; charset=utf-8` + `X-Content-Type-Options: nosniff` + `Cache-Control: no-cache, no-transform`。
@@ -257,8 +258,9 @@ logs / events は logger 出力後の sanitize 済み event のみ配信。生 s
 #### 1.4.3 disconnect / reconnect / Last-Event-ID
 
 - 各 event に **`id:` field を付与** (monotonic ULID 推奨)
+- redaction 後の 1 frame は 64 KiB 以下に制限する。oversized `runner_stdout` は `chunk` を truncate して `truncated=true` を付与し、なお制限を超える payload は固定文言の `error` event へ置換する
 - client が `Last-Event-ID: <id>` ヘッダ付きで再接続した場合、server は **直近 N=64 event のリングバッファ** から欠損分を replay (古すぎる場合は `error` event で client に full reload を促す)
-- 接続前の同時接続上限超過は 503。headers 送信後の SSE stream では HTTP status を変更できないため、writable buffer 満杯時は `error` event (`code="backpressure"`) を送れる場合は送ってから close、送れない場合は即 close する (silent drop 禁止)
+- 接続前の同時接続上限超過は 503。headers 送信後の SSE stream では HTTP status を変更できないため、writable buffer 満杯時は `error` event (`code="backpressure"`) を送れる場合は送ってから close、送れない場合は即 close する。SSE client write 失敗は `sse_write_failed` audit kind で記録し、workflow / mutation の成否には波及させない (silent drop 禁止)
 
 #### 1.4.4 heartbeat
 

@@ -38,6 +38,7 @@ import {
   createAutokitLogger,
   DEFAULT_CONFIG,
   loadTasksFile,
+  type OperationalAuditKind,
   type PhaseOverride,
   parseConfigYaml,
   parseGhMergeability,
@@ -59,6 +60,7 @@ import {
   runMergeWorkflow,
   runPlanningWorkflow,
   runReviewSuperviseWorkflow,
+  type WorkflowEvent,
   type WorkflowQuestionInput,
   type WorkflowRunner,
 } from "@cattyneo/autokit-workflows";
@@ -81,6 +83,8 @@ export type RunProductionWorkflowOptions = {
   maxSteps?: number;
   now?: () => string;
   phaseOverride?: PhaseOverrideInput;
+  auditOperation?: (kind: OperationalAuditKind, fields: Record<string, unknown>) => void;
+  workflowEvent?: (event: WorkflowEvent) => void;
 };
 
 type AppliedPhaseOverride = {
@@ -108,6 +112,10 @@ export async function runProductionWorkflow(
     const config = loadConfig(options.cwd);
     logger = createWorkflowLogger(options.cwd, config, options.now);
     const execFile = options.execFile ?? defaultExecFile(options.cwd, options.env);
+    const auditOperation = (kind: OperationalAuditKind, fields: Record<string, unknown>) => {
+      logger?.auditOperation(kind, fields);
+      options.auditOperation?.(kind, fields);
+    };
     tasksFile = loadTasksFile(tasksFilePath);
     const activeTasksFile = tasksFile;
     task = selectActiveTask(activeTasksFile.tasks, options.issue);
@@ -142,8 +150,9 @@ export async function runProductionWorkflow(
           getHeadSha: () =>
             execFile("git", buildGitRevParseHeadArgs(), { cwd: options.cwd }).trim(),
           persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
-          auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
+          auditOperation,
           auditFailure: (input) => logger?.auditFailure(input),
+          workflowEvent: options.workflowEvent,
           buildPrompt: (input) =>
             buildPrompt(
               options.cwd,
@@ -172,8 +181,9 @@ export async function runProductionWorkflow(
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
-          auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
+          auditOperation,
           auditFailure: (input) => logger?.auditFailure(input),
+          workflowEvent: options.workflowEvent,
           buildPrompt: (input) =>
             buildPrompt(
               options.cwd,
@@ -205,8 +215,9 @@ export async function runProductionWorkflow(
               cwd: reviewWorktreePath,
             }).trim(),
           persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
-          auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
+          auditOperation,
           auditFailure: (input) => logger?.auditFailure(input),
+          workflowEvent: options.workflowEvent,
           buildPrompt: (input) =>
             buildPrompt(
               options.cwd,
@@ -233,8 +244,9 @@ export async function runProductionWorkflow(
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
           persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
-          auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
+          auditOperation,
           auditFailure: (input) => logger?.auditFailure(input),
+          workflowEvent: options.workflowEvent,
           buildPrompt: (input) =>
             buildPrompt(
               options.cwd,

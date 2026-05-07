@@ -329,6 +329,7 @@ describe("cli task commands", () => {
       2,
     );
     assert.equal(await runCli(["run", "--provider", "codex"], harness.deps), 2);
+    assert.equal(await runCli(["run", "--phase", "plan", "--effort", "xhigh"], harness.deps), 2);
     assert.equal(
       await runCli(["run", "--phase", "plan", "--provider", "unknown"], harness.deps),
       2,
@@ -336,6 +337,7 @@ describe("cli task commands", () => {
     assert.equal(dispatched, false);
     assert.match(harness.stderr(), /unsupported override phase: ci_wait/);
     assert.match(harness.stderr(), /--provider and --effort require --phase/);
+    assert.match(harness.stderr(), /unsupported override effort: xhigh/);
     assert.match(harness.stderr(), /unsupported override provider: unknown/);
   });
 

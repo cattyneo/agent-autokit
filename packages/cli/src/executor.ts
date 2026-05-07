@@ -79,6 +79,12 @@ export type RunProductionWorkflowOptions = {
   phaseOverride?: PhaseOverrideInput;
 };
 
+type AppliedPhaseOverride = {
+  issue: number;
+  phase: PhaseOverrideInput["phase"];
+  previousProviderSession: TaskEntry["provider_sessions"]["plan"];
+};
+
 const DEFAULT_MAX_STEPS = 100;
 const API_KEY_ENV_NAMES = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY"] as const;
 
@@ -92,24 +98,31 @@ export async function runProductionWorkflow(
   }
 
   let logger: AutokitLogger | undefined;
+  let tasksFile: TasksFile | undefined;
+  let task: TaskEntry | undefined;
+  let phaseOverrideRunId: string | undefined;
+  let appliedPhaseOverride: AppliedPhaseOverride | undefined;
   try {
     const config = loadConfig(options.cwd);
     logger = createWorkflowLogger(options.cwd, config, options.now);
     const execFile = options.execFile ?? defaultExecFile(options.cwd, options.env);
-    const tasksFile = loadTasksFile(tasksFilePath);
-    let task = selectActiveTask(tasksFile.tasks);
+    tasksFile = loadTasksFile(tasksFilePath);
+    const activeTasksFile = tasksFile;
+    task = selectActiveTask(activeTasksFile.tasks);
     if (task === undefined) {
-      return tasksFile.tasks;
+      return activeTasksFile.tasks;
     }
-    const phaseOverrideRunId = createRunId(options.now);
-    task = applyPhaseOverrideForRun(
+    phaseOverrideRunId = createRunId(options.now);
+    const applied = applyPhaseOverrideForRun(
       tasksFilePath,
-      tasksFile,
+      activeTasksFile,
       task,
       options.phaseOverride,
       phaseOverrideRunId,
       logger,
     );
+    task = applied.task;
+    appliedPhaseOverride = applied.applied;
 
     const issueContext = createIssueContextLoader(task.issue, options.cwd, execFile, logger);
     const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
@@ -126,7 +139,7 @@ export async function runProductionWorkflow(
           answerQuestion: options.answerQuestion,
           getHeadSha: () =>
             execFile("git", buildGitRevParseHeadArgs(), { cwd: options.cwd }).trim(),
-          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
           auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
           buildPrompt: (input) =>
             buildPrompt(
@@ -142,7 +155,7 @@ export async function runProductionWorkflow(
           writePlan(options.cwd, result.task, result.planMarkdown);
         }
         task = result.task;
-        persistTask(tasksFilePath, tasksFile, task);
+        persistTask(tasksFilePath, activeTasksFile, task);
         continue;
       }
 
@@ -154,7 +167,7 @@ export async function runProductionWorkflow(
           worktreeRoot: worktreePath(options.cwd, task),
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
-          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
           auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
           buildPrompt: (input) =>
             buildPrompt(
@@ -168,7 +181,7 @@ export async function runProductionWorkflow(
           git: createGitDeps(options.cwd, task, config, execFile),
         });
         task = result.task;
-        persistTask(tasksFilePath, tasksFile, task);
+        persistTask(tasksFilePath, activeTasksFile, task);
         continue;
       }
 
@@ -185,7 +198,7 @@ export async function runProductionWorkflow(
             execFile("git", buildGitRevParseHeadArgs(), {
               cwd: reviewWorktreePath,
             }).trim(),
-          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
           auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
           buildPrompt: (input) =>
             buildPrompt(
@@ -199,7 +212,7 @@ export async function runProductionWorkflow(
         });
         writeReviewArtifact(options.cwd, result.task, result.findings);
         task = result.task;
-        persistTask(tasksFilePath, tasksFile, task);
+        persistTask(tasksFilePath, activeTasksFile, task);
         continue;
       }
 
@@ -211,7 +224,7 @@ export async function runProductionWorkflow(
           worktreeRoot: worktreePath(options.cwd, task),
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
-          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
           auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
           buildPrompt: (input) =>
             buildPrompt(
@@ -225,7 +238,7 @@ export async function runProductionWorkflow(
           git: createGitDeps(options.cwd, task, config, execFile),
         });
         task = result.task;
-        persistTask(tasksFilePath, tasksFile, task);
+        persistTask(tasksFilePath, activeTasksFile, task);
         continue;
       }
 
@@ -234,11 +247,11 @@ export async function runProductionWorkflow(
           config,
           repoRoot: options.cwd,
           runner: options.runner ?? defaultRunner(options.env),
-          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
           github: createCiDeps(execFile, options.cwd, logger),
         });
         task = result.task;
-        persistTask(tasksFilePath, tasksFile, task);
+        persistTask(tasksFilePath, activeTasksFile, task);
         continue;
       }
 
@@ -247,11 +260,11 @@ export async function runProductionWorkflow(
           config,
           repoRoot: options.cwd,
           runner: options.runner ?? defaultRunner(options.env),
-          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
           github: createMergeDeps(execFile, options.cwd, logger),
         });
         task = result.task;
-        persistTask(tasksFilePath, tasksFile, task);
+        persistTask(tasksFilePath, activeTasksFile, task);
         continue;
       }
 
@@ -260,20 +273,42 @@ export async function runProductionWorkflow(
           config,
           repoRoot: options.cwd,
           runner: options.runner ?? defaultRunner(options.env),
-          persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
+          persistTask: (next) => persistTask(tasksFilePath, activeTasksFile, next),
           cleanup: createCleanupDeps(execFile, options.cwd, logger),
         });
         task = result.task;
-        persistTask(tasksFilePath, tasksFile, task);
+        persistTask(tasksFilePath, activeTasksFile, task);
         continue;
       }
 
       break;
     }
 
-    task = clearPhaseOverrideForRun(tasksFilePath, tasksFile, task, phaseOverrideRunId, logger);
-    return tasksFile.tasks;
+    if (appliedPhaseOverride !== undefined) {
+      task = clearPhaseOverrideForRun(
+        tasksFilePath,
+        activeTasksFile,
+        appliedPhaseOverride,
+        phaseOverrideRunId,
+        logger,
+      );
+    }
+    return activeTasksFile.tasks;
   } finally {
+    if (
+      logger !== undefined &&
+      tasksFile !== undefined &&
+      phaseOverrideRunId !== undefined &&
+      appliedPhaseOverride !== undefined
+    ) {
+      clearPhaseOverrideForRun(
+        tasksFilePath,
+        tasksFile,
+        appliedPhaseOverride,
+        phaseOverrideRunId,
+        logger,
+      );
+    }
     logger?.close();
   }
 }
@@ -296,18 +331,16 @@ function applyPhaseOverrideForRun(
   phaseOverride: PhaseOverrideInput | undefined,
   runId: string,
   logger: AutokitLogger,
-): TaskEntry {
-  if (
-    task.runtime.phase_override !== null &&
-    task.runtime.phase_override.expires_at_run_id !== runId
-  ) {
+): { task: TaskEntry; applied?: AppliedPhaseOverride } {
+  if (task.runtime.phase_override !== null) {
     throw new Error(`stale phase_override for #${task.issue}`);
   }
   if (phaseOverride === undefined) {
-    return task;
+    return { task };
   }
 
   const next = cloneTask(task);
+  const previousProviderSession = { ...next.provider_sessions[phaseOverride.phase] };
   next.runtime.phase_override = { ...phaseOverride, expires_at_run_id: runId };
   persistTask(tasksFilePath, tasksFile, next);
   logger.auditOperation("phase_override_started", {
@@ -317,16 +350,23 @@ function applyPhaseOverrideForRun(
     effort: phaseOverride.effort ?? null,
     expires_at_run_id: runId,
   });
-  return next;
+  return {
+    task: next,
+    applied: { issue: next.issue, phase: phaseOverride.phase, previousProviderSession },
+  };
 }
 
 function clearPhaseOverrideForRun(
   tasksFilePath: string,
   tasksFile: TasksFile,
-  task: TaskEntry,
+  applied: AppliedPhaseOverride,
   runId: string,
   logger: AutokitLogger,
 ): TaskEntry {
+  const task = tasksFile.tasks.find((entry) => entry.issue === applied.issue);
+  if (task === undefined) {
+    throw new Error(`issue #${applied.issue} not found`);
+  }
   if (
     task.runtime.phase_override === null ||
     task.runtime.phase_override.expires_at_run_id !== runId
@@ -336,6 +376,7 @@ function clearPhaseOverrideForRun(
   const override = task.runtime.phase_override;
   const next = cloneTask(task);
   next.runtime.phase_override = null;
+  next.provider_sessions[applied.phase] = { ...applied.previousProviderSession };
   persistTask(tasksFilePath, tasksFile, next);
   logger.auditOperation("phase_override_ended", {
     issue: next.issue,

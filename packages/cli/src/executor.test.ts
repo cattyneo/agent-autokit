@@ -164,7 +164,10 @@ phases:
     assert.equal(calls[0].effective_permission?.permission_profile, "readonly_repo");
     assert.equal(calls[0].effort?.effort, "high");
     assert.equal(tasks[0].runtime.phase_override, null);
-    assert.equal(loadTasksFile(tasksPath(root)).tasks[0].runtime.phase_override, null);
+    assert.equal(tasks[0].provider_sessions.plan.last_provider, null);
+    const persisted = loadTasksFile(tasksPath(root)).tasks[0];
+    assert.equal(persisted.runtime.phase_override, null);
+    assert.equal(persisted.provider_sessions.plan.last_provider, null);
     const logText = readFileSync(join(root, ".autokit", "logs", "2026-05-05.log"), "utf8");
     assert.match(logText, /"kind":"phase_override_started"/);
     assert.match(logText, /"kind":"phase_override_ended"/);
@@ -217,6 +220,37 @@ phases:
     assert.equal(implementCall.permissions.workspaceScope, "worktree");
   });
 
+  it("clears one-run phase override when a post-workflow write fails", async () => {
+    const root = makeTempDir();
+    writeFastConfig(root);
+    writePromptAssets(root);
+    const nextTask = task(58);
+    nextTask.plan.path = "blocked/plan.md";
+    writeTasks(root, [nextTask]);
+    writeFileSync(join(root, "blocked"), "not a directory", { mode: 0o600 });
+
+    await assert.rejects(
+      () =>
+        runProductionWorkflow({
+          cwd: root,
+          env: {},
+          execFile: mockExecFile([]),
+          runner: queueRunner([]),
+          maxSteps: 1,
+          now: () => NOW,
+          phaseOverride: { phase: "plan", provider: "codex" },
+        }),
+      /ENOTDIR|EEXIST/,
+    );
+
+    const persisted = loadTasksFile(tasksPath(root)).tasks[0];
+    assert.equal(persisted.runtime.phase_override, null);
+    assert.equal(persisted.provider_sessions.plan.last_provider, null);
+    const logText = readFileSync(join(root, ".autokit", "logs", "2026-05-05.log"), "utf8");
+    assert.match(logText, /"kind":"phase_override_started"/);
+    assert.match(logText, /"kind":"phase_override_ended"/);
+  });
+
   it("fails closed on stale phase overrides before runner dispatch", async () => {
     const root = makeTempDir();
     writeFastConfig(root);
@@ -224,7 +258,7 @@ phases:
     staleTask.runtime.phase_override = {
       phase: "plan",
       provider: "codex",
-      expires_at_run_id: "previous-run",
+      expires_at_run_id: `run-${NOW}`,
     };
     writeTasks(root, [staleTask]);
     const calls: AgentRunInput[] = [];

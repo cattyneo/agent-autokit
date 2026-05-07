@@ -111,6 +111,8 @@ export async function runProductionWorkflow(
           repoRoot: options.cwd,
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
+          getHeadSha: () =>
+            execFile("git", buildGitRevParseHeadArgs(), { cwd: options.cwd }).trim(),
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
           auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
           buildPrompt: (input) =>
@@ -158,12 +160,18 @@ export async function runProductionWorkflow(
       }
 
       if (task.state === "reviewing") {
+        const reviewTask = task;
+        const reviewWorktreePath = worktreePath(options.cwd, reviewTask);
         const result = await runReviewSuperviseWorkflow(task, {
           config,
           repoRoot: options.cwd,
-          worktreeRoot: worktreePath(options.cwd, task),
+          worktreeRoot: reviewWorktreePath,
           runner: options.runner ?? defaultRunner(options.env),
           answerQuestion: options.answerQuestion,
+          getHeadSha: () =>
+            execFile("git", buildGitRevParseHeadArgs(), {
+              cwd: reviewWorktreePath,
+            }).trim(),
           persistTask: (next) => persistTask(tasksFilePath, tasksFile, next),
           auditOperation: (kind, fields) => logger?.auditOperation(kind, fields),
           buildPrompt: (input) =>

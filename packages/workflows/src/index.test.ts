@@ -167,11 +167,13 @@ describe("planning workflow", () => {
     const calls: AgentRunInput[] = [];
     const audits: Array<Record<string, unknown>> = [];
     const persisted: Array<boolean | null> = [];
+    const events: string[] = [];
     let invocation = 0;
 
     const result = await runPlanningWorkflow(baseTask(), {
       runner: async (input) => {
         calls.push(input);
+        events.push(`runner:${input.phase}`);
         invocation += 1;
         if (invocation === 1) {
           throw Object.assign(new Error("bad schema"), { code: "prompt_contract_violation" });
@@ -183,8 +185,14 @@ describe("planning workflow", () => {
       },
       repoRoot: "/repo/root",
       homeDir: "/Users/tester",
-      auditOperation: (kind, fields) => audits.push({ kind, ...fields }),
+      auditOperation: (kind, fields) => {
+        events.push(`audit:${kind}`);
+        audits.push({ kind, ...fields });
+      },
       persistTask: (task) => {
+        if (task.runtime.phase_self_correct_done === true) {
+          events.push("persist:self-correct");
+        }
         persisted.push(task.runtime.phase_self_correct_done);
       },
       now: () => "2026-05-05T10:00:00+09:00",
@@ -198,6 +206,12 @@ describe("planning workflow", () => {
     assert.equal(audits[0].kind, "phase_self_correct");
     assert.equal(audits[0].phase, "plan");
     assert.deepEqual(persisted.slice(0, 2), [false, true]);
+    assert.deepEqual(events.slice(0, 4), [
+      "runner:plan",
+      "persist:self-correct",
+      "audit:phase_self_correct",
+      "runner:plan",
+    ]);
   });
 
   it("fails the second prompt contract violation after self-correction was already persisted", async () => {
@@ -246,6 +260,34 @@ describe("planning workflow", () => {
     );
     assert.equal(audits[0].kind, "phase_self_correct");
     assert.equal(audits[0].phase, "plan");
+  });
+
+  it("self-corrects Codex plan_verify contract errors before retrying the same phase", async () => {
+    const calls: AgentRunInput[] = [];
+    let planVerifyInvocation = 0;
+
+    const result = await runPlanningWorkflow(baseTask(), {
+      runner: async (input) => {
+        calls.push(input);
+        if (input.phase === "plan") {
+          return completed("claude", { plan_markdown: "## Plan", assumptions: [], risks: [] });
+        }
+        planVerifyInvocation += 1;
+        if (planVerifyInvocation === 1) {
+          throw Object.assign(new Error("codex contract drift"), {
+            code: "prompt_contract_violation",
+          });
+        }
+        return completed("codex", { result: "ok", findings: [] });
+      },
+      repoRoot: "/repo",
+    });
+
+    assert.equal(result.task.state, "planned");
+    assert.deepEqual(
+      calls.map((call) => `${call.provider}:${call.phase}`),
+      ["claude:plan", "codex:plan_verify", "codex:plan_verify"],
+    );
   });
 
   it("answers need_input with default and resumes the same runner phase", async () => {
@@ -619,6 +661,79 @@ describe("implement and fix workflow", () => {
     assert.ok(persisted.includes(2));
     assert.ok(persisted.includes(0));
     assert.equal(calls.length, 1);
+  });
+
+  it("resets phase attempts after a resumed session returns runner output", async () => {
+    const calls: AgentRunInput[] = [];
+    const task = {
+      ...baseTask(),
+      state: "implementing" as const,
+      runtime_phase: "implement" as const,
+      runtime: { ...baseTask().runtime, phase_attempt: 2 },
+      branch: "autokit/issue-13",
+      worktree_path: ".autokit/worktrees/issue-13",
+      git: {
+        ...baseTask().git,
+        base_sha: "base-sha",
+        checkpoints: {
+          ...baseTask().git.checkpoints,
+          implement: { ...baseTask().git.checkpoints.implement, before_sha: "base-sha" },
+        },
+      },
+      provider_sessions: {
+        ...baseTask().provider_sessions,
+        implement: {
+          ...baseTask().provider_sessions.implement,
+          codex_session_id: "codex-implement-session",
+        },
+      },
+    };
+
+    const result = await runImplementWorkflow(task, {
+      runner: queueRunner(calls, [
+        completed("codex", {
+          changed_files: [],
+          tests_run: [],
+          docs_updated: false,
+          notes: "resumed",
+        }),
+      ]),
+      git: mockGitDeps(["agent-sha"], ["commit-sha"], {
+        prNumber: 51,
+        prHeadSha: "remote-head",
+      }),
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(result.task.state, "reviewing");
+    assert.equal(result.task.runtime.phase_attempt, 0);
+    assert.deepEqual(calls[0].resume, { codexSessionId: "codex-implement-session" });
+  });
+
+  it("fails review cold restart before rerunning the same phase for the third time", async () => {
+    const calls: AgentRunInput[] = [];
+    const task = {
+      ...reviewingTask(),
+      runtime: { ...reviewingTask().runtime, phase_attempt: 2 },
+      git: {
+        ...reviewingTask().git,
+        checkpoints: {
+          ...reviewingTask().git.checkpoints,
+          review: { before_sha: "head-sha", after_sha: null },
+        },
+      },
+    };
+
+    const result = await runReviewSuperviseWorkflow(task, {
+      runner: queueRunner(calls, [completed("claude", { findings: [] })]),
+      repoRoot: "/repo",
+      worktreeRoot: "/worktree",
+    });
+
+    assert.equal(result.task.state, "failed");
+    assert.equal(result.task.failure?.code, "phase_attempt_exceeded");
+    assert.equal(calls.length, 0);
   });
 
   it("resumes Codex sessions for crashed implement phases", async () => {

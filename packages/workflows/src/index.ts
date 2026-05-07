@@ -57,6 +57,7 @@ export type WorkflowOptions = {
   resolvedModels?: Record<string, string>;
   buildPrompt?: (input: WorkflowPromptInput) => string;
   answerQuestion?: (input: WorkflowQuestionInput) => Promise<string> | string;
+  getHeadSha?: (phase: RuntimePhase) => Promise<string> | string;
   persistTask?: (task: TaskEntry) => Promise<void> | void;
   auditOperation?: (kind: OperationalAuditKind, fields: Record<string, unknown>) => void;
   now?: () => string;
@@ -271,6 +272,7 @@ export async function runPlanningWorkflow(
   let task = cloneTask(inputTask);
   let planMarkdown: string | undefined;
   let verifierFindings: PlanVerifyFinding[] = [];
+  let phaseStartedInThisInvocation = false;
 
   if (task.state === "queued") {
     task = transitionTask(
@@ -278,6 +280,7 @@ export async function runPlanningWorkflow(
       { type: "run_started", resolvedModels: options.resolvedModels },
       config,
     );
+    phaseStartedInThisInvocation = true;
   }
 
   for (let guard = 0; guard < config.plan.max_rounds + 3; guard += 1) {
@@ -301,7 +304,10 @@ export async function runPlanningWorkflow(
         options,
         undefined,
         planMarkdown,
+        undefined,
+        { countColdRestart: !phaseStartedInThisInvocation },
       );
+      phaseStartedInThisInvocation = false;
       if (!completed.ok) {
         return { task: completed.task, planMarkdown, verifierFindings };
       }
@@ -309,6 +315,7 @@ export async function runPlanningWorkflow(
       planMarkdown = completed.data.plan_markdown;
       task.plan.state = "verifying";
       task = transitionTask(task, { type: "plan_completed" }, config);
+      phaseStartedInThisInvocation = true;
       continue;
     }
 
@@ -319,7 +326,10 @@ export async function runPlanningWorkflow(
         options,
         undefined,
         planMarkdown,
+        undefined,
+        { countColdRestart: !phaseStartedInThisInvocation },
       );
+      phaseStartedInThisInvocation = false;
       if (!completed.ok) {
         return { task: completed.task, planMarkdown, verifierFindings };
       }
@@ -330,6 +340,7 @@ export async function runPlanningWorkflow(
         return { task, planMarkdown, verifierFindings };
       }
       task = transitionTask(task, { type: "plan_verify_rejected" }, config);
+      phaseStartedInThisInvocation = true;
       if (task.state === "failed") {
         return { task, planMarkdown, verifierFindings };
       }
@@ -342,13 +353,17 @@ export async function runPlanningWorkflow(
       options,
       undefined,
       planMarkdown,
+      undefined,
+      { countColdRestart: !phaseStartedInThisInvocation },
     );
+    phaseStartedInThisInvocation = false;
     if (!completed.ok) {
       return { task: completed.task, planMarkdown, verifierFindings };
     }
     task = completed.task;
     planMarkdown = completed.data.plan_markdown;
     task = transitionTask(task, { type: "plan_fix_completed" }, config);
+    phaseStartedInThisInvocation = true;
   }
 
   return {
@@ -387,7 +402,15 @@ export async function runReviewSuperviseWorkflow(
     };
   }
 
-  const reviewCompleted = await runCompletedPhase<ReviewData>(task, "review", options);
+  const reviewCompleted = await runCompletedPhase<ReviewData>(
+    task,
+    "review",
+    options,
+    undefined,
+    undefined,
+    undefined,
+    { countColdRestart: task.git.checkpoints.review.before_sha !== null },
+  );
   if (!reviewCompleted.ok) {
     return { task: reviewCompleted.task, findings, acceptedIds: [], rejectedIds: [] };
   }
@@ -408,6 +431,7 @@ export async function runReviewSuperviseWorkflow(
     undefined,
     (data, nextTask) =>
       validateSupervisorDecision(sanitizeSuperviseData(data, options), findings, nextTask),
+    { countColdRestart: task.git.checkpoints.supervise.before_sha !== null },
   );
   if (!superviseCompleted.ok) {
     return { task: superviseCompleted.task, findings, acceptedIds: [], rejectedIds: [] };
@@ -1106,6 +1130,7 @@ async function runPhase(
   let coldRestartChecked = false;
   for (let turn = 0; turn < 3; turn += 1) {
     try {
+      currentTask = await ensureSimplePhaseBeforeCheckpoint(currentTask, phase, options);
       currentTask = await resolveAndPersistEffort(currentTask, phase, options);
       if (currentTask.state === "failed" || currentTask.state === "paused") {
         return { ok: false, task: currentTask };
@@ -1167,6 +1192,36 @@ async function runPhase(
       options,
     ),
   };
+}
+
+async function ensureSimplePhaseBeforeCheckpoint(
+  task: TaskEntry,
+  phase: Phase,
+  options: WorkflowOptions,
+): Promise<TaskEntry> {
+  if (!isSimpleCheckpointPhase(phase) || task.git.checkpoints[phase].before_sha !== null) {
+    return task;
+  }
+  const beforeSha = await options.getHeadSha?.(phase);
+  if (beforeSha === undefined || beforeSha.length === 0) {
+    return task;
+  }
+  const next = cloneTask(task);
+  next.git.checkpoints[phase].before_sha = beforeSha;
+  await persistTask(next, options);
+  return next;
+}
+
+function isSimpleCheckpointPhase(
+  phase: Phase,
+): phase is "plan" | "plan_verify" | "plan_fix" | "review" | "supervise" {
+  return (
+    phase === "plan" ||
+    phase === "plan_verify" ||
+    phase === "plan_fix" ||
+    phase === "review" ||
+    phase === "supervise"
+  );
 }
 
 async function prepareColdRestartAttempt(

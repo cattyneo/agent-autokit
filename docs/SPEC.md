@@ -470,7 +470,7 @@ tasks:
       interrupted_at: null           # ISO 中断時刻
       previous_state: null           # paused 時の戻り state (resume 復帰先)
       resolved_effort: null          # null | { phase, provider, effort, downgraded_from, timeout_ms }
-      phase_self_correct_done: null  # null | boolean。self-correction 実行済み判定は後続 Issue で消費
+      phase_self_correct_done: null  # null | boolean。self-correction 実行済み判定
       phase_override: null           # null | { phase, provider?, effort?, expires_at_run_id }
       resolved_model:                # queued → planning 遷移時に一括解決
         plan: null
@@ -1901,7 +1901,7 @@ audit イベントは info level で必ず記録する。**`paused` 遷移時の
 | `retry_pr_closed` | retry の事前処理 PR close 完了 (§6.2) |
 | `effort_downgrade` | workflow phase start で未サポート effort を `effort.unsupported_policy=downgrade` により下位 effort へ解決 |
 | `phase_self_correct` | 初回 prompt_contract 違反時に `runtime.phase_self_correct_done=false -> true` を永続化し、同一 phase を self-correction retry する直前 |
-| `phase_override_started` | `autokit phase-override` が phase/provider/effort override を開始 |
+| `phase_override_started` | `autokit run --phase / --provider / --effort` が per-run phase/provider/effort override を受理 |
 | `phase_override_ended` | phase override が正常完了、期限切れ、または retry/reset で終了 |
 
 ##### 10.2.2.2 failure 系 audit kind (`failure.code` 1:1)

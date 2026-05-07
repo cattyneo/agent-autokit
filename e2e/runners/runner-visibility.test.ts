@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  runAgentAssetQualityGate,
   runPromptAssetVisibilityGate,
   runRunnerVisibilitySelfTest,
   runSkillAssetQualityGate,
@@ -36,6 +37,25 @@ describe("runner visibility spike fixtures", () => {
     const fixture = await copyFixture();
     await overlayBundledSkill(fixture, "autokit-implement");
     await overlayBundledSkill(fixture, "autokit-review");
+
+    const result = await runRunnerVisibilitySelfTest(pathToFileURL(`${fixture}/`));
+
+    assert.deepEqual(result.failures, []);
+    assert.equal(result.passed, result.total);
+  });
+
+  it("keeps all phase visibility green when the fixture uses real bundled agents", async () => {
+    const fixture = await copyFixture();
+    for (const agent of [
+      "planner",
+      "plan-verifier",
+      "implementer",
+      "reviewer",
+      "supervisor",
+      "doc-updater",
+    ] as const) {
+      await overlayBundledAgent(fixture, agent);
+    }
 
     const result = await runRunnerVisibilitySelfTest(pathToFileURL(`${fixture}/`));
 
@@ -138,6 +158,82 @@ describe("prompt asset visibility gate", () => {
       "autokit-implement": "866d9ebb5364a579ac7d2a8fb79bb421bf9d7052",
       "autokit-review": "b95eddbaa3e3c671c657084d8919a0a34d031dec60a6228d08158514a742d7f5",
     });
+  });
+
+  it("keeps bundled agent assets aligned with capability boundaries", async () => {
+    const result = await runAgentAssetQualityGate();
+
+    assert.deepEqual(result.failures, []);
+    assert.deepEqual(result.agents, [
+      "planner",
+      "plan-verifier",
+      "implementer",
+      "reviewer",
+      "supervisor",
+      "doc-updater",
+    ]);
+    assert.deepEqual(result.checkedAgentAssets, [
+      "base:agents/planner.md",
+      "base:agents/plan-verifier.md",
+      "base:agents/implementer.md",
+      "base:agents/reviewer.md",
+      "base:agents/supervisor.md",
+      "base:agents/doc-updater.md",
+    ]);
+  });
+
+  it("fails closed when a bundled agent omits permission boundaries", async () => {
+    const assetsRoot = await copyAssets();
+    await writeFile(
+      join(assetsRoot, "agents", "implementer.md"),
+      ["# implementer", "", "Implement the assigned issue."].join("\n"),
+      "utf8",
+    );
+
+    await assertAgentGateFailure(assetsRoot, "base:agents/implementer.md");
+  });
+
+  it("fails closed when an unexpected base agent asset is bundled", async () => {
+    const assetsRoot = await copyAssets();
+    await writeFile(
+      join(assetsRoot, "agents", "security-reviewer.md"),
+      ["# security-reviewer", "", "Unexpected future agent."].join("\n"),
+      "utf8",
+    );
+
+    await assertAgentGateFailure(assetsRoot, "unexpected agent asset: security-reviewer.md");
+  });
+
+  it("fails closed when bundled agent sections are token-stuffed but empty", async () => {
+    const assetsRoot = await copyAssets();
+    await writeFile(
+      join(assetsRoot, "agents", "implementer.md"),
+      [
+        "# implementer",
+        "",
+        "`implement` `fix` `write_worktree` assigned worktree Do not run git `data.changed_files` `data.tests_run` `data.docs_updated` `data.resolved_accept_ids`",
+        "",
+        "## Role",
+        "Implement.",
+        "",
+        "## Do",
+        "",
+        "## Don't",
+        "",
+        "## Decision Rules",
+        "",
+        "## Permission Boundary",
+        "",
+        "## Source of Truth",
+        "",
+        "## AI Anti-Patterns",
+        "",
+        "## Output",
+      ].join("\n"),
+      "utf8",
+    );
+
+    await assertAgentGateFailure(assetsRoot, "invalid sections");
   });
 
   it("fails closed when a bundled skill omits prompt_contract fields", async () => {
@@ -291,8 +387,29 @@ async function overlayBundledSkill(
   );
 }
 
+async function overlayBundledAgent(
+  fixture: string,
+  agent: "planner" | "plan-verifier" | "implementer" | "reviewer" | "supervisor" | "doc-updater",
+): Promise<void> {
+  await cp(
+    fileURLToPath(new URL(`../../packages/cli/assets/agents/${agent}.md`, import.meta.url)),
+    join(fixture, ".agents", "agents", `${agent}.md`),
+  );
+}
+
 async function assertPromptGateFailure(assetsRoot: string, expectedFailure: string): Promise<void> {
   const result = await runPromptAssetVisibilityGate({
+    assetsRootUrl: pathToFileURL(`${assetsRoot}/`),
+  });
+  assert.notEqual(result.failures.length, 0);
+  assert.ok(
+    result.failures.some((failure) => failure.includes(expectedFailure)),
+    `expected failure containing ${expectedFailure}, got ${result.failures.join("; ")}`,
+  );
+}
+
+async function assertAgentGateFailure(assetsRoot: string, expectedFailure: string): Promise<void> {
+  const result = await runAgentAssetQualityGate({
     assetsRootUrl: pathToFileURL(`${assetsRoot}/`),
   });
   assert.notEqual(result.failures.length, 0);

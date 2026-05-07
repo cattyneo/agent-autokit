@@ -92,6 +92,8 @@ flowchart LR
 
 上限: `config.plan.max_rounds`（デフォルト 4）。
 
+`plan_verify` が NG の場合は `plan_fix` を必ず通す。`plan` / `plan_verify` / `plan_fix` はいずれも agent phase なので capability table と prompt-contract の対象。
+
 ### 2. レビューループ（review ↔ supervise ↔ fix）
 
 ```mermaid
@@ -140,6 +142,25 @@ flowchart LR
 | (CI 待ち / merge 中の paused) | それぞれ `ci_waiting` / `merging` |
 
 `runtime_phase` は terminal state（`merged` / `failed`）では `null` に落ちる（[SPEC §5.1.2](../../docs/SPEC.md)）。
+
+## runtime field と audit-only event
+
+v0.2.0 で増えた runtime field は state-machine event を増やさず、workflow 内の checkpoint として扱う。
+
+| field | 用途 | state-machine との関係 |
+|-------|------|------------------------|
+| `runtime.resolved_effort` | phase/provider/model/effort/timeout の解決結果 | runner dispatch 前に保存し、resume 時に再解決 drift を避ける |
+| `runtime.phase_self_correct_done` | prompt-contract 違反の self-correction retry を 1 回に制限 | `false` の初回違反は同 phase 内 retry、`true` の再違反は `prompt_contract_violation` |
+| `runtime.phase_override` | `autokit run --phase ...` の 1 run override | `expires_at_run_id` 到達で null に戻す |
+| `provider_sessions.<phase>` | Claude/Codex session id と last_provider | task 直下の field。resume 時の provider/session 選択に使う |
+
+以下は TransitionEvent ではなく audit-only:
+
+- `phase_self_correct`
+- `phase_override_started` / `phase_override_ended`
+- `phase_started` / `review_finding_seen` / `fix_started` / `fix_finished` / `review_started`
+
+理由: state / runtime_phase を変えない subphase event を state-machine union に入れず、SPEC §5 の「1 transition で state または runtime_phase が変化する」不変条件を守るため。
 
 ## state を増やすときの設計指針
 

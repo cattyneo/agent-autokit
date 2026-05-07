@@ -85,25 +85,89 @@ autokit cleanup --force-detach <issue>
 
 precondition チェック（PR が MERGED かつ head SHA 一致）を再評価し、OK なら interactive 確認のあと `merged` に確定。NG なら `merge_sha_mismatch` に降格して exit 1。
 
-### 5. CI failure ラウンド上限（`ci_failure_max`）
+### 5. review ラウンド上限（`review_max`）
+
+`config.review.max_rounds` 回まで fix を受容したあと、次の supervisor accept で上限を超えた。state は `failed`、exit code は `1`。
+
+**対処**:
+
+1. `.autokit/reviews/issue-{N}-review-{round}.md` と PR diff を確認し、finding が同じ原因で再発しているかを特定
+2. 同じ PR を手動で救済する場合は、autokit 外で修正 / push / merge / cleanup を完了させる
+3. autokit に戻す場合は clean-slate 復帰として:
+   ```bash
+   autokit retry <issue>
+   ```
+4. `retry` は既存 PR / branch / worktree を破棄し、`-retry-N` suffix の新規 branch / worktree で queue に戻す
+
+### 6. CI failure ラウンド上限（`ci_failure_max`）
 
 `config.ci.fix_max_rounds` 回試しても CI が直らない。
 
 **対処**:
 
 1. `gh pr checks <N>` で失敗チェックを確認
-2. 失敗が autokit の修正範囲を超える（インフラ起因 / flake / spec バグ）なら:
-   - 手動で修正コミット → push → CI 再実行
-   - 通ったら `autokit run` 再開（ci_waiting → merging へ進む）
-3. 諦める場合: PR を draft に戻す or close → `autokit retry <issue>` で全部やり直すか、手動運用へ移行
+2. state は `failed`、exit code は `1`。`autokit run` / `resume` では同じ task を先へ進めない
+3. CI failure の root cause を手動で直して同じ PR を救済する場合は、autokit 外で push / merge / cleanup まで完了させる
+4. autokit に戻す場合は clean-slate 復帰として:
+   ```bash
+   autokit retry <issue>
+   ```
+5. infra flake で同一 diff を再試行したいだけでも、autokit 上は `retry` で queue へ戻す
 
-### 6. CI timeout（`ci_timeout`）
+### 7. CI timeout（`ci_timeout`）
 
 経過時間が `config.ci.timeout_ms` 超過。`config.ci.timeout_action` 既定で `paused`。
 
 **対処**: GitHub Actions が単に遅い（runner 待ち等）なら、CI 完了を待ってから `autokit run` を再実行。常態的に長引くワークフローなら `config.yaml` で `ci.timeout_ms` を引き上げる。既定値は [04-configuration.md](./04-configuration.md) の `ci.*` フィールド表。
 
-### 7. `queue_corruption`
+### 8. unsupported effort（`effort_unsupported`）
+
+`effort.unsupported_policy=fail` の状態で、provider / model / effort の組合せが解決できない。
+
+**対処**:
+
+1. `autokit config show --matrix` で対象 phase / provider / effort を確認
+2. 対象 phase の `effort` を `auto` / `low` / `medium` / `high` の範囲で下げる
+3. 自動 downgrade を許す運用なら:
+   ```yaml
+   effort:
+     unsupported_policy: downgrade
+   ```
+4. 修正後に `autokit run` を再実行
+
+`downgrade` は成功時に audit kind `effort_downgrade` を残し、`runtime.resolved_effort.downgraded_from` に元 effort を保存する。
+
+### 9. prompt contract 違反（`prompt_contract_violation`）
+
+runner 出力が phase 固有 schema に合わず、1 回限りの self-correction retry 後も直らなかった。state は `failed`、exit code は `1`。
+
+**よくある原因**:
+
+- `status=need_input` なのに `question.default` が無い
+- `completed` なのに phase 固有 `data` が不足
+- provider が別 phase の `promptContract` 用 payload を返した
+
+**対処**:
+
+1. `.autokit/logs/` の該当 phase と `failure.message` を確認
+2. `.agents/prompts/<contract>.md` / bundled skill / agent asset が drift していないか確認
+3. asset を直したら `autokit doctor` で prompt contract セットを確認
+4. autokit でやり直す場合は:
+   ```bash
+   autokit retry <issue>
+   ```
+
+### 10. phase cold restart 上限（`phase_attempt_exceeded`）
+
+同一 `runtime_phase` で cold restart が 3 回連続で失敗した。state は `failed`、exit code は `1`。
+
+**対処**:
+
+1. `.autokit/logs/` の直近 3 回分で、runner 起動前後の同じ例外が繰り返されていないか確認
+2. provider auth / worktree corruption / prompt asset / repository precondition を直す
+3. 修正後、autokit に戻す場合は `autokit retry <issue>` で clean-slate 復帰する
+
+### 11. `queue_corruption`
 
 tasks.yaml が壊れた / atomic write 中に強制終了した等。
 
@@ -117,15 +181,43 @@ autokit retry --recover-corruption <issue>
 
 `.autokit/.backup/<timestamp>/` は **`autokit init` の rollback 専用** であり、tasks.yaml の corruption 復旧には使われない。混同しないこと。
 
-### 8. lock 残留（`autokit run` 起動時の lock エラー）
+### 12. preset apply abort（`preset_path_traversal` / `preset_blacklist_hit`）
 
-過去の run が SIGKILL 等で `.autokit/lock` を残したまま終了。
+`autokit preset show|apply` が state machine を経由せずに abort した。`tasks.yaml` の task entry は作られない。
 
-**対処**: グローバル `--force-unlock` フラグは v0.1.0 では CLI 登録のみで未実装。lock ファイルを実機で確認し、対象 PID が生きていないことを確認した上で:
+**原因**:
+
+- `preset_path_traversal`: 絶対 path / `..` / symlink / NUL byte / `.agents` 外 realpath。
+- `preset_blacklist_hit`: `.env*` / `.codex/**` / `.claude/credentials*` / private key / token-like content / protected array 違反。
+
+**対処**:
+
+1. local preset (`.autokit/presets/<name>`) を使っている場合は、問題の entry を削除またはリネーム
+2. protected array を本当に置換する必要がある場合だけ `--allow-protected-replace` を検討
+3. ただし capability table 由来 hard cap を超える `allowed_tools` 拡大は flag ありでも拒否される
+4. 修正後に `autokit preset show <name>`、`autokit preset apply <name>`、`autokit doctor` の順で確認
+
+stderr / audit はカテゴリ表現のみを出すため、機密 path や token literal は表示されない。
+
+### 13. lock host mismatch（`lock_host_mismatch`）
+
+CLI 起動時に既存 lock holder の host が現在の実行 host と一致しない。これは CLI 経路の起動拒否であり、serve の HTTP 409 (`serve_lock_busy`) とは別契約。
+
+**対処**:
+
+1. 共有 filesystem / NFS / 同期フォルダ上で同じ repo を複数 host から動かしていないか確認
+2. holder が本当に stale か、別 host の autokit がまだ実行中かを確認
+3. `--force-unlock` は CLI 登録のみで未実装なので、強制解除が必要なら holder の PID / `started_at_lstart` / host を確認してから lock を手動除去する
+
+### 14. lock 残留（`autokit run` 起動時の lock エラー）
+
+過去の run / serve / preset apply が SIGKILL 等で `.autokit/.lock/` を残したまま終了。
+
+**対処**: グローバル `--force-unlock` フラグは CLI 登録のみで未実装。`holder.json` の PID が生きていないこと、`started_at_lstart` が別プロセスを指していないことを確認した上で:
 
 ```bash
 # 例（実体ファイルを直接削除する場合）
-rm .autokit/lock
+rm -rf .autokit/.lock
 ```
 
 その後 `autokit run` 再実行。
@@ -148,6 +240,10 @@ rm .autokit/lock
 - `branch_deleted`
 - `sanitize_pass_hmac`
 - `init_rollback` / `init_rollback_failed`
+- `effort_downgrade`
+- `phase_self_correct`
+- `preset_apply_started` / `preset_apply_finished` / rollback 系
+- `serve_lock_busy` / `sse_write_failed`
 
 順序確認・誰が何をしたかの追跡に使える。`audit-hmac-key` が漏れたら全イベントの真正性が崩れるので、外部に出さない。
 

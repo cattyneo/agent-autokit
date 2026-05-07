@@ -13,8 +13,11 @@ target-repo/
 │  ├─ tasks.yaml               タスクキューと state（atomic write）
 │  ├─ audit-hmac-key           監査ログ署名鍵（mode 0600、再生成厳禁）
 │  ├─ init-audit.jsonl         init rollback 等の監査ログ
+│  ├─ .gitignore               runtime state 全体を git 追跡外に固定
+│  ├─ .lock/                   cross-process lock（mode 0700、実行時のみ）
 │  ├─ logs/                    各 run のログ（run 時生成）
 │  ├─ reviews/                 レビュー成果物 (issue-{N}-review-{round}.md)
+│  ├─ presets/                 repository-local preset（任意、git 追跡外）
 │  └─ .backup/<timestamp>/     init 時バックアップ。正常終了で削除
 ├─ .agents/
 │  ├─ agents/
@@ -64,20 +67,27 @@ auto_merge: true
 | `merge.worktree_remove_retry_max` | `3` | worktree 削除リトライ上限 |
 | `label_filter` | `[]` | schema は受理するが v0.1.0 では未参照。label フィルタは `autokit add --label` のみ |
 | `runtime.max_untrusted_input_kb` | `256` | runner 入力サイズ上限 |
+| `effort.default` | `medium` | phase が effort 未指定のときの既定値 |
+| `effort.unsupported_policy` | `fail` | unsupported tuple を失敗にするか downgrade するか |
+| `serve.lock.host_redact` | `false` | lock holder host を短縮 hash 表示にする |
+| `serve.sse.max_connections` | `8` | SSE 同時接続上限 |
+| `serve.sse.heartbeat_ms` | `15000` | SSE heartbeat 間隔 |
 
 ### `phases.<phase>` フィールド
 
 各フェーズで使う provider / model / prompt_contract を上書きできる。デフォルトは:
 
-| phase | provider | model | prompt_contract |
-|-------|----------|-------|-----------------|
-| `plan` | `claude` | `auto` | `plan` |
-| `plan_verify` | `codex` | `auto` | `plan-verify` |
-| `plan_fix` | `claude` | `auto` | `plan-fix` |
-| `implement` | `codex` | `auto` | `implement` |
-| `review` | `claude` | `auto` | `review` |
-| `supervise` | `claude` | `auto` | `supervise` |
-| `fix` | `codex` | `auto` | `fix` |
+| phase | provider | model | effort | prompt_contract | permission profile |
+|-------|----------|-------|--------|-----------------|--------------------|
+| `plan` | `claude` | `auto` | top-level default | `plan` | `readonly_repo` |
+| `plan_verify` | `codex` | `auto` | top-level default | `plan-verify` | `readonly_repo` |
+| `plan_fix` | `claude` | `auto` | top-level default | `plan-fix` | `readonly_repo` |
+| `implement` | `codex` | `auto` | top-level default | `implement` | `write_worktree` |
+| `review` | `claude` | `auto` | top-level default | `review` | `readonly_worktree` |
+| `supervise` | `claude` | `auto` | top-level default | `supervise` | `readonly_worktree` |
+| `fix` | `codex` | `auto` | top-level default | `fix` | `write_worktree` |
+
+`ci_wait` / `merge` は GitHub 操作のみの core workflow step であり、provider / effort / prompt_contract の対象外。
 
 `model: auto` は CLI 既定モデル。明示指定する場合の例:
 
@@ -86,7 +96,22 @@ phases:
   implement:
     provider: codex
     model: gpt-5-codex
+    effort: high
 ```
+
+`effort` の値は `auto` / `low` / `medium` / `high`。`minimal` / `xhigh` / `max` は v0.2.0 では受理しない。
+
+### `effort`
+
+```yaml
+effort:
+  default: medium
+  unsupported_policy: fail   # fail | downgrade
+```
+
+- `fail`: provider/model が要求 effort を扱えない場合、`failure.code=effort_unsupported` で停止。
+- `downgrade`: `high -> medium -> low -> auto` の 1 段階 downgrade を試み、成功時は audit kind `effort_downgrade` を残す。
+- 解決結果は `tasks.yaml.runtime.resolved_effort` に保存される。
 
 ### `permissions`
 
@@ -108,16 +133,29 @@ permissions:
 
 ### `runner_timeout`
 
-phase ごとのタイムアウト ms。未指定は `default_ms` (`600000` = 10 分) にフォールバック。
+phase ごとのタイムアウト ms。明示 phase timeout が最優先で、未指定なら resolved effort timeout、`default_ms`、phase default の順にフォールバックする。
 
 | キー | デフォルト | 備考 |
 |------|-----------|------|
-| `plan_ms` | `600000` | 10 分 |
-| `implement_ms` | `1800000` | 30 分 |
-| `review_ms` | `600000` | 10 分 |
-| `default_ms` | `600000` | フォールバック |
+| `plan_ms` / `implement_ms` / `review_ms` | unset | 明示時は effort timeout より優先 |
+| `default_ms` | unset | phase 固有 timeout と resolved effort timeout がない場合の共通 fallback |
 | `default_idle_ms` | `300000` | runner 沈黙検知 |
-| `plan_verify_ms` / `plan_fix_ms` / `supervise_ms` / `fix_ms` | unset | unset なら `default_ms` |
+| `plan_verify_ms` / `plan_fix_ms` / `supervise_ms` / `fix_ms` | unset | unset なら effort timeout、`default_ms`、phase default の順で解決 |
+
+phase 固有 timeout が未指定なら、`resolveRunnerTimeout(config, phase, resolvedEffort)` が effort 由来 timeout (`auto` / `medium` は 30 分、`low` は 20 分、`high` は 60 分)、`default_ms`、phase default の順で必ず number を返す。
+
+### `serve`
+
+```yaml
+serve:
+  lock:
+    host_redact: false
+  sse:
+    max_connections: 8
+    heartbeat_ms: 15000
+```
+
+`autokit serve` と CLI write command は同じ `.autokit/.lock/` を使う。lock holder は mode `0700` directory + mode `0600` `holder.json` で、wrong-token release は lock を変更しない。
 
 ### `logging`
 
@@ -171,7 +209,18 @@ backup blacklist にマッチするファイルが既に存在する状態で `i
   failure: null
   timestamps: {...}
   cleaning_progress: {...}
-  runtime: { resolved_model: "..." }
+  provider_sessions:
+    plan: { claude_session_id: "...", codex_session_id: null, last_provider: claude }
+  runtime:
+    resolved_model: "..."
+    resolved_effort:
+      phase: implement
+      provider: codex
+      effort: high
+      downgraded_from: null
+      timeout_ms: 1800000
+    phase_self_correct_done: false
+    phase_override: null
 ```
 
 state（取りうる値）:

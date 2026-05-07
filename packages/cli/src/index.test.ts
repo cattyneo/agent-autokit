@@ -315,6 +315,9 @@ describe("cli task commands", () => {
         };
       },
       execFile: (command, args) => {
+        if (command === "git" && args.join(" ") === "rev-parse HEAD") {
+          return "head-sha";
+        }
         assert.deepEqual(
           [command, ...args],
           ["gh", "issue", "view", "9", "--json", "number,title,body,labels,state,url"],

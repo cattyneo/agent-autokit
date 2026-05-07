@@ -57,6 +57,7 @@ export type WorkflowOptions = {
   resolvedModels?: Record<string, string>;
   buildPrompt?: (input: WorkflowPromptInput) => string;
   answerQuestion?: (input: WorkflowQuestionInput) => Promise<string> | string;
+  getHeadSha?: (phase: RuntimePhase) => Promise<string> | string;
   persistTask?: (task: TaskEntry) => Promise<void> | void;
   auditOperation?: (kind: OperationalAuditKind, fields: Record<string, unknown>) => void;
   now?: () => string;
@@ -259,6 +260,10 @@ type FixData = {
   notes: string;
 };
 
+type CompletedPhaseResult<T> =
+  | { ok: true; task: TaskEntry; output: AgentRunOutput; data: T }
+  | { ok: false; task: TaskEntry };
+
 export async function runPlanningWorkflow(
   inputTask: TaskEntry,
   options: WorkflowOptions,
@@ -267,6 +272,7 @@ export async function runPlanningWorkflow(
   let task = cloneTask(inputTask);
   let planMarkdown: string | undefined;
   let verifierFindings: PlanVerifyFinding[] = [];
+  let phaseStartedInThisInvocation = false;
 
   if (task.state === "queued") {
     task = transitionTask(
@@ -274,6 +280,7 @@ export async function runPlanningWorkflow(
       { type: "run_started", resolvedModels: options.resolvedModels },
       config,
     );
+    phaseStartedInThisInvocation = true;
   }
 
   for (let guard = 0; guard < config.plan.max_rounds + 3; guard += 1) {
@@ -290,59 +297,73 @@ export async function runPlanningWorkflow(
       };
     }
 
-    const runnerResult = await runPhase(task, phase, options, undefined, planMarkdown);
-    if (!runnerResult.ok) {
-      return { task: runnerResult.task, planMarkdown, verifierFindings };
-    }
-    const { output } = runnerResult;
-    task = runnerResult.task;
-    const handled = handleNonCompletedOutput(task, phase, output, options);
-    if (handled !== null) {
-      return { task: handled, planMarkdown, verifierFindings };
-    }
-
     if (phase === "plan") {
-      const data = requireStructuredData<PlanData>(output, phase);
-      if (!data.ok) {
-        return { task: failPromptContract(task, phase, data.message, options), verifierFindings };
+      const completed = await runCompletedPhase<PlanData>(
+        task,
+        phase,
+        options,
+        undefined,
+        planMarkdown,
+        undefined,
+        { countColdRestart: !phaseStartedInThisInvocation },
+      );
+      phaseStartedInThisInvocation = false;
+      if (!completed.ok) {
+        return { task: completed.task, planMarkdown, verifierFindings };
       }
-      planMarkdown = data.value.plan_markdown;
+      task = completed.task;
+      planMarkdown = completed.data.plan_markdown;
       task.plan.state = "verifying";
       task = transitionTask(task, { type: "plan_completed" }, config);
+      phaseStartedInThisInvocation = true;
       continue;
     }
 
     if (phase === "plan_verify") {
-      const data = requireStructuredData<PlanVerifyData>(output, phase);
-      if (!data.ok) {
-        return {
-          task: failPromptContract(task, phase, data.message, options),
-          planMarkdown,
-          verifierFindings,
-        };
+      const completed = await runCompletedPhase<PlanVerifyData>(
+        task,
+        phase,
+        options,
+        undefined,
+        planMarkdown,
+        undefined,
+        { countColdRestart: !phaseStartedInThisInvocation },
+      );
+      phaseStartedInThisInvocation = false;
+      if (!completed.ok) {
+        return { task: completed.task, planMarkdown, verifierFindings };
       }
-      verifierFindings = data.value.findings;
-      if (data.value.result === "ok") {
+      task = completed.task;
+      verifierFindings = completed.data.findings;
+      if (completed.data.result === "ok") {
         task = transitionTask(task, { type: "plan_verify_accepted" }, config);
         return { task, planMarkdown, verifierFindings };
       }
       task = transitionTask(task, { type: "plan_verify_rejected" }, config);
+      phaseStartedInThisInvocation = true;
       if (task.state === "failed") {
         return { task, planMarkdown, verifierFindings };
       }
       continue;
     }
 
-    const data = requireStructuredData<PlanFixData>(output, phase);
-    if (!data.ok) {
-      return {
-        task: failPromptContract(task, phase, data.message, options),
-        planMarkdown,
-        verifierFindings,
-      };
+    const completed = await runCompletedPhase<PlanFixData>(
+      task,
+      phase,
+      options,
+      undefined,
+      planMarkdown,
+      undefined,
+      { countColdRestart: !phaseStartedInThisInvocation },
+    );
+    phaseStartedInThisInvocation = false;
+    if (!completed.ok) {
+      return { task: completed.task, planMarkdown, verifierFindings };
     }
-    planMarkdown = data.value.plan_markdown;
+    task = completed.task;
+    planMarkdown = completed.data.plan_markdown;
     task = transitionTask(task, { type: "plan_fix_completed" }, config);
+    phaseStartedInThisInvocation = true;
   }
 
   return {
@@ -381,27 +402,20 @@ export async function runReviewSuperviseWorkflow(
     };
   }
 
-  const reviewRunnerResult = await runPhase(task, "review", options);
-  if (!reviewRunnerResult.ok) {
-    return { task: reviewRunnerResult.task, findings, acceptedIds: [], rejectedIds: [] };
+  const reviewCompleted = await runCompletedPhase<ReviewData>(
+    task,
+    "review",
+    options,
+    undefined,
+    undefined,
+    undefined,
+    { countColdRestart: task.git.checkpoints.review.before_sha !== null },
+  );
+  if (!reviewCompleted.ok) {
+    return { task: reviewCompleted.task, findings, acceptedIds: [], rejectedIds: [] };
   }
-  const reviewOutput = reviewRunnerResult.output;
-  task = reviewRunnerResult.task;
-  const handledReview = handleNonCompletedOutput(task, "review", reviewOutput, options);
-  if (handledReview !== null) {
-    return { task: handledReview, findings, acceptedIds: [], rejectedIds: [] };
-  }
-
-  const reviewData = requireStructuredData<ReviewData>(reviewOutput, "review");
-  if (!reviewData.ok) {
-    return {
-      task: failPromptContract(task, "review", reviewData.message, options),
-      findings,
-      acceptedIds: [],
-      rejectedIds: [],
-    };
-  }
-  findings = assignFindingIds(sanitizeReviewFindings(reviewData.value.findings, options));
+  task = reviewCompleted.task;
+  findings = assignFindingIds(sanitizeReviewFindings(reviewCompleted.data.findings, options));
   task = transitionTask(task, { type: "review_completed" }, config);
 
   if (findings.length === 0 || everyFindingAlreadyRejected(task, findings)) {
@@ -409,37 +423,21 @@ export async function runReviewSuperviseWorkflow(
     return { task, findings, acceptedIds: [], rejectedIds: [] };
   }
 
-  const superviseRunnerResult = await runPhase(task, "supervise", options, findings);
-  if (!superviseRunnerResult.ok) {
-    return { task: superviseRunnerResult.task, findings, acceptedIds: [], rejectedIds: [] };
+  const superviseCompleted = await runCompletedPhase<SuperviseData>(
+    task,
+    "supervise",
+    options,
+    findings,
+    undefined,
+    (data, nextTask) =>
+      validateSupervisorDecision(sanitizeSuperviseData(data, options), findings, nextTask),
+    { countColdRestart: task.git.checkpoints.supervise.before_sha !== null },
+  );
+  if (!superviseCompleted.ok) {
+    return { task: superviseCompleted.task, findings, acceptedIds: [], rejectedIds: [] };
   }
-  const superviseOutput = superviseRunnerResult.output;
-  task = superviseRunnerResult.task;
-  const handledSupervise = handleNonCompletedOutput(task, "supervise", superviseOutput, options);
-  if (handledSupervise !== null) {
-    return { task: handledSupervise, findings, acceptedIds: [], rejectedIds: [] };
-  }
-
-  const superviseData = requireStructuredData<SuperviseData>(superviseOutput, "supervise");
-  if (!superviseData.ok) {
-    return {
-      task: failPromptContract(task, "supervise", superviseData.message, options),
-      findings,
-      acceptedIds: [],
-      rejectedIds: [],
-    };
-  }
-
-  const superviseDecision = sanitizeSuperviseData(superviseData.value, options);
-  const validationErrors = validateSupervisorDecision(superviseDecision, findings, task);
-  if (validationErrors.length > 0) {
-    return {
-      task: failPromptContract(task, "supervise", validationErrors.join("; "), options),
-      findings,
-      acceptedIds: [],
-      rejectedIds: [],
-    };
-  }
+  task = superviseCompleted.task;
+  const superviseDecision = sanitizeSuperviseData(superviseCompleted.data, options);
 
   const decisionRound = task.review_round + 1;
   task.review_findings.push({
@@ -475,11 +473,13 @@ export async function runImplementWorkflow(
   options: ImplementFixWorkflowOptions,
 ): Promise<ImplementFixWorkflowResult> {
   let task = cloneTask(inputTask);
+  let phaseStartedInThisInvocation = false;
 
   if (task.state === "planned" && task.runtime_phase === null && task.plan.state === "verified") {
     const beforeSha = await options.git.getHeadSha();
     task.git.base_sha ??= beforeSha;
     task = transitionTask(task, { type: "implement_started", beforeSha: beforeSha });
+    phaseStartedInThisInvocation = true;
     await persistTask(task, options);
   }
 
@@ -507,25 +507,21 @@ export async function runImplementWorkflow(
   let testsRun: TestEvidence[] = [];
 
   if (task.git.checkpoints.implement.agent_done === null) {
-    const runnerResult = await runPhase(task, "implement", options);
-    if (!runnerResult.ok) {
-      return { task: runnerResult.task, changedFiles: [], testsRun: [] };
+    const completed = await runCompletedPhase<ImplementData>(
+      task,
+      "implement",
+      options,
+      undefined,
+      undefined,
+      undefined,
+      { countColdRestart: !phaseStartedInThisInvocation },
+    );
+    if (!completed.ok) {
+      return { task: completed.task, changedFiles: [], testsRun: [] };
     }
-    task = runnerResult.task;
-    const handled = handleNonCompletedOutput(task, "implement", runnerResult.output, options);
-    if (handled !== null) {
-      return { task: handled, changedFiles: [], testsRun: [] };
-    }
-    const data = requireStructuredData<ImplementData>(runnerResult.output, "implement");
-    if (!data.ok) {
-      return {
-        task: failPromptContract(task, "implement", data.message, options),
-        changedFiles: [],
-        testsRun: [],
-      };
-    }
-    changedFiles = data.value.changed_files;
-    testsRun = data.value.tests_run;
+    task = completed.task;
+    changedFiles = completed.data.changed_files;
+    testsRun = completed.data.tests_run;
     task.git.checkpoints.implement.agent_done = await options.git.getHeadSha();
     await persistTask(task, options);
   }
@@ -593,6 +589,7 @@ export async function runFixWorkflow(
   options: ImplementFixWorkflowOptions,
 ): Promise<ImplementFixWorkflowResult> {
   let task = cloneTask(inputTask);
+  let phaseStartedInThisInvocation = false;
 
   if (task.state !== "fixing" || task.runtime_phase !== "fix") {
     return {
@@ -624,6 +621,7 @@ export async function runFixWorkflow(
 
   if (task.git.checkpoints.fix.before_sha === null) {
     task.git.checkpoints.fix.before_sha = await options.git.getHeadSha();
+    phaseStartedInThisInvocation = true;
     await persistTask(task, options);
   }
 
@@ -644,25 +642,21 @@ export async function runFixWorkflow(
   let testsRun: TestEvidence[] = [];
 
   if (task.git.checkpoints.fix.agent_done === null) {
-    const runnerResult = await runPhase(task, "fix", options);
-    if (!runnerResult.ok) {
-      return { task: runnerResult.task, changedFiles: [], testsRun: [] };
+    const completed = await runCompletedPhase<FixData>(
+      task,
+      "fix",
+      options,
+      undefined,
+      undefined,
+      undefined,
+      { countColdRestart: !phaseStartedInThisInvocation },
+    );
+    if (!completed.ok) {
+      return { task: completed.task, changedFiles: [], testsRun: [] };
     }
-    task = runnerResult.task;
-    const handled = handleNonCompletedOutput(task, "fix", runnerResult.output, options);
-    if (handled !== null) {
-      return { task: handled, changedFiles: [], testsRun: [] };
-    }
-    const data = requireStructuredData<FixData>(runnerResult.output, "fix");
-    if (!data.ok) {
-      return {
-        task: failPromptContract(task, "fix", data.message, options),
-        changedFiles: [],
-        testsRun: [],
-      };
-    }
-    changedFiles = data.value.changed_files;
-    testsRun = data.value.tests_run;
+    task = completed.task;
+    changedFiles = completed.data.changed_files;
+    testsRun = completed.data.tests_run;
     task.git.checkpoints.fix.agent_done = await options.git.getHeadSha();
     await persistTask(task, options);
   }
@@ -899,6 +893,69 @@ export function computeFindingId(finding: ReviewFinding): string {
     .slice(0, 16);
 }
 
+type RunPhaseOptions = {
+  countColdRestart?: boolean;
+};
+
+async function runCompletedPhase<T>(
+  task: TaskEntry,
+  phase: Phase,
+  options: WorkflowOptions,
+  currentFindings?: ReviewFindingWithId[],
+  planMarkdown?: string,
+  validate?: (data: T, task: TaskEntry) => string[],
+  runOptions?: RunPhaseOptions,
+): Promise<CompletedPhaseResult<T>> {
+  let currentTask = task;
+
+  for (;;) {
+    const runnerResult = await runPhase(
+      currentTask,
+      phase,
+      options,
+      currentFindings,
+      planMarkdown,
+      runOptions,
+    );
+    if (!runnerResult.ok) {
+      return { ok: false, task: runnerResult.task };
+    }
+
+    currentTask = runnerResult.task;
+    const handled = handleNonCompletedOutput(currentTask, phase, runnerResult.output, options);
+    if (handled !== null) {
+      return { ok: false, task: handled };
+    }
+
+    const data = requireStructuredData<T>(runnerResult.output, phase);
+    if (!data.ok) {
+      const corrected = await runWithSelfCorrection(currentTask, phase, data.message, options);
+      if (!corrected.ok) {
+        return { ok: false, task: corrected.task };
+      }
+      currentTask = corrected.task;
+      continue;
+    }
+
+    const validationErrors = validate?.(data.value, currentTask) ?? [];
+    if (validationErrors.length > 0) {
+      const corrected = await runWithSelfCorrection(
+        currentTask,
+        phase,
+        validationErrors.join("; "),
+        options,
+      );
+      if (!corrected.ok) {
+        return { ok: false, task: corrected.task };
+      }
+      currentTask = corrected.task;
+      continue;
+    }
+
+    return { ok: true, task: currentTask, output: runnerResult.output, data: data.value };
+  }
+}
+
 function buildAgentRunInput(
   task: TaskEntry,
   phase: Phase,
@@ -1066,14 +1123,25 @@ async function runPhase(
   options: WorkflowOptions,
   currentFindings?: ReviewFindingWithId[],
   planMarkdown?: string,
+  runOptions: RunPhaseOptions = {},
 ): Promise<{ ok: true; task: TaskEntry; output: AgentRunOutput } | { ok: false; task: TaskEntry }> {
   let currentTask = task;
   let questionResponse: AgentRunInput["questionResponse"];
+  let coldRestartChecked = false;
   for (let turn = 0; turn < 3; turn += 1) {
     try {
+      currentTask = await ensureSimplePhaseBeforeCheckpoint(currentTask, phase, options);
       currentTask = await resolveAndPersistEffort(currentTask, phase, options);
       if (currentTask.state === "failed" || currentTask.state === "paused") {
         return { ok: false, task: currentTask };
+      }
+      if (!coldRestartChecked) {
+        coldRestartChecked = true;
+        const prepared = await prepareColdRestartAttempt(currentTask, phase, options, runOptions);
+        if (!prepared.ok) {
+          return { ok: false, task: prepared.task };
+        }
+        currentTask = prepared.task;
       }
       const output = await options.runner(
         buildAgentRunInput(
@@ -1086,6 +1154,7 @@ async function runPhase(
         ),
       );
       currentTask = applyRunnerMetadata(currentTask, phase, output);
+      currentTask = await resetPhaseAttemptAfterRunnerProgress(currentTask, options);
       if (output.status !== "need_input" || options.answerQuestion === undefined) {
         return { ok: true, task: currentTask, output };
       }
@@ -1100,6 +1169,16 @@ async function runPhase(
       });
       questionResponse = { ...output.question, answer };
     } catch (error) {
+      if (failureCodeFromError(error) === "prompt_contract_violation") {
+        const message = error instanceof Error ? error.message : "prompt contract violation";
+        const corrected = await runWithSelfCorrection(currentTask, phase, message, options);
+        if (!corrected.ok) {
+          return { ok: false, task: corrected.task };
+        }
+        currentTask = corrected.task;
+        questionResponse = undefined;
+        continue;
+      }
       return { ok: false, task: applyRunnerError(currentTask, phase, error, options) };
     }
   }
@@ -1113,6 +1192,96 @@ async function runPhase(
       options,
     ),
   };
+}
+
+async function ensureSimplePhaseBeforeCheckpoint(
+  task: TaskEntry,
+  phase: Phase,
+  options: WorkflowOptions,
+): Promise<TaskEntry> {
+  if (!isSimpleCheckpointPhase(phase) || task.git.checkpoints[phase].before_sha !== null) {
+    return task;
+  }
+  const beforeSha = await options.getHeadSha?.(phase);
+  if (beforeSha === undefined || beforeSha.length === 0) {
+    return task;
+  }
+  const next = cloneTask(task);
+  next.git.checkpoints[phase].before_sha = beforeSha;
+  await persistTask(next, options);
+  return next;
+}
+
+function isSimpleCheckpointPhase(
+  phase: Phase,
+): phase is "plan" | "plan_verify" | "plan_fix" | "review" | "supervise" {
+  return (
+    phase === "plan" ||
+    phase === "plan_verify" ||
+    phase === "plan_fix" ||
+    phase === "review" ||
+    phase === "supervise"
+  );
+}
+
+async function prepareColdRestartAttempt(
+  task: TaskEntry,
+  phase: Phase,
+  options: WorkflowOptions,
+  runOptions: RunPhaseOptions,
+): Promise<{ ok: true; task: TaskEntry } | { ok: false; task: TaskEntry }> {
+  if (runOptions.countColdRestart === false) {
+    return { ok: true, task };
+  }
+  const config = options.config ?? DEFAULT_CONFIG;
+  const provider = effectiveProviderForPhase(task, phase, config);
+  if (!shouldCountColdRestart(task, phase, provider)) {
+    return { ok: true, task };
+  }
+
+  const next = cloneTask(task);
+  next.runtime.phase_attempt += 1;
+  if (next.runtime.phase_attempt >= 3) {
+    const failed = failWorkflow(
+      next,
+      phase,
+      "phase_attempt_exceeded",
+      `cold restart exceeded for phase: ${phase}`,
+      options,
+    ).task;
+    await persistTask(failed, options);
+    return { ok: false, task: failed };
+  }
+
+  await persistTask(next, options);
+  return { ok: true, task: next };
+}
+
+function shouldCountColdRestart(task: TaskEntry, phase: Phase, provider: Provider): boolean {
+  if (resumeForPhase(task, phase, provider) !== undefined) {
+    return false;
+  }
+  const checkpoint = task.git.checkpoints[phase];
+  if (checkpoint.before_sha === null) {
+    return false;
+  }
+  if ("agent_done" in checkpoint) {
+    return checkpoint.agent_done === null;
+  }
+  return checkpoint.after_sha === null;
+}
+
+async function resetPhaseAttemptAfterRunnerProgress(
+  task: TaskEntry,
+  options: WorkflowOptions,
+): Promise<TaskEntry> {
+  if (task.runtime.phase_attempt === 0) {
+    return task;
+  }
+  const next = cloneTask(task);
+  next.runtime.phase_attempt = 0;
+  await persistTask(next, options);
+  return next;
 }
 
 async function resolveAndPersistEffort(
@@ -1269,6 +1438,27 @@ function applyRunnerError(
     return pauseWorkflow(task, phase, code, message, options);
   }
   return failWorkflow(task, phase, code, message, options).task;
+}
+
+async function runWithSelfCorrection(
+  task: TaskEntry,
+  phase: RuntimePhase,
+  message: string,
+  options: WorkflowOptions,
+): Promise<{ ok: true; task: TaskEntry } | { ok: false; task: TaskEntry }> {
+  if (task.runtime.phase_self_correct_done === true) {
+    return { ok: false, task: failPromptContract(task, phase, message, options) };
+  }
+
+  const next = cloneTask(task);
+  next.runtime.phase_self_correct_done = true;
+  await persistTask(next, options);
+  options.auditOperation?.("phase_self_correct", {
+    issue: next.issue,
+    phase,
+    reason: sanitizeWorkflowString(message, options),
+  });
+  return { ok: true, task: next };
 }
 
 function requireStructuredData<T>(

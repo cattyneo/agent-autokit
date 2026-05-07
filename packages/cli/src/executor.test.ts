@@ -176,7 +176,14 @@ phases:
 });
 
 function mockExecFile(commands: string[]): WorkflowExecFile {
-  const revParseResults = ["base-sha", "agent-sha", "commit-sha"];
+  const revParseResults = [
+    "base-sha",
+    "base-sha",
+    "base-sha",
+    "agent-sha",
+    "commit-sha",
+    "remote-head",
+  ];
   return (command, args) => {
     const line = `${command} ${args.join(" ")}`;
     commands.push(line);

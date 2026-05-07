@@ -91,11 +91,13 @@ export function transitionTask(
       task.state = "implementing";
       task.runtime_phase = "implement";
       task.git.checkpoints.implement.before_sha = event.beforeSha;
+      resetPhaseAttempt(task);
       return task;
     case "pr_ready":
       task.state = "reviewing";
       task.runtime_phase = "review";
       resetReviewPhase(task);
+      resetPhaseAttempt(task);
       task.pr.number = event.prNumber ?? task.pr.number;
       task.pr.head_sha = event.headSha;
       task.pr.base_sha = event.baseSha ?? task.pr.base_sha;
@@ -104,6 +106,7 @@ export function transitionTask(
     case "review_completed":
       task.runtime_phase = "supervise";
       resetSupervisePhase(task);
+      resetPhaseAttempt(task);
       return task;
     case "supervise_accept":
       if (task.review_round + 1 > config.review.max_rounds) {
@@ -114,17 +117,20 @@ export function transitionTask(
       task.runtime_phase = "fix";
       task.fix.origin = event.origin;
       resetFixPhase(task);
+      resetPhaseAttempt(task);
       return task;
     case "supervise_no_findings":
     case "supervise_reject_all":
       task.state = "ci_waiting";
       task.runtime_phase = "ci_wait";
+      resetPhaseAttempt(task);
       return task;
     case "fix_pushed":
       task.state = "reviewing";
       task.runtime_phase = "review";
       task.fix.origin = null;
       resetReviewPhase(task);
+      resetPhaseAttempt(task);
       return task;
     case "ci_failed":
       if (task.ci_fix_round + 1 > config.ci.fix_max_rounds) {
@@ -135,11 +141,13 @@ export function transitionTask(
       task.runtime_phase = "fix";
       task.fix.origin = "ci";
       resetFixPhase(task);
+      resetPhaseAttempt(task);
       return task;
     case "ci_passed_auto_merge":
     case "auto_merge_reserved":
       task.state = "merging";
       task.runtime_phase = "merge";
+      resetPhaseAttempt(task);
       return task;
     case "ci_passed_manual_merge":
       return pause(task, "manual_merge_required", "manual merge required", "ci_wait");
@@ -161,6 +169,7 @@ export function transitionTask(
       }
       task.state = "cleaning";
       task.runtime_phase = null;
+      resetPhaseAttempt(task);
       return task;
     case "merge_blocked":
       return pause(task, "branch_protection", "merge became blocked", "merge");
@@ -266,6 +275,7 @@ function pushFailureHistory(task: TaskEntry, failure: NonNullable<TaskEntry["fai
 
 function resetPhaseAttempt(task: TaskEntry): void {
   task.runtime.phase_attempt = 0;
+  task.runtime.phase_self_correct_done = false;
 }
 
 function resetReviewPhase(task: TaskEntry): void {

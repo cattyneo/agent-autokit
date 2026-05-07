@@ -40,6 +40,9 @@ export const operationalAuditKinds = [
   "branch_deleted",
   "retry_pr_closed",
   "effort_downgrade",
+  "phase_self_correct",
+  "phase_override_started",
+  "phase_override_ended",
 ] as const;
 
 export type FailureAuditKind = (typeof failureAuditKinds)[number];

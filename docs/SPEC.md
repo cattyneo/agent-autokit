@@ -470,7 +470,7 @@ tasks:
       interrupted_at: null           # ISO 中断時刻
       previous_state: null           # paused 時の戻り state (resume 復帰先)
       resolved_effort: null          # null | { phase, provider, effort, downgraded_from, timeout_ms }
-      phase_self_correct_done: null  # null | boolean。self-correction 実行済み判定は後続 Issue で消費
+      phase_self_correct_done: null  # null | boolean。self-correction 実行済み判定
       phase_override: null           # null | { phase, provider?, effort?, expires_at_run_id }
       resolved_model:                # queued → planning 遷移時に一括解決
         plan: null
@@ -545,7 +545,7 @@ failure:
 | `plan_max` | failed | `plan_verify_round + 1 > config.plan.max_rounds` (E04) |
 | `runner_timeout` | failed | runner 子プロセス hard timeout (`config.runner_timeout.<phase>_ms` 超過) |
 | `phase_attempt_exceeded` | failed | 同一 `runtime_phase` の cold restart が 3 回連続で失敗 (`runtime.phase_attempt >= 3`) |
-| `prompt_contract_violation` | failed | prompt 出力が contract 違反 (例: `default` フィールドなし `status=need_input`) |
+| `prompt_contract_violation` | failed | prompt 出力が contract 違反し、`runtime.phase_self_correct_done=true` のため self-correction retry を使えない (例: `default` フィールドなし `status=need_input`) |
 | `rebase_conflict` | paused | `fix` フェーズの自動 rebase 解決失敗 (§7.8) |
 | `retry_cleanup_failed` | paused | `autokit retry` 事前処理 (PR close / branch / worktree 削除) の部分失敗 (§6.2) |
 | `sanitize_violation` | paused | sanitize 後本文に token-like / 絶対 path / `.env` 値 残存検出 (§4.6.2) |
@@ -807,7 +807,7 @@ sanitize 後の本文に再度 token-like / 絶対 path / `.env` 値が残存検
 | E31 | `fixing` | rebase 自動解決失敗 (§7.8) | `paused` | (現 phase 保持) | `failure.code=rebase_conflict` |
 | E32 | `*` (active state) | runner hard timeout (`config.runner_timeout.<phase>_ms` 超過) | `failed` | null | `failure.code=runner_timeout` / `failure.phase` に直前 phase 記録 |
 | E33 | `*` (active state) | 同一 `runtime_phase` cold restart 失敗 + `phase_attempt >= 3` | `failed` | null | `failure.code=phase_attempt_exceeded` |
-| E34 | `*` (active state) | prompt_contract 違反 (`status=need_input` で `default` 欠落 等) | `failed` | null | `failure.code=prompt_contract_violation` |
+| E34 | `*` (active state) | prompt_contract 違反 (`status=need_input` で `default` 欠落 等) + `runtime.phase_self_correct_done=true` | `failed` | null | `failure.code=prompt_contract_violation` |
 | E35 | `*` (active state) | sanitize 後本文に pattern 残存検出 (§4.6.2) | `paused` | (現 phase 保持) | `failure.code=sanitize_violation` / PR 投稿 blocked |
 | E36 | `*` | 想定外例外 (上記いずれにも該当しない) | `failed` | null | `failure.code=other` / `failure.phase` に直前 phase 記録 |
 | E37 | `paused` | `autokit resume` | `runtime.previous_state` | §5.1.3 表で逆引き | resume 戦略実行 |
@@ -1900,6 +1900,9 @@ audit イベントは info level で必ず記録する。**`paused` 遷移時の
 | `branch_deleted` | merged 後 grace period 経過 + remote branch 削除完了 |
 | `retry_pr_closed` | retry の事前処理 PR close 完了 (§6.2) |
 | `effort_downgrade` | workflow phase start で未サポート effort を `effort.unsupported_policy=downgrade` により下位 effort へ解決 |
+| `phase_self_correct` | 初回 prompt_contract 違反時に `runtime.phase_self_correct_done=false -> true` を永続化し、同一 phase を self-correction retry する直前 |
+| `phase_override_started` | `autokit run --phase / --provider / --effort` が per-run phase/provider/effort override を受理 |
+| `phase_override_ended` | phase override が正常完了、期限切れ、または retry/reset で終了 |
 
 ##### 10.2.2.2 failure 系 audit kind (`failure.code` 1:1)
 
@@ -2366,7 +2369,7 @@ v0.1.0 GA 条件:
 - [ ] **`~/.codex/auth.json` / `$CODEX_HOME/auth.json` / `.codex/auth*` の値が logs / backup / artifacts / Issue body / review artifact / PR comment に混入しない**
 - [ ] **`codex exec --json` event parse / session id 保存 / final JSON schema validation / resume / sandbox / approval / ChatGPT-managed auth 判別は MIG-004 pinned evidence で確認済みの contract のみ AK-010 実装に使われ、未確認 CLI 機能は必須要件として固定されない**
 - [ ] **audit kind が `failure.code` と 1:1 対応: paused/failed 遷移時に同名 audit kind が info で発火し、event 本体に `failure: {phase, code, message, ts}` field を含む** (§10.2.2.2)
-- [ ] **操作系 audit kind (§10.2.2.1 の 15 種: resume / resumed / lock_seized / init_rollback / init_rollback_failed / retry_resumed / runner_idle / audit_hmac_key_rotated / queue_corruption_recovered / sanitize_pass_hmac / auto_merge_disabled / auto_merge_reserved / branch_deleted / retry_pr_closed / effort_downgrade) が info または指定 level で必ず記録**
+- [ ] **操作系 audit kind (§10.2.2.1 の 18 種: resume / resumed / lock_seized / init_rollback / init_rollback_failed / retry_resumed / runner_idle / audit_hmac_key_rotated / queue_corruption_recovered / sanitize_pass_hmac / auto_merge_disabled / auto_merge_reserved / branch_deleted / retry_pr_closed / effort_downgrade / phase_self_correct / phase_override_started / phase_override_ended) が info または指定 level で必ず記録**
 - [ ] **log rotation 中も audit event を silent drop しない: ローテ手順 (flush → fsync → close → rename → open) の境界で event drop なし、rename 失敗時は旧 file 継続 + WARN 記録** (§10.3.1)
 - [ ] **log size (`max_file_size_mb` / `max_total_size_mb`) 超過でローテ / 削除**
 

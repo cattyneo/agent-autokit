@@ -31,6 +31,7 @@ describe("core state machine", () => {
     task = transitionTask(task, { type: "plan_fix_completed" });
     assert.equal(task.runtime_phase, "plan_verify");
     assert.equal(task.runtime.phase_attempt, 0);
+    assert.equal(task.runtime.phase_self_correct_done, false);
 
     task = transitionTask(task, { type: "plan_verify_accepted" });
     assert.equal(task.state, "planned");
@@ -206,6 +207,7 @@ describe("core state machine", () => {
         review_round: 2,
         runtime: {
           ...failed.runtime,
+          phase_attempt: 2,
           resolved_effort: {
             phase: "plan",
             provider: "claude",
@@ -228,6 +230,7 @@ describe("core state machine", () => {
     assert.equal(reset.runtime_phase, null);
     assert.equal(reset.failure, null);
     assert.deepEqual(reset.failure_history, []);
+    assert.equal(reset.runtime.phase_attempt, 0);
     assert.equal(reset.runtime.resolved_effort, null);
     assert.equal(reset.runtime.phase_self_correct_done, null);
     assert.equal(reset.runtime.phase_override, null);

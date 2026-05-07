@@ -309,6 +309,53 @@ describe("cli task commands", () => {
     assert.doesNotMatch(harness.stdout(), /^default\tbundled$/m);
   });
 
+  it("bundles initial presets that apply, doctor, and run through the workflow seam", async () => {
+    const presets = ["default", "laravel-filament", "next-shadcn", "docs-create"];
+    const listHarness = makeCliHarness();
+
+    assert.equal(await runCli(["preset", "list"], listHarness.deps), 0);
+    for (const preset of presets) {
+      assert.match(listHarness.stdout(), new RegExp(`^${preset}\\tbundled$`, "m"));
+    }
+
+    for (const preset of presets) {
+      const root = makeTempDir();
+      const stateHome = makeTempDir();
+      runInit(root, { now: () => NOW });
+      const harness = makeCliHarness(root, {
+        env: { XDG_STATE_HOME: stateHome },
+        execFile: () => "ok",
+        runWorkflow: async () => [
+          {
+            ...task({ issue: 105, state: "merged" }),
+            title: `${preset} fixture run`,
+            runtime_phase: null,
+          },
+        ],
+      });
+
+      assert.equal(await runCli(["preset", "show", preset], harness.deps), 0, preset);
+      assert.match(harness.stdout(), new RegExp(`preset\\t${preset}\\tbundled`));
+      assert.equal(await runCli(["preset", "apply", preset], harness.deps), 0, preset);
+      assert.equal(await runCli(["doctor"], harness.deps), 0, preset);
+      assert.match(harness.stdout(), /PASS\tprompt contracts\tvalid/);
+      assert.equal(
+        readFileSync(join(root, ".autokit", ".gitignore"), "utf8"),
+        "*\n!.gitignore\n!config.yaml\n",
+      );
+      assert.match(
+        readFileSync(join(root, ".agents", "agents", "implementer.md"), "utf8"),
+        new RegExp(`preset:${preset}`),
+      );
+      assert.equal(
+        parseConfigYaml(readFileSync(join(root, ".autokit", "config.yaml"), "utf8")).version,
+        1,
+      );
+      assert.equal(await runCli(["run"], harness.deps), 0, preset);
+      assert.match(harness.stdout(), new RegExp(`#105 merged - PR - ${preset} fixture run`));
+    }
+  });
+
   it("shows safe preset contents and refuses sensitive entries with category-only output", async () => {
     const root = makeTempDir();
     writePreset(root, "safe", {

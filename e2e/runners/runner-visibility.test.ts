@@ -113,6 +113,11 @@ describe("prompt asset visibility gate", () => {
       "## Changes",
       "## Test results",
     ]);
+    assert.equal(result.presetEffectivePrompts.length, 28);
+    for (const preset of ["default", "laravel-filament", "next-shadcn", "docs-create"]) {
+      assert.ok(result.presetEffectivePrompts.includes(`preset:${preset}/prompts/implement.md`));
+      assert.ok(result.presetEffectivePrompts.includes(`preset:${preset}/prompts/review.md`));
+    }
   });
 
   it("fails closed when a real prompt asset omits a required marker", async () => {
@@ -147,7 +152,7 @@ describe("prompt asset visibility gate", () => {
 
   it("fails closed when a bundled preset prompt override lacks mapping coverage", async () => {
     const assetsRoot = await copyAssets();
-    const presetPromptDir = join(assetsRoot, "presets", "default", "prompts");
+    const presetPromptDir = join(assetsRoot, "presets", "unmapped", "prompts");
     await mkdir(presetPromptDir, { recursive: true });
     await writeFile(
       join(presetPromptDir, "plan.md"),
@@ -157,7 +162,7 @@ describe("prompt asset visibility gate", () => {
 
     await assertPromptGateFailure(
       assetsRoot,
-      "mapping missing for preset:default/prompts/plan.md ## Result",
+      "mapping missing for preset:unmapped/prompts/plan.md ## Result",
     );
   });
 

@@ -1,0 +1,4 @@
+version: 1
+label_filter:
+  - agent-ready
+  - laravel-filament

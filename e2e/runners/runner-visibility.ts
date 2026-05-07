@@ -57,6 +57,15 @@ type SkillAssetQualityGateResult = {
   checks: VisibilityCheck[];
 };
 
+type AgentAssetQualityGateResult = {
+  total: number;
+  passed: number;
+  failures: string[];
+  agents: string[];
+  checkedAgentAssets: string[];
+  checks: VisibilityCheck[];
+};
+
 type PromptMappingRow = {
   promptContract: string;
   field: string;
@@ -122,6 +131,104 @@ const REVIEW_SKILL_TOKENS = [
   "autokit-question",
 ];
 const REVIEW_SKILL_FORBIDDEN_TOKENS = [" / `findings`", "`findings` must"];
+const AGENT_QUALITY_SECTIONS = [
+  "## Role",
+  "## Do",
+  "## Don't",
+  "## Decision Rules",
+  "## Permission Boundary",
+  "## Source of Truth",
+  "## AI Anti-Patterns",
+  "## Output",
+];
+const AGENT_ASSET_TOKENS: Record<(typeof AGENTS)[number], string[]> = {
+  planner: [
+    "`plan`",
+    "`plan_fix`",
+    "`readonly_repo`",
+    "Read / Grep / Glob",
+    "Do not edit files",
+    "`data.plan_markdown`",
+    "`data.addressed_findings`",
+  ],
+  "plan-verifier": [
+    "`plan_verify`",
+    "`readonly_repo`",
+    "Do not execute shell commands",
+    "`data.result`",
+    "`data.findings`",
+  ],
+  implementer: [
+    "`implement`",
+    "`fix`",
+    "`write_worktree`",
+    "assigned worktree",
+    "Do not run git",
+    "`data.changed_files`",
+    "`data.tests_run`",
+    "`data.docs_updated`",
+    "`data.resolved_accept_ids`",
+  ],
+  reviewer: [
+    "`review`",
+    "`readonly_worktree`",
+    "Do not edit files",
+    "`data.findings`",
+    "`suggested_fix`",
+    "sanitize",
+  ],
+  supervisor: [
+    "`supervise`",
+    "`readonly_worktree`",
+    "Do not edit files",
+    "`data.accept_ids`",
+    "`data.reject_ids`",
+    "`data.fix_prompt`",
+    "reject_history",
+  ],
+  "doc-updater": [
+    "`doc-updater`",
+    "`write_worktree`",
+    "implement/fix",
+    "documentation path",
+    "docs / guide / spec / README",
+    "Do not run git",
+    "delegating implement/fix prompt_contract",
+  ],
+};
+const AGENT_SECTION_TOKENS: Record<
+  (typeof AGENTS)[number],
+  Partial<Record<(typeof AGENT_QUALITY_SECTIONS)[number], string[]>>
+> = {
+  planner: {
+    "## Permission Boundary": ["`readonly_repo`", "Read / Grep / Glob"],
+    "## Output": ["`data.plan_markdown`", "`data.addressed_findings`"],
+  },
+  "plan-verifier": {
+    "## Don't": ["Do not execute shell commands"],
+    "## Permission Boundary": ["`readonly_repo`"],
+    "## Output": ["`data.result`", "`data.findings`"],
+  },
+  implementer: {
+    "## Don't": ["Do not run git"],
+    "## Permission Boundary": ["`write_worktree`", "assigned worktree"],
+    "## Output": ["`data.changed_files`", "`data.tests_run`", "`data.docs_updated`"],
+  },
+  reviewer: {
+    "## Permission Boundary": ["`readonly_worktree`"],
+    "## Output": ["`data.findings`", "`suggested_fix`"],
+  },
+  supervisor: {
+    "## Permission Boundary": ["`readonly_worktree`"],
+    "## Source of Truth": ["`reject_history`"],
+    "## Output": ["`data.accept_ids`", "`data.reject_ids`", "`data.fix_prompt`"],
+  },
+  "doc-updater": {
+    "## Permission Boundary": ["`write_worktree`", "documentation path"],
+    "## Source of Truth": ["`docs/spec/*.md`"],
+    "## Output": ["delegating implement/fix prompt_contract", "`data.docs_updated`"],
+  },
+};
 
 export async function runPromptAssetVisibilityGate(
   options: PromptAssetVisibilityGateOptions = {},
@@ -350,6 +457,67 @@ export async function runSkillAssetQualityGate(
   };
 }
 
+export async function runAgentAssetQualityGate(
+  options: SkillAssetQualityGateOptions = {},
+): Promise<AgentAssetQualityGateResult> {
+  const assetsRoot = fileURLToPath(
+    options.assetsRootUrl ?? new URL("../../packages/cli/assets/", import.meta.url),
+  );
+  const checks: VisibilityCheck[] = [];
+  const checkedAgentAssets: string[] = [];
+  const agentFiles = await listAgentFiles(join(assetsRoot, "agents"));
+
+  await check(checks, "agent assets include exactly the fixed bundled agents", async () => {
+    const expected = AGENTS.map((agent) => `${agent}.md`).sort();
+    const unexpected = agentFiles.filter((file) => !expected.includes(file));
+    const missing = expected.filter((file) => !agentFiles.includes(file));
+    if (unexpected.length > 0 || missing.length > 0) {
+      throw new Error(
+        `unexpected agent asset: ${unexpected.join(",") || "-"}; missing=${missing.join(",") || "-"}`,
+      );
+    }
+  });
+
+  for (const agent of AGENTS) {
+    const label = `base:agents/${agent}.md`;
+    const text = await readText(assetsRoot, "agents", `${agent}.md`);
+    checkedAgentAssets.push(label);
+    await check(checks, `${label} declares phase role and boundaries`, async () => {
+      requireTokens(label, text, [...AGENT_QUALITY_SECTIONS, ...AGENT_ASSET_TOKENS[agent]]);
+      requireMarkdownSections(label, text, AGENT_QUALITY_SECTIONS);
+      requireSectionTokens(label, text, AGENT_SECTION_TOKENS[agent]);
+    });
+  }
+
+  const failures = checks
+    .filter((result) => !result.ok)
+    .map((result) => `${result.name}: ${result.message ?? "failed"}`);
+
+  return {
+    total: checks.length,
+    passed: checks.length - failures.length,
+    failures,
+    agents: AGENTS,
+    checkedAgentAssets,
+    checks,
+  };
+}
+
+async function listAgentFiles(root: string): Promise<string[]> {
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+      .map((entry) => entry.name)
+      .sort();
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
 async function collectSkillAssets(
   assetsRoot: string,
   skillName: "autokit-implement" | "autokit-review",
@@ -541,6 +709,59 @@ function requireTokens(label: string, text: string, tokens: string[]): void {
   if (missing.length > 0) {
     throw new Error(`${label} missing ${missing.join(", ")}`);
   }
+}
+
+function requireMarkdownSections(label: string, text: string, sections: readonly string[]): void {
+  const sectionMap = parseMarkdownSections(text);
+  const missing = sections.filter((section) => !sectionMap.has(section));
+  const empty = sections.filter((section) => (sectionMap.get(section) ?? "").trim().length < 20);
+  if (missing.length > 0 || empty.length > 0) {
+    throw new Error(
+      `${label} invalid sections missing=${missing.join(",") || "-"} empty=${empty.join(",") || "-"}`,
+    );
+  }
+}
+
+function requireSectionTokens(
+  label: string,
+  text: string,
+  requirements: Partial<Record<string, string[]>>,
+): void {
+  const sectionMap = parseMarkdownSections(text);
+  for (const [section, tokens] of Object.entries(requirements)) {
+    const sectionText = sectionMap.get(section) ?? "";
+    const missing = tokens.filter((token) => !sectionText.includes(token));
+    if (missing.length > 0) {
+      throw new Error(`${label} ${section} missing ${missing.join(", ")}`);
+    }
+  }
+}
+
+function parseMarkdownSections(text: string): Map<string, string> {
+  const sections = new Map<string, string>();
+  const lines = text.split(/\r?\n/);
+  let current: string | null = null;
+  let buffer: string[] = [];
+
+  for (const line of lines) {
+    if (line.startsWith("## ")) {
+      if (current !== null) {
+        sections.set(current, buffer.join("\n"));
+      }
+      current = line.trim();
+      buffer = [];
+      continue;
+    }
+    if (current !== null) {
+      buffer.push(line);
+    }
+  }
+
+  if (current !== null) {
+    sections.set(current, buffer.join("\n"));
+  }
+
+  return sections;
 }
 
 function rejectTokens(label: string, text: string, tokens: string[]): void {

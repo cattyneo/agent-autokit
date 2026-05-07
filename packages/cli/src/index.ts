@@ -29,6 +29,7 @@ import {
   serializeConfigYaml,
   type TaskEntry,
   type TasksFile,
+  transitionTask,
   validateCapabilitySelection,
   writeTasksFileAtomic,
 } from "@cattyneo/autokit-core";
@@ -307,8 +308,8 @@ function createProgram(deps: CliDeps, setExitCode: (code: number) => void): Comm
     .command("resume")
     .description("dispatch resume entrypoint without workflow internals")
     .argument("[issue]", "issue number")
-    .action((issue?: string) => {
-      setExitCode(commandResume(issue, deps));
+    .action(async (issue?: string) => {
+      setExitCode(await commandResume(issue, deps));
     });
 
   program
@@ -501,8 +502,9 @@ async function answerCliQuestion(
   return result.answer;
 }
 
-function commandResume(issue: string | undefined, deps: CliDeps): number {
-  const tasks = loadTasksOrEmpty(deps).tasks;
+async function commandResume(issue: string | undefined, deps: CliDeps): Promise<number> {
+  const tasksFile = loadTasksOrEmpty(deps);
+  const tasks = tasksFile.tasks;
   let targetIssue: number | undefined;
   try {
     targetIssue = issue === undefined ? undefined : parsePositiveInteger(issue);
@@ -531,7 +533,15 @@ function commandResume(issue: string | undefined, deps: CliDeps): number {
     deps.stderr.write(`issue #${target.issue} must be retried with autokit retry\n`);
     return TEMPFAIL_EXIT_CODE;
   }
-  return getWorkflowExitCode(tasks);
+  if (target === undefined) {
+    return getWorkflowExitCode(tasks);
+  }
+
+  const index = tasks.findIndex((task) => task.issue === target.issue);
+  tasksFile.tasks[index] = transitionTask(target, { type: "resume" });
+  tasksFile.generated_at = now(deps);
+  writeTasksFileAtomic(tasksPath(deps), tasksFile);
+  return commandWorkflowStatus(deps);
 }
 
 function commandRetry(

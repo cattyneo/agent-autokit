@@ -115,7 +115,9 @@ describe("ci-fix loop E2E evidence", () => {
     assert.doesNotMatch(fixCalls[0]?.prompt ?? "", /ghp_123456789012345678901234/);
     assert.doesNotMatch(fixCalls[0]?.prompt ?? "", /\/repo\/\.env/);
     assert.deepEqual(
-      audits.map((event) => event.kind).filter((kind) => kind !== "phase_started"),
+      audits
+        .map((event) => event.kind)
+        .filter((kind) => kind !== "phase_started" && kind !== "phase_completed"),
       ["fix_started", "fix_finished", "review_started"],
     );
   });

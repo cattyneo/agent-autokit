@@ -32,6 +32,7 @@ import {
   getRetryExitCode,
   getWorkflowExitCode,
   type IssueMetadata,
+  type PhaseOverrideInput,
   parseIssueRange,
   runCli,
   TEMPFAIL_EXIT_CODE,
@@ -293,6 +294,51 @@ describe("cli task commands", () => {
     assert.match(harness.stdout(), /#16 merged - PR - \[AK-015\] tui-question-monitoring/);
   });
 
+  it("validates run phase/provider/effort override before dispatch", async () => {
+    const root = makeTempDir();
+    let phaseOverride: PhaseOverrideInput | undefined;
+    const harness = makeCliHarness(root, {
+      runWorkflow: async (input) => {
+        phaseOverride = input.phaseOverride;
+        return [{ ...task({ issue: 94, state: "merged" }), runtime_phase: null }];
+      },
+    });
+
+    assert.equal(
+      await runCli(
+        ["run", "--phase", "plan", "--provider", "codex", "--effort", "high"],
+        harness.deps,
+      ),
+      0,
+    );
+    assert.deepEqual(phaseOverride, { phase: "plan", provider: "codex", effort: "high" });
+  });
+
+  it("fails closed on invalid run override combinations before dispatch", async () => {
+    const root = makeTempDir();
+    let dispatched = false;
+    const harness = makeCliHarness(root, {
+      runWorkflow: async () => {
+        dispatched = true;
+        return [];
+      },
+    });
+
+    assert.equal(
+      await runCli(["run", "--phase", "ci_wait", "--provider", "codex"], harness.deps),
+      2,
+    );
+    assert.equal(await runCli(["run", "--provider", "codex"], harness.deps), 2);
+    assert.equal(
+      await runCli(["run", "--phase", "plan", "--provider", "unknown"], harness.deps),
+      2,
+    );
+    assert.equal(dispatched, false);
+    assert.match(harness.stderr(), /unsupported override phase: ci_wait/);
+    assert.match(harness.stderr(), /--provider and --effort require --phase/);
+    assert.match(harness.stderr(), /unsupported override provider: unknown/);
+  });
+
   it("uses the production workflow runner when no test seam is injected", async () => {
     const root = makeTempDir();
     writeTasks(root, [task({ issue: 9, state: "queued" })]);
@@ -458,6 +504,57 @@ describe("cli doctor/retry/cleanup gates", () => {
       harness.stdout(),
       /WARN\tconfig\tpermissions\.claude\.allowed_tools is deprecated/,
     );
+  });
+
+  it("fails doctor on stale phase overrides and explicit permission relaxation", async () => {
+    const staleRoot = makeTempDir();
+    const staleTask = task({ issue: 94, state: "queued" });
+    staleTask.runtime.phase_override = {
+      phase: "implement",
+      provider: "codex",
+      expires_at_run_id: "previous-run",
+    };
+    writeTasks(staleRoot, [staleTask]);
+    const staleHarness = makeCliHarness(staleRoot, { execFile: () => "ok" });
+
+    assert.equal(await runCli(["doctor"], staleHarness.deps), 1);
+    assert.match(staleHarness.stdout(), /FAIL\tphase override\tstale phase_override for #94/);
+
+    const configRoot = makeTempDir();
+    writeConfig(
+      configRoot,
+      `
+version: 1
+phases:
+  plan:
+    provider: codex
+    permission_profile: write_worktree
+`,
+    );
+    const configHarness = makeCliHarness(configRoot, { execFile: () => "ok" });
+
+    assert.equal(await runCli(["doctor"], configHarness.deps), 1);
+    assert.match(configHarness.stdout(), /FAIL\tconfig\tInvalid autokit config/);
+  });
+
+  it("renders the effective config phase matrix", async () => {
+    const root = makeTempDir();
+    writeConfig(
+      root,
+      `
+version: 1
+phases:
+  plan:
+    provider: codex
+    effort: high
+`,
+    );
+    const harness = makeCliHarness(root);
+
+    assert.equal(await runCli(["config", "show", "--matrix"], harness.deps), 0);
+    assert.match(harness.stdout(), /phase\tprovider\teffort\tprompt_contract\tpermission_profile/);
+    assert.match(harness.stdout(), /plan\tcodex\thigh\tplan\treadonly_repo/);
+    assert.match(harness.stdout(), /implement\tcodex\tmedium\timplement\twrite_worktree/);
   });
 
   it("recovers a corrupt queue from tasks.yaml.bak for retry --recover-corruption", async () => {
@@ -699,6 +796,11 @@ function writeTasks(root: string, tasks: TaskEntry[]): void {
   writeFileSync(join(root, ".autokit", "audit-hmac-key"), "fixture-hmac-key", { mode: 0o600 });
   const tasksFile: TasksFile = { version: 1, generated_at: NOW, tasks };
   writeTasksFileAtomic(tasksPath(root), tasksFile);
+}
+
+function writeConfig(root: string, yaml: string): void {
+  mkdirSync(join(root, ".autokit"), { recursive: true });
+  writeFileSync(join(root, ".autokit", "config.yaml"), yaml, { mode: 0o600 });
 }
 
 function tasksPath(root: string): string {

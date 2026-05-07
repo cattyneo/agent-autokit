@@ -36,6 +36,7 @@ import {
   createAutokitLogger,
   DEFAULT_CONFIG,
   loadTasksFile,
+  type PhaseOverride,
   parseConfigYaml,
   parseGhMergeability,
   parseGhPrView,
@@ -65,6 +66,8 @@ export type WorkflowExecFile = (
   options?: { cwd?: string },
 ) => string;
 
+export type PhaseOverrideInput = Omit<PhaseOverride, "expires_at_run_id">;
+
 export type RunProductionWorkflowOptions = {
   cwd: string;
   env: NodeJS.ProcessEnv;
@@ -73,6 +76,7 @@ export type RunProductionWorkflowOptions = {
   runner?: WorkflowRunner;
   maxSteps?: number;
   now?: () => string;
+  phaseOverride?: PhaseOverrideInput;
 };
 
 const DEFAULT_MAX_STEPS = 100;
@@ -97,6 +101,15 @@ export async function runProductionWorkflow(
     if (task === undefined) {
       return tasksFile.tasks;
     }
+    const phaseOverrideRunId = createRunId(options.now);
+    task = applyPhaseOverrideForRun(
+      tasksFilePath,
+      tasksFile,
+      task,
+      options.phaseOverride,
+      phaseOverrideRunId,
+      logger,
+    );
 
     const issueContext = createIssueContextLoader(task.issue, options.cwd, execFile, logger);
     const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
@@ -258,6 +271,7 @@ export async function runProductionWorkflow(
       break;
     }
 
+    task = clearPhaseOverrideForRun(tasksFilePath, tasksFile, task, phaseOverrideRunId, logger);
     return tasksFile.tasks;
   } finally {
     logger?.close();
@@ -269,6 +283,68 @@ function assertApiKeyEnvUnset(env: NodeJS.ProcessEnv): void {
   if (present.length > 0) {
     throw new Error(`${present.join(",")} must not be exported`);
   }
+}
+
+function createRunId(now?: () => string): string {
+  return `run-${now?.() ?? new Date().toISOString()}`;
+}
+
+function applyPhaseOverrideForRun(
+  tasksFilePath: string,
+  tasksFile: TasksFile,
+  task: TaskEntry,
+  phaseOverride: PhaseOverrideInput | undefined,
+  runId: string,
+  logger: AutokitLogger,
+): TaskEntry {
+  if (
+    task.runtime.phase_override !== null &&
+    task.runtime.phase_override.expires_at_run_id !== runId
+  ) {
+    throw new Error(`stale phase_override for #${task.issue}`);
+  }
+  if (phaseOverride === undefined) {
+    return task;
+  }
+
+  const next = cloneTask(task);
+  next.runtime.phase_override = { ...phaseOverride, expires_at_run_id: runId };
+  persistTask(tasksFilePath, tasksFile, next);
+  logger.auditOperation("phase_override_started", {
+    issue: next.issue,
+    phase: phaseOverride.phase,
+    provider: phaseOverride.provider ?? null,
+    effort: phaseOverride.effort ?? null,
+    expires_at_run_id: runId,
+  });
+  return next;
+}
+
+function clearPhaseOverrideForRun(
+  tasksFilePath: string,
+  tasksFile: TasksFile,
+  task: TaskEntry,
+  runId: string,
+  logger: AutokitLogger,
+): TaskEntry {
+  if (
+    task.runtime.phase_override === null ||
+    task.runtime.phase_override.expires_at_run_id !== runId
+  ) {
+    return task;
+  }
+  const override = task.runtime.phase_override;
+  const next = cloneTask(task);
+  next.runtime.phase_override = null;
+  persistTask(tasksFilePath, tasksFile, next);
+  logger.auditOperation("phase_override_ended", {
+    issue: next.issue,
+    phase: override.phase,
+    provider: override.provider ?? null,
+    effort: override.effort ?? null,
+    expires_at_run_id: runId,
+  });
+  return next;
 }
 
 function defaultExecFile(cwd: string, env: NodeJS.ProcessEnv): WorkflowExecFile {

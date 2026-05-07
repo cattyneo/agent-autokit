@@ -17,6 +17,9 @@
       "path": "./packages/tui"
     },
     {
+      "path": "./packages/serve"
+    },
+    {
       "path": "./packages/cli"
     }
   ]

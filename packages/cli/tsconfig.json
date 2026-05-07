@@ -8,6 +8,7 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../core" },
+    { "path": "../serve" },
     { "path": "../tui" },
     { "path": "../workflows" },
     { "path": "../claude-runner" },

@@ -39,6 +39,7 @@ export {
   runtimePhases,
   serializeConfigYaml,
 } from "./config.js";
+export { redactGitDiff } from "./diff-redaction.js";
 export type {
   EffortDowngradeAuditCandidate,
   EffortResolutionInput,
@@ -48,6 +49,12 @@ export type {
 export { effortLevels, resolveEffort } from "./effort-resolver.js";
 export type { ChildEnv, ParentEnv, RunnerEnvOptions } from "./env-allowlist.js";
 export { buildGhEnv, buildRunnerEnv } from "./env-allowlist.js";
+export type { ProductionApiKeyEnvName } from "./env-preflight.js";
+export {
+  assertProductionApiKeyEnvUnset,
+  ProductionApiKeyEnvError,
+  productionApiKeyEnvNames,
+} from "./env-preflight.js";
 export type { GhPrView, GhPrViewJson } from "./gh.js";
 export {
   buildGhIssueViewBodyArgs,

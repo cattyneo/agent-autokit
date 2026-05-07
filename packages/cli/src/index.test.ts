@@ -73,6 +73,93 @@ describe("cli exit code contract", () => {
     assert.equal(await runCli(["retry", "bad"], harness.deps), 2);
     assert.match(harness.stderr(), /invalid positive integer/);
   });
+
+  it("starts the local serve API through the CLI seam", async () => {
+    const root = makeTempDir();
+    const calls: unknown[] = [];
+    const harness = makeCliHarness(root, {
+      startServe: async (input) => {
+        calls.push({
+          repoRoot: input.repoRoot,
+          host: input.host,
+          port: input.port,
+          hasWorkflow: typeof input.runWorkflow === "function",
+        });
+        return {
+          host: input.host ?? "127.0.0.1",
+          port: 49152,
+          tokenPath: "/tmp/token",
+          close: async () => {},
+        };
+      },
+    });
+
+    assert.equal(await runCli(["serve", "--port", "0"], harness.deps), 0);
+    assert.deepEqual(calls, [{ repoRoot: root, host: "127.0.0.1", port: 0, hasWorkflow: true }]);
+    assert.match(harness.stdout(), /serve listening\thttp:\/\/127\.0\.0\.1:49152/);
+    assert.match(harness.stdout(), /token file\t\/tmp\/token/);
+  });
+
+  it("routes serve workflow operations through CLI command semantics", async () => {
+    const root = makeTempDir();
+    const paused = task({ issue: 9, state: "paused" });
+    paused.runtime.previous_state = "queued";
+    writeTasks(root, [
+      paused,
+      retryCleanupPausedTask(10),
+      forceDetachTask({ issue: 11, state: "cleaning" }),
+    ]);
+    const execs: string[] = [];
+    const harness = makeCliHarness(root, {
+      workflowMaxSteps: 0,
+      execFile: (command, args) => {
+        execs.push(`${command} ${args.join(" ")}`);
+        if (command === "gh" && args[0] === "pr" && args[1] === "view") {
+          return JSON.stringify({
+            state: "MERGED",
+            merged: true,
+            headRefOid: "head-11",
+            mergedAt: "2026-05-04T10:00:00Z",
+          });
+        }
+        return "";
+      },
+      startServe: async (input) => {
+        await input.runWorkflow({
+          repoRoot: root,
+          operation: "resume",
+          issue: 9,
+          run_id: "run-resume",
+        });
+        await input.runWorkflow({
+          repoRoot: root,
+          operation: "retry",
+          issue: 10,
+          run_id: "run-retry",
+        });
+        await input.runWorkflow({
+          repoRoot: root,
+          operation: "cleanup",
+          issue: 11,
+          merged_only: true,
+          run_id: "run-cleanup",
+        });
+        return {
+          host: input.host ?? "127.0.0.1",
+          port: 49152,
+          tokenPath: "/tmp/token",
+          close: async () => {},
+        };
+      },
+    });
+
+    assert.equal(await runCli(["serve", "--port", "0"], harness.deps), 0);
+    const loaded = loadTasksFile(tasksPath(root)).tasks;
+    assert.equal(loaded.find((entry) => entry.issue === 9)?.state, "queued");
+    assert.equal(loaded.find((entry) => entry.issue === 10)?.state, "queued");
+    assert.equal(loaded.find((entry) => entry.issue === 11)?.state, "merged");
+    assert.ok(execs.some((entry) => entry.startsWith("gh pr view 31")));
+  });
 });
 
 describe("cli task commands", () => {

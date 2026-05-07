@@ -43,7 +43,7 @@ if grep --line-number --fixed-strings "workspace:" "$CLI_PACKAGE" "${publish_js[
   exit 1
 fi
 
-if grep --line-number -E "@cattyneo/autokit-(core|workflows|claude-runner|codex-runner|tui)" "$CLI_PACKAGE" "${publish_js[@]}" >/tmp/autokit-private-import-grep.txt 2>/dev/null; then
+if grep --line-number -E "@cattyneo/autokit-(core|workflows|claude-runner|codex-runner|tui|serve)" "$CLI_PACKAGE" "${publish_js[@]}" >/tmp/autokit-private-import-grep.txt 2>/dev/null; then
   cat /tmp/autokit-private-import-grep.txt
   echo "::error::publish candidate contains unresolved private workspace import"
   exit 1

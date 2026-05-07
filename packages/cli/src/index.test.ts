@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -559,6 +560,124 @@ phases:
     assert.match(harness.stdout(), /implement\tcodex\tmedium\timplement\twrite_worktree/);
   });
 
+  it("renders issue logs after joining rotated files and applying a second sanitize pass", async () => {
+    const root = makeTempDir();
+    writeConfig(
+      root,
+      `
+version: 1
+logging:
+  redact_patterns:
+    - custom-secret-[0-9]+
+`,
+    );
+    mkdirSync(join(root, ".autokit", "logs"), { recursive: true });
+    const oldLog = join(root, ".autokit", "logs", "2026-05-04.log");
+    const newLog = join(root, ".autokit", "logs", "2026-05-05.log");
+    const githubToken = dummyGithubToken("3");
+    const legacyGithubToken = dummyGithubToken("9");
+    const globalOpenAiKey = dummyOpenAiKey("globalsecret");
+    const otherOpenAiKey = dummyOpenAiKey("othersecret");
+    const structuredRefresh = "structured-refresh-value";
+    const structuredOauth = "structured-oauth-value";
+    const structuredAccess = "structured-access-value";
+    const structuredPrivateKey = "structured-private-key-value";
+    const structuredArray = "structured-array-value";
+    writeFileSync(
+      newLog,
+      `${JSON.stringify({
+        issue: 96,
+        event: "audit",
+        message: `new Bearer ${githubToken} custom-secret-42`,
+      })}\n`,
+      { mode: 0o600 },
+    );
+    writeFileSync(
+      oldLog,
+      [
+        `legacy unscoped ${legacyGithubToken}`,
+        JSON.stringify({ message: `global ${globalOpenAiKey}` }),
+        JSON.stringify({ issue: 7, message: `other ${otherOpenAiKey}` }),
+        JSON.stringify({
+          issue: 96,
+          event: "audit",
+          message: 'old {"refreshToken":"refresh-secret"}',
+          details: {
+            refreshToken: structuredRefresh,
+            oauthAccessToken: structuredOauth,
+            access_token: structuredAccess,
+            private_key: structuredPrivateKey,
+            nested: [{ token: structuredArray }],
+          },
+        }),
+      ].join("\n"),
+      { mode: 0o600 },
+    );
+    utimesSync(oldLog, new Date("2026-05-04T00:00:00Z"), new Date("2026-05-04T00:00:00Z"));
+    utimesSync(newLog, new Date("2026-05-05T00:00:00Z"), new Date("2026-05-05T00:00:00Z"));
+    const harness = makeCliHarness(root);
+
+    assert.equal(await runCli(["logs", "--issue", "96"], harness.deps), 0);
+
+    const output = harness.stdout();
+    assert.match(output, /old/);
+    assert.match(output, /new/);
+    assert.ok(output.indexOf("old") < output.indexOf("new"));
+    assert.match(output, /<REDACTED>/);
+    assert.doesNotMatch(output, new RegExp(escapeRegExp(githubToken)));
+    assert.doesNotMatch(output, /refresh-secret/);
+    assert.doesNotMatch(output, new RegExp(escapeRegExp(structuredRefresh)));
+    assert.doesNotMatch(output, new RegExp(escapeRegExp(structuredOauth)));
+    assert.doesNotMatch(output, new RegExp(escapeRegExp(structuredAccess)));
+    assert.doesNotMatch(output, new RegExp(escapeRegExp(structuredPrivateKey)));
+    assert.doesNotMatch(output, new RegExp(escapeRegExp(structuredArray)));
+    assert.doesNotMatch(output, new RegExp(escapeRegExp(otherOpenAiKey)));
+    assert.doesNotMatch(output, /custom-secret-42/);
+    assert.doesNotMatch(output, new RegExp(escapeRegExp(globalOpenAiKey)));
+    assert.doesNotMatch(output, new RegExp(escapeRegExp(legacyGithubToken)));
+  });
+
+  it("renders git diff through blacklist hunk removal and content sanitize", async () => {
+    const root = makeTempDir();
+    const calls: string[] = [];
+    const openAiKey = dummyOpenAiKey("newsecret");
+    const githubToken = dummyGithubToken("4");
+    const harness = makeCliHarness(root, {
+      execFile: (command, args) => {
+        calls.push(`${command} ${args.join(" ")}`);
+        assert.equal(command, "git");
+        assert.deepEqual(args, ["diff", "--no-ext-diff", "HEAD", "--"]);
+        return [
+          "diff --git a/.env b/.env",
+          "index 1111111..2222222 100644",
+          "--- a/.env",
+          "+++ b/.env",
+          "@@ -1 +1 @@",
+          `-OPENAI_API_KEY=${dummyOpenAiKey("oldsecret")}`,
+          `+OPENAI_API_KEY=${openAiKey}`,
+          "diff --git a/docs/example.md b/docs/example.md",
+          "index 3333333..4444444 100644",
+          "--- a/docs/example.md",
+          "+++ b/docs/example.md",
+          "@@ -1 +1 @@",
+          "-safe line",
+          `+Bearer ${githubToken}`,
+        ].join("\n");
+      },
+    });
+
+    assert.equal(await runCli(["diff", "--issue", "96"], harness.deps), 0);
+
+    const output = harness.stdout();
+    assert.deepEqual(calls, ["git diff --no-ext-diff HEAD --"]);
+    assert.match(output, /\[REDACTED hunk: \.env\]/);
+    assert.match(output, /docs\/example\.md/);
+    assert.match(output, /<REDACTED>/);
+    assert.doesNotMatch(output, new RegExp(escapeRegExp(openAiKey)));
+    assert.doesNotMatch(output, /OPENAI_API_KEY=/);
+    assert.doesNotMatch(output, new RegExp(escapeRegExp(githubToken)));
+  });
+
   it("recovers a corrupt queue from tasks.yaml.bak for retry --recover-corruption", async () => {
     const root = makeTempDir();
     writeTasks(root, [task({ issue: 9, state: "paused" })]);
@@ -807,6 +926,18 @@ function writeConfig(root: string, yaml: string): void {
 
 function tasksPath(root: string): string {
   return join(root, ".autokit", "tasks.yaml");
+}
+
+function dummyGithubToken(fill: string): string {
+  return `ghp_${fill.repeat(36)}`;
+}
+
+function dummyOpenAiKey(seed: string): string {
+  return `sk-${seed.repeat(3)}`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function makeTempDir(): string {

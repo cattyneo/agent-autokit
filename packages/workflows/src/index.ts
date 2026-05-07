@@ -1377,6 +1377,7 @@ async function resolveAndPersistEffort(
   const config = options.config ?? DEFAULT_CONFIG;
   const provider = effectiveProviderForPhase(task, phase, config);
   const effort = effectiveEffortForPhase(task, phase, config);
+  const effectiveModel = task.runtime.resolved_model[phase] ?? config.phases[phase].model;
   const timeoutMs = resolveRunnerTimeout(config, phase, {
     phase,
     provider,
@@ -1388,7 +1389,7 @@ async function resolveAndPersistEffort(
     phase,
     provider,
     effort,
-    model: task.runtime.resolved_model[phase] ?? config.phases[phase].model,
+    model: effectiveModel,
     unsupported_policy: config.effort.unsupported_policy,
     timeout_ms: timeoutMs,
   });
@@ -1403,6 +1404,7 @@ async function resolveAndPersistEffort(
   const currentSession = task.provider_sessions[phase];
   if (
     resolvedEffortEquals(task.runtime.resolved_effort, resolved) &&
+    task.runtime.resolved_model[phase] === effectiveModel &&
     currentSession.last_provider === provider
   ) {
     if (resolved.downgraded_from !== null) {
@@ -1411,7 +1413,7 @@ async function resolveAndPersistEffort(
           kind: "effort_downgrade",
           phase: resolved.phase,
           provider: resolved.provider,
-          model: task.runtime.resolved_model[phase] ?? config.phases[phase].model,
+          model: effectiveModel,
           from: resolved.downgraded_from,
           to: resolved.effort,
         },
@@ -1423,6 +1425,7 @@ async function resolveAndPersistEffort(
 
   const next = cloneTask(task);
   next.runtime.resolved_effort = resolved;
+  next.runtime.resolved_model[phase] = effectiveModel;
   next.provider_sessions[phase].last_provider = provider;
   await persistTask(next, options);
   if (result.audit !== null) {

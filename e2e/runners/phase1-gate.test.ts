@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import { runProductionWorkflow, type WorkflowExecFile } from "../../packages/cli/src/executor.ts";
+import { runCli } from "../../packages/cli/src/index.ts";
 import {
   type AgentRunInput,
   createTaskEntry,
+  loadTasksFile,
   type TaskEntry,
   type TasksFile,
-  transitionTask,
   writeTasksFileAtomic,
 } from "../../packages/core/src/index.ts";
 import type { WorkflowRunner } from "../../packages/workflows/src/index.ts";
@@ -27,11 +28,12 @@ describe("Phase 1 E2E gate", () => {
     const commands: string[] = [];
     const calls: AgentRunInput[] = [];
     const runner = phase1Runner(calls);
+    const execFile = mockExecFile(root, commands);
 
     const pausedTasks = await runProductionWorkflow({
       cwd: root,
       env: {},
-      execFile: mockExecFile(commands),
+      execFile,
       runner,
       maxSteps: 20,
       now: () => NOW,
@@ -44,18 +46,19 @@ describe("Phase 1 E2E gate", () => {
     assert.equal(paused.runtime.previous_state, "reviewing");
     assert.equal(paused.runtime.phase_self_correct_done, true);
 
-    const resumed = transitionTask(paused, { type: "resume" });
-    writeTasks(root, [resumed]);
-
-    const finalTasks = await runProductionWorkflow({
+    const resumeExit = await runCli(["resume", "97"], {
       cwd: root,
       env: {},
-      execFile: mockExecFile(commands),
-      runner,
-      maxSteps: 20,
+      execFile,
+      workflowRunner: runner,
+      workflowMaxSteps: 20,
       now: () => NOW,
+      stdout: { write: () => undefined },
+      stderr: { write: (chunk) => assert.fail(chunk) },
     });
 
+    assert.equal(resumeExit, 0);
+    const finalTasks = loadTasks(root);
     const finalTask = finalTasks[0];
     assert.equal(finalTask.state, "merged");
     assert.deepEqual(
@@ -72,6 +75,7 @@ describe("Phase 1 E2E gate", () => {
 
     const overridePlan = calls[0];
     assert.equal(overridePlan.model, "gpt-5.5");
+    assert.equal(finalTask.runtime.resolved_model.plan, "gpt-5.5");
     assert.deepEqual(overridePlan.effort, {
       phase: "plan",
       provider: "codex",
@@ -120,7 +124,14 @@ describe("Phase 1 E2E gate", () => {
     );
     assert.ok(commands.includes("gh pr merge 97 --auto --rebase --match-head-commit remote-head"));
     assert.ok(commands.includes("git push origin --delete autokit/issue-97"));
+    assert.ok(commands.includes("git worktree remove .autokit/worktrees/issue-97"));
+    assert.equal(
+      commands.some((command) => command.includes("git worktree remove --force")),
+      false,
+    );
+    assert.equal(commands.includes("git worktree prune"), false);
     assert.equal(existsSync(join(root, ".autokit", "reviews", "issue-97-review-1.md")), true);
+    assert.equal(existsSync(join(root, ".autokit", "worktrees", "issue-97")), false);
 
     const smoke = verifyUnprotectedSmoke({
       repoPath: root,
@@ -186,7 +197,9 @@ function phase1Runner(calls: AgentRunInput[]): WorkflowRunner {
   };
 }
 
-function mockExecFile(commands: string[]): WorkflowExecFile {
+function mockExecFile(root: string, commands: string[]): WorkflowExecFile {
+  const expectedWorktree = join(root, ".autokit", "worktrees", "issue-97");
+  const expectedWorktreeInput = ".autokit/worktrees/issue-97";
   const revParseResults = [
     "base-sha",
     "base-sha",
@@ -199,6 +212,30 @@ function mockExecFile(commands: string[]): WorkflowExecFile {
     const line = `${command} ${args.join(" ")}`;
     commands.push(line);
 
+    if (line === "git fetch origin main") {
+      return "";
+    }
+    if (
+      command === "git" &&
+      args[0] === "worktree" &&
+      args[1] === "add" &&
+      args[2] === "-b" &&
+      args[3] === "autokit/issue-97" &&
+      args[5] === "origin/main"
+    ) {
+      assert.equal(args[4], expectedWorktree);
+      mkdirSync(expectedWorktree, { recursive: true });
+      return "";
+    }
+    if (line === "git add -A") {
+      return "";
+    }
+    if (line === "git commit -m Implement issue #97") {
+      return "";
+    }
+    if (line === "git push -u origin autokit/issue-97") {
+      return "";
+    }
     if (line === "gh issue view 97 --json number,title,body,labels,state,url") {
       return JSON.stringify({
         number: 97,
@@ -226,6 +263,9 @@ function mockExecFile(commands: string[]): WorkflowExecFile {
     if (line === "gh pr view 97 --json headRefOid,baseRefOid") {
       return JSON.stringify({ headRefOid: "remote-head", baseRefOid: "base-sha" });
     }
+    if (line === "gh pr ready 97") {
+      return "";
+    }
     if (line === "gh pr view 97 --json statusCheckRollup") {
       return JSON.stringify({
         statusCheckRollup: [{ name: "test", status: "COMPLETED", conclusion: "SUCCESS" }],
@@ -248,7 +288,26 @@ function mockExecFile(commands: string[]): WorkflowExecFile {
         mergeStateStatus: "CLEAN",
       });
     }
-    return "";
+    if (line === "gh pr merge 97 --auto --rebase --match-head-commit remote-head") {
+      return "";
+    }
+    if (line === "git push origin --delete autokit/issue-97") {
+      return "";
+    }
+    if (
+      command === "git" &&
+      args[0] === "worktree" &&
+      args[1] === "remove" &&
+      args[2] === expectedWorktreeInput
+    ) {
+      rmSync(expectedWorktree, { recursive: true, force: true });
+      assert.equal(existsSync(expectedWorktree), false);
+      return "";
+    }
+    if (line === "git worktree prune") {
+      return "";
+    }
+    throw new Error(`unexpected exec: ${line}`);
   };
 }
 
@@ -297,6 +356,10 @@ function writeTasks(root: string, tasks: TaskEntry[]): void {
   });
   const tasksFile: TasksFile = { version: 1, generated_at: NOW, tasks };
   writeTasksFileAtomic(join(root, ".autokit", "tasks.yaml"), tasksFile);
+}
+
+function loadTasks(root: string): TaskEntry[] {
+  return loadTasksFile(join(root, ".autokit", "tasks.yaml")).tasks;
 }
 
 function writePhase1Config(root: string): void {

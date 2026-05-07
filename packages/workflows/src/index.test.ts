@@ -320,6 +320,41 @@ describe("planning workflow", () => {
     assert.doesNotMatch(calls[1].prompt, /answer: vitest/);
   });
 
+  it("persists configured models before runner dispatch and reuses them after resume", async () => {
+    const calls: AgentRunInput[] = [];
+    const first = await runPlanningWorkflow(baseTask(), {
+      runner: queueRunner(calls, [
+        {
+          status: "need_input",
+          summary: "question",
+          question: { text: "Proceed?", default: "yes" },
+        },
+      ]),
+      repoRoot: "/repo",
+      config: parseConfig({ phases: { plan: { model: "model-a" } } }),
+      now: () => "2026-05-05T10:00:00+09:00",
+    });
+
+    assert.equal(first.task.state, "paused");
+    assert.equal(first.task.runtime.resolved_model.plan, "model-a");
+    const resumed = transitionTask(first.task, { type: "resume" });
+
+    const second = await runPlanningWorkflow(resumed, {
+      runner: queueRunner(calls, [
+        completed("claude", { plan_markdown: "## Plan", assumptions: [], risks: [] }),
+        completed("codex", { result: "ok", findings: [] }),
+      ]),
+      repoRoot: "/repo",
+      config: parseConfig({ phases: { plan: { model: "model-b" } } }),
+      now: () => "2026-05-05T10:01:00+09:00",
+    });
+
+    assert.equal(second.task.state, "planned");
+    assert.equal(calls[0].model, "model-a");
+    assert.equal(calls[1].model, "model-a");
+    assert.equal(calls[2].model, "auto");
+  });
+
   it("records interrupted_at and previous state when a need_input prompt is interrupted", async () => {
     const result = await runPlanningWorkflow(baseTask(), {
       runner: queueRunner(

@@ -325,6 +325,10 @@ function assertClaudeInput(input: AgentRunInput): void {
   const row = validateCapabilitySelection({ phase: input.phase, provider: input.provider });
   const expectedPermission = derive_claude_perm(input.phase);
   assertClaudeEffort(input);
+  const effort = input.effort;
+  if (effort === undefined) {
+    throw new ClaudeRunnerError("other", `Claude phase ${input.phase} requires resolved effort.`);
+  }
   assertClaudeEffectivePermission(input, row.permission_profile);
   const actualPermission = claudePermissionForInput(input);
   if (!isClaudePermissionWithinCap(actualPermission, expectedPermission)) {
@@ -364,6 +368,12 @@ function assertClaudeInput(input: AgentRunInput): void {
   resolveClaudeWorkspaceRoot(input);
   if (input.timeoutMs <= 0 || !Number.isSafeInteger(input.timeoutMs)) {
     throw new ClaudeRunnerError("runner_timeout", "timeoutMs must be a positive safe integer.");
+  }
+  if (input.timeoutMs !== effort.timeout_ms) {
+    throw new ClaudeRunnerError(
+      "runner_timeout",
+      `Claude phase ${input.phase} timeoutMs must match resolved effort timeout_ms.`,
+    );
   }
 }
 

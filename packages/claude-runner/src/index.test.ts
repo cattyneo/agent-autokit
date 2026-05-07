@@ -50,23 +50,25 @@ const baseInput = {
     workspaceScope: "repo" as const,
     workspaceRoot,
   },
-  timeoutMs: 1_000,
+  timeoutMs: 1_800_000,
 };
 
 function inputForPhase(phase: Phase, effort: ResolvedEffort["effort"] = "medium") {
   const write = phase === "implement" || phase === "fix";
   const repoScoped = phase === "plan" || phase === "plan_verify" || phase === "plan_fix";
+  const resolved = resolvedEffort(effort, phase);
   return {
     ...baseInput,
     phase,
     promptContract: promptContractForPhase(phase),
-    effort: resolvedEffort(effort, phase),
+    effort: resolved,
     effective_permission: effectivePermissionForPhase(phase),
     permissions: {
       ...baseInput.permissions,
       mode: write ? ("workspace-write" as const) : ("readonly" as const),
       workspaceScope: repoScoped ? ("repo" as const) : ("worktree" as const),
     },
+    timeoutMs: resolved.timeout_ms,
   };
 }
 
@@ -186,6 +188,16 @@ describe("claude-runner", () => {
     assert.equal(readArg(args, "--model"), "claude-custom");
   });
 
+  it("uses the resolved effort timeout instead of recomputing the effort table default", () => {
+    const effort = { ...resolvedEffort("high", "review"), timeout_ms: 900_000 };
+    const input = { ...inputForPhase("review", "high"), effort, timeoutMs: effort.timeout_ms };
+    const profile = buildClaudeEffortProfile(input);
+    const prompt = buildClaudeArgs(input).at(-1) ?? "";
+
+    assert.equal(profile.timeoutMs, 900_000);
+    assert.match(prompt, /timeout_ms: 900000/);
+  });
+
   it("adds resume by stored Claude session id", () => {
     const args = buildClaudeArgs({
       ...baseInput,
@@ -258,6 +270,21 @@ describe("claude-runner", () => {
     assert.throws(
       () => buildClaudeArgs({ ...baseInput, effective_permission: undefined }),
       (error) => error instanceof ClaudeRunnerError && error.code === "sandbox_violation",
+    );
+    assert.throws(
+      () =>
+        buildClaudeArgs({
+          ...baseInput,
+          effective_permission: {
+            permission_profile: "readonly_worktree",
+            claude: derive_claude_perm("plan"),
+          },
+        }),
+      (error) => error instanceof ClaudeRunnerError && error.code === "sandbox_violation",
+    );
+    assert.throws(
+      () => buildClaudeArgs({ ...baseInput, timeoutMs: baseInput.effort.timeout_ms - 1 }),
+      (error) => error instanceof ClaudeRunnerError && error.code === "runner_timeout",
     );
     assert.throws(
       () =>
@@ -664,9 +691,10 @@ describe("claude-runner", () => {
 
   it("kills and reports runner_timeout when the subprocess stalls", async () => {
     const child = new FakeChild({ closeOnKill: false });
+    const effort = { ...resolvedEffort("medium", "plan"), timeout_ms: 5 };
     await assert.rejects(
       runClaude(
-        { ...baseInput, timeoutMs: 5 },
+        { ...baseInput, effort, timeoutMs: effort.timeout_ms },
         {
           parentEnv: { PATH: "/bin" },
           killGraceMs: 0,

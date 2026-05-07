@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "bun run --filter '*' build",
+    "build": "tsc -b && bun run --cwd packages/cli build",
     "test": "bun test",
     "lint": "biome check . && eslint .",
     "format": "biome format --write .",

@@ -89,14 +89,12 @@ describe("cli diff redaction", () => {
 
     const redacted = redactGitDiff(rawDiff, DEFAULT_CONFIG);
 
+    assert.match(redacted, /\[REDACTED hunk: <REDACTED>\]/);
+    assert.doesNotMatch(redacted, /\.codex\/auth\.json|\.claude\/credentials\.json/i);
     for (const path of [
-      ".codex/auth.json",
-      ".claude/credentials.json",
       ".autokit/audit-hmac-key",
       ".env~",
       ".env+prod",
-      ".CODEX/auth.json",
-      ".Claude/Credentials.JSON",
       "secrets/ID_RSA_BACKUP",
       "keys/private.pem",
       "keys/prod.key",
@@ -171,7 +169,8 @@ describe("cli diff redaction", () => {
 
     const redacted = redactGitDiff(rawDiff, DEFAULT_CONFIG);
 
-    assert.match(redacted, /\[REDACTED hunk: \.codex\/auth\.json\]/);
+    assert.match(redacted, /\[REDACTED hunk: <REDACTED>\]/);
+    assert.doesNotMatch(redacted, /\.codex\/auth\.json/);
     assert.doesNotMatch(redacted, /plain structured credential/);
     assert.doesNotMatch(redacted, /documented auth example/);
   });

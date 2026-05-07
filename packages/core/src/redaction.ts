@@ -43,6 +43,8 @@ function redactEnvLineValues(value: string): string {
 
 function builtInRedactPatterns(config: AutokitConfig): RegExp[] {
   return [
+    /(?:~|<repo>|\/Users\/[^/\s]+|\/home\/[^/\s]+|C:\\Users\\[^\\\s]+)?\/?\.codex\/auth(?:\.json)?/gi,
+    /(?:~|<repo>|\/Users\/[^/\s]+|\/home\/[^/\s]+|C:\\Users\\[^\\\s]+)?\/?\.claude\/credentials[^/\s]*/gi,
     /ghp_[A-Za-z0-9]{20,}/g,
     /github_pat_[A-Za-z0-9_]{20,}/g,
     /gh[ousr]_[A-Za-z0-9]{20,}/g,
@@ -53,6 +55,8 @@ function builtInRedactPatterns(config: AutokitConfig): RegExp[] {
     /(refreshToken|oauthAccessToken|access_token|refresh_token|id_token|token)["']?\s*[:=]\s*["'][^"']+["']/gi,
     /ssh-rsa\s+[A-Za-z0-9+/=]+/g,
     /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----(?:\r?\n[+ -]?[A-Za-z0-9+/=]{16,})+/g,
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----/g,
     /xox[baprs]-[A-Za-z0-9-]+/g,
     /aws_access_key_id\s*=\s*\S+/gi,
     /aws_secret_access_key\s*=\s*\S+/gi,

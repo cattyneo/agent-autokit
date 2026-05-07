@@ -98,6 +98,7 @@ flowchart TB
 - **review / supervise は writeable runner に渡してはならない**（中立性 + 副作用なし）
 - **codex の `allow_network: true` は `home_isolation: isolated` 必須**（schema validation）
 - worktree scope は `worktree`（デフォルト）/ `repo` のいずれか。`worktree` で隔離する
+- provider override は permission profile を変えない。`implement` / `fix` だけが write_worktree、`review` / `supervise` は provider が変わっても readonly_worktree のまま
 
 ## 4. auto-merge head SHA gate
 
@@ -188,13 +189,59 @@ logger 経由で残すイベント:
 | イベント | タイミング |
 |---------|-----------|
 | `sanitize_pass_hmac` | issue/findings sanitize 通過 |
+| `effort_downgrade` | unsupported effort を `downgrade` policy で 1 段階下げた |
+| `phase_self_correct` | prompt-contract 違反の初回 self-correction retry |
+| `phase_override_started` / `phase_override_ended` | 1 run override の開始 / 終了 |
 | `auto_merge_reserved` | auto-merge 予約成功 |
 | `auto_merge_disabled` | auto-merge 無効化 |
 | `branch_deleted` | remote branch 削除 |
 | `init_rollback` | init 失敗時 rollback 完了 |
 | `init_rollback_failed` | rollback 自体が失敗、backup 保持 |
+| `preset_apply_*` | preset apply / rollback 境界 |
+| `serve_lock_busy` | serve 経路で lock fast-fail 409 |
+| `sse_write_failed` | SSE client write failure を workflow から隔離 |
 
 これらは `.autokit/logs/` に出る。順序付き JSON Lines。`logging.redact_patterns` でログ出力時に追加マスクされる（github token / API key 形）。
+
+## 9. preset apply 境界
+
+`autokit preset apply` は `.agents/` と `.autokit/config.yaml` を更新するため、runner とは別の高リスク write path。
+
+```mermaid
+flowchart LR
+  P["preset source"]
+  Pre["path/content/preflight"]
+  B["XDG backup"]
+  S["staging"]
+  V["doctor validation"]
+  A["atomic replace"]
+  R["rollback on post-rename failure"]
+
+  P --> Pre --> B --> S --> V --> A
+  A -. failure .-> R
+```
+
+fail-closed 条件:
+
+- path traversal は `preset_path_traversal`
+- blacklist / content signature / protected array 違反は `preset_blacklist_hit`
+- `tasks.yaml` task entry は作らない
+- apply backup は repo tree 外の `${XDG_STATE_HOME:-~/.local/state}/autokit/backup/<repo-id>/...`
+- rollback failure は `preset_apply_rollback_failed` audit と復旧手順を出し、壊れた `.agents` が残り得ることを隠さない
+
+## 10. serve API 境界
+
+`autokit serve` は local API だが、GitHub PR / merge / cleanup を起動できるため browser-origin 攻撃を前提に守る。
+
+| 境界 | 契約 |
+|------|------|
+| bind | 既定 `127.0.0.1`。`0.0.0.0` / `::` は起動拒否 |
+| token | 32 byte CSPRNG、毎起動 regenerate、file mode `0600`、Bearer header のみ |
+| Host | `127.0.0.1` / `localhost` / `[::1]` の port 完全一致 |
+| Origin | 同一オリジンか header 欠落のみ許可。`Origin: null` は 403 |
+| Content-Type | mutating endpoint は `application/json` 必須 |
+| lock | `.autokit/.lock/` を取得できない mutating request は 409 `serve_lock_busy` |
+| SSE | closed kind list、runner stdout は debug level のみ、redactor と frame cap を通す |
 
 ## まとめ
 
@@ -203,7 +250,8 @@ logger 経由で残すイベント:
 runner 出力  → contract 検証 → state-machine
 state        → atomic write → tasks.yaml (0o600)
 gh 操作      → head SHA gate → auto-merge
+serve/preset → lock + auth/path gate → state or assets
 全イベント   → HMAC 監査 → logs (redact 適用)
 ```
 
-これら 8 つのうち 1 つでも欠けたら設計が壊れる。新しいフェーズや拡張を入れるときは、すべての境界を通過するか必ず確認する。
+これらのうち 1 つでも欠けたら設計が壊れる。新しいフェーズや拡張を入れるときは、すべての境界を通過するか必ず確認する。

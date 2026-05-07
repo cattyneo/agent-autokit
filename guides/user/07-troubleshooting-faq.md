@@ -52,6 +52,46 @@ ls -la .claude .codex
 
 `.agents/prompts/` の中身が `DEFAULT_CONFIG` 期待のセットと一致しない。`autokit init --dry-run` で計画上のアセット一覧を確認し、欠落 / 余分を修正。最終手段は `init` をやり直し（既存ファイルがあれば skip 扱いになるので、削除してから `init` 再実行）。
 
+### `unsupported override phase: ci_wait` / `unsupported override effort: xhigh`
+
+`autokit run --phase / --provider / --effort` の 1 run override が capability table または effort enum に合っていない。`--phase` は `plan` / `plan_verify` / `plan_fix` / `implement` / `review` / `supervise` / `fix` のみ。`effort` は `auto` / `low` / `medium` / `high` のみ。
+
+```bash
+autokit config show --matrix
+autokit run --phase implement --provider codex --effort high
+```
+
+`ci_wait` / `merge` は core-only step で runner phase ではない。
+
+### `effort_unsupported`
+
+provider / model / effort の組合せがサポートされない。`effort.unsupported_policy=fail` なら failed になる。運用上許容できるなら `effort.unsupported_policy=downgrade` にし、downgrade audit を残して進める。
+
+```yaml
+effort:
+  default: medium
+  unsupported_policy: downgrade
+```
+
+### `preset_path_traversal`
+
+local preset または bundled preset に、絶対 path / `..` / symlink / NUL byte / `.agents` 外 realpath が含まれる。`tasks.yaml` は更新されない。該当 preset を修正してから `autokit preset show <name>` を再実行。
+
+### `preset_blacklist_hit`
+
+`.env*` / `.codex/**` / `.claude/credentials*` / private key / token-like content / protected array 違反が見つかった。stderr にはカテゴリのみ出る。
+
+よくある対処:
+
+- secret を preset から削除し、repo 外の auth state に戻す
+- `logging.redact_patterns` / `init.backup_blacklist` を空にしない
+- `permissions.claude.allowed_tools` を capability hard cap 外へ広げない
+- protected array 置換が本当に必要な場合だけ `autokit preset apply <name> --allow-protected-replace`
+
+### `autokit lock busy; another autokit command or serve process is active`
+
+`.autokit/.lock/` を別の CLI / `autokit serve` / preset apply が保持している。state-changing command は exit `75` で fast-fail し、`tasks.yaml` は更新しない。実行中プロセスがあるなら待つ。stale lock なら [06-recovery.md](./06-recovery.md) の lock 残留手順で holder を確認する。
+
 ### `issue #N is not paused`
 
 `autokit resume <N>` を打ったが `<N>` は `paused` ではない。`autokit list` で実際の state を確認。`queued` / `merged` / `failed` への対処はそれぞれ `run` / 不要 / `retry`。
@@ -76,7 +116,7 @@ autokit retry <N>
 
 ### Q. 並列で複数 issue を処理できる？
 
-A. v0.1.0 では `parallel: 1` を実質前提にしており、`run` のメインループも 1 件取りきるまで進む。複数 issue を同時に進めたい場合は v0.2 以降を待つ。
+A. v0.2.0 でも `parallel: 1` を実質前提にしており、`run` のメインループも 1 件取りきるまで進む。CLI / serve / preset apply の二重起動は `.autokit/.lock/` で直列化される。
 
 ### Q. base branch を `main` 以外にしたい
 
@@ -137,7 +177,7 @@ A. `init` 前は WARN（`.agents/prompts/` 未生成）が正常。`init` 後も
 
 ### Q. CI 待ち時間中に他 issue を進めたい
 
-A. v0.1.0 では同時には不可。CI 待ちの issue が paused / ci_waiting で進行を占有する。完了するまで他は queued のまま。
+A. v0.2.0 でも同時には不可。CI 待ちの issue が paused / ci_waiting で進行を占有する。完了するまで他は queued のまま。
 
 ### Q. 監査鍵 (`audit-hmac-key`) を誤って消した
 
@@ -149,7 +189,15 @@ A. 可能。`gh auth status` が `repo` 権限を持っていればよい。
 
 ### Q. v0.2 以降の機能は？
 
-A. SDK runner matrix・public registry publish・branch protection 設計の汎用化等。`docs/PLAN.md` を参照。
+A. v0.2.0 では capability / effort / preset / `autokit serve` / prompt/skill/agent gate が追加済み。SDK runner matrix・public registry publish・branch protection 設計の汎用化は引き続き将来課題。`docs/PLAN.md` を参照。
+
+### Q. `autokit serve` の token はどこ？
+
+A. `autokit serve` 起動時の `token file` 行に出る。token は毎起動で再生成され、`Authorization: Bearer <token>` ヘッダのみ受理される。query / cookie / form field では渡せない。
+
+### Q. preset はどこに置ける？
+
+A. local preset は `.autokit/presets/<name>/`。`.autokit/.gitignore` により通常は git 追跡外。bundled preset と同名なら local が優先される。
 
 ## 関連
 

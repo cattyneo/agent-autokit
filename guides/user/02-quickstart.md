@@ -4,6 +4,18 @@
 
 前提: [01-getting-started.md](./01-getting-started.md) を完了済み（`autokit doctor` が PASS、`autokit init` 済み）。
 
+任意で、対象 repository に合う preset を先に適用する:
+
+```bash
+autokit preset list
+autokit preset apply default
+# Laravel / Filament なら laravel-filament、Next.js / shadcn/ui なら next-shadcn、
+# docs 作成中心なら docs-create を選ぶ
+autokit doctor
+```
+
+preset は `.agents/` と `.autokit/config.yaml` を更新する。path traversal / blacklist / protected array は fail-closed で拒否されるため、適用できない場合は [07-troubleshooting-faq.md](./07-troubleshooting-faq.md) の `preset_*` 項目を確認する。
+
 ## ステップ 1: 対象 issue を queue に入れる
 
 repository に Open issue が `#10` 〜 `#13` の 4 件あり、いずれも `agent-ready` label がついているとする:
@@ -58,8 +70,9 @@ autokit run
 | 終了コード | 意味 | 次にすべきこと |
 |------------|------|---------------|
 | `0` | 全タスクが `merged` に到達 | 何もしない |
-| `75` | 1 件以上が `paused` / `cleaning` 等の **resumable state** | 原因に応じて対処後 `autokit resume` |
-| `1` | 1 件以上が `failed` または引数エラー | エラーログを見て修正 |
+| `75` | 1 件以上が `paused` / `cleaning` 等の **resumable state**、または lock busy | 原因に応じて対処後 `autokit run` |
+| `1` | 1 件以上が `failed`、doctor FAIL、起動拒否 | エラーログを見て修正 |
+| `2` | 引数構文エラー | option / range を見直す |
 
 実行途中で runner から `need_input` の質問が出ると `paused` で停まる。TUI で対話的に答えるか、`-y` で auto-answer に委ねる（ただし `-y` は質問内容に応じた合理的判定はせず、デフォルト回答を機械的に投入するだけ）。
 
@@ -123,7 +136,7 @@ autokit init                                    # 初期化
 autokit add 10-13 --label agent-ready -y        # queue 投入
 autokit run                                     # 実行
 autokit list --json                             # 状態確認
-autokit resume                                  # 必要なら再開
+autokit run                                     # paused 原因解消後の再実行
 autokit cleanup --force-detach 12               # 必要なら手動掃除
 ```
 

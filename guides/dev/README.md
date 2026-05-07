@@ -21,6 +21,8 @@
 | 5 | [05-safety.md](./05-safety.md) | API key / auto-merge / sandbox / sanitize | flowchart |
 | 6 | [06-glossary.md](./06-glossary.md) | 用語の最低限。SPEC §1.4 へ誘導 | — |
 
+v0.2.0 の追加 surface は主に `02` (capability / effort / serve), `03` (runtime field / self-correction), `04` (asset gates), `05` (preset / serve safety) に分散している。
+
 ## 読み方の順序
 
 最短: `01 → 02 → 03`。残りは必要に応じて拾い読みでよい。

@@ -71,7 +71,17 @@
 
 ## フェーズ × Provider
 
-`runtime_phase` ごとの provider / sandbox / 役割の正典は [04-configuration.md](./04-configuration.md) `phases.<phase>` セクション。`config.yaml` の `phases.<name>.provider` で個別上書きできる。
+`runtime_phase` ごとの provider / sandbox / 役割の正典は [04-configuration.md](./04-configuration.md) `phases.<phase>` セクション。v0.2.0 では 7 agent phase × 2 provider の capability table が core SoT で、`config.yaml` の `phases.<name>.provider` または `autokit run --phase ... --provider ...` で個別上書きできる。
+
+permission profile は provider ではなく phase から固定導出される:
+
+| profile | phase | 代表権限 |
+|---------|-------|----------|
+| `readonly_repo` | `plan` / `plan_verify` / `plan_fix` | repo 参照のみ |
+| `readonly_worktree` | `review` / `supervise` | worktree 参照のみ |
+| `write_worktree` | `implement` / `fix` | worktree 内の編集可 |
+
+`effort` は `auto` / `low` / `medium` / `high`。解決結果は `runtime.resolved_effort` に保存され、unsupported tuple は `effort.unsupported_policy` に応じて `effort_unsupported` で停止または `effort_downgrade` audit を残して downgrade される。
 
 ## レビューループ（観測される振舞）
 
@@ -92,6 +102,12 @@
 - 経過時間が `config.ci.timeout_ms` 超過 → `config.ci.timeout_action` に従い `paused` (`failure.code: ci_timeout`) または `failed`
 
 `failure.code` 別の対処は [06-recovery.md](./06-recovery.md)。既定値の数値は [04-configuration.md](./04-configuration.md) の `ci.*` フィールド表。
+
+## self-correction retry
+
+prompt-contract 違反は初回だけ同 phase 内で self-correction retry される。`runtime.phase_self_correct_done=false` から `true` へ更新し、audit kind `phase_self_correct` を残す。2 回目も違反した場合は `failure.code=prompt_contract_violation` で停止する。
+
+この retry は state-machine の新 state ではなく、同じ runtime_phase の中で完結する。resume 時は `phase_self_correct_done` を見て二重 retry しない。
 
 ## auto-merge
 

@@ -11,6 +11,7 @@ packages/
 ├─ core             # @cattyneo/autokit-core     型, config, tasks, env, contract, gh/git ヘルパ
 ├─ claude-runner    # @cattyneo/autokit-claude-runner   Claude CLI ラッパ (read-only)
 ├─ codex-runner     # @cattyneo/autokit-codex-runner    Codex CLI ラッパ (workspace-write)
+├─ serve            # @cattyneo/autokit-serve    local HTTP API / SSE server
 └─ tui              # @cattyneo/autokit-tui      Ink ベース TUI
 ```
 
@@ -23,16 +24,19 @@ flowchart TB
   CORE["core<br/>(config, tasks, contract,<br/>state-machine, env-allowlist,<br/>gh, git, logger)"]
   CR["claude-runner"]
   CXR["codex-runner"]
+  SERVE["serve"]
   TUI["tui"]
 
   CLI --> WF
   CLI --> CORE
+  CLI --> SERVE
   CLI --> TUI
   WF --> CORE
   WF --> CR
   WF --> CXR
   CR --> CORE
   CXR --> CORE
+  SERVE --> CORE
   TUI --> CORE
 ```
 
@@ -113,6 +117,8 @@ sequenceDiagram
 | モジュール | 責務 |
 |------------|------|
 | `config.ts` | `AutokitConfig` の Zod schema / `DEFAULT_CONFIG` / phase ↔ provider マッピング |
+| `capability.ts` | 7 agent phase × 2 provider の capability table / permission profile derive |
+| `effort-resolver.ts` | `auto` / `low` / `medium` / `high` の解決、downgrade audit candidate |
 | `tasks.ts` | `TaskEntry`, `TasksFile` 型と atomic write |
 | `state-machine.ts` | state 遷移のホワイトリスト・正当性検証 |
 | `runner-contract.ts` | `AgentRunInput` / `AgentRunOutput` / prompt-contract validation |
@@ -120,6 +126,8 @@ sequenceDiagram
 | `failure-codes.ts` | `failure.code` の固定列挙 |
 | `gh.ts` / `git.ts` | コマンド引数ビルダー |
 | `logger.ts` | 構造化ログ + redact + 監査イベント |
+| `process-lock.ts` | `.autokit/.lock/` の cross-process lock |
+| `assets-writer.ts` | init / preset apply で共有する atomic asset write primitive |
 | `reconcile.ts` | tasks.yaml と GitHub 状態の差分突合 |
 | `retry-cleanup.ts` | retry の cleanup 手順 |
 | `pr.ts` | PR 状態 parse |
@@ -164,6 +172,49 @@ flowchart LR
 ```
 
 deps は CLI 側 (`cli/executor.ts`) で組み立てられる。テストは deps を mock することで子プロセスを起動せずに workflows を単体検証できる。
+
+## capability / effort の所有境界
+
+v0.2.0 では provider 選択と権限を runner package 側に分散しない。
+
+```mermaid
+flowchart LR
+  CFG["config.yaml<br/>phases.* provider/model/effort"]
+  CAP["core/capability.ts<br/>phase x provider SoT"]
+  EFF["core/effort-resolver.ts<br/>resolved_effort"]
+  WF["workflows"]
+  RUN["claude/codex runner"]
+
+  CFG --> CAP --> WF
+  CFG --> EFF --> WF
+  WF --> RUN
+```
+
+- `(phase, provider)` は `capability.ts` で検証する。
+- permission profile は provider ではなく phase から導出し、CLI override で変更できない。
+- `ci_wait` / `merge` は core-only step。runner dispatch / provider / effort の対象外。
+- `resolveRunnerTimeout(config, phase, resolvedEffort)` は runner に渡す timeout を必ず number に解決する。
+
+## `serve` パッケージの構造
+
+`serve` は `node:http` ベースの local API server。CLI package から起動されるが、workflow 実行は `runWorkflow` callback に閉じ込める。
+
+```mermaid
+flowchart TB
+  HTTP["HTTP request"]
+  AUTH["bearer + Host + Origin + Content-Type"]
+  LOCK["tryAcquireRunLock"]
+  COORD["run coordinator"]
+  SSE["SSE hub"]
+  WF["CLI workflow callback"]
+
+  HTTP --> AUTH
+  AUTH --> LOCK
+  LOCK --> COORD --> WF
+  COORD --> SSE
+```
+
+read endpoint も bearer + Host gate を通す。mutating endpoint は lock busy で HTTP 409 (`serve_lock_busy`) を返し、`failure.code` や `tasks.yaml` task entry は作らない。
 
 ## アーティファクト
 

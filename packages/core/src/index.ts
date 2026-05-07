@@ -102,6 +102,12 @@ export {
   ModelResolutionError,
   resolveModelsForPlanning,
 } from "./model-resolver.js";
+export type { GuardedCommandDecision, PathAccess, PathSafetyDecision } from "./path-safety.js";
+export {
+  sanitizeCommandOutput,
+  validateGuardedCommand,
+  validatePathAccess,
+} from "./path-safety.js";
 export { buildAutoMergeArgs, buildDisableAutoMergeArgs, shouldPauseForHeadMismatch } from "./pr.js";
 export type {
   PullRequestObservation,

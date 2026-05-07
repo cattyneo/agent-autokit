@@ -441,6 +441,22 @@ describe("cli doctor/retry/cleanup gates", () => {
     );
   });
 
+  it("warns when deprecated Claude allowed_tools is present in config", async () => {
+    const root = makeTempDir();
+    mkdirSync(join(root, ".autokit"), { recursive: true });
+    writeFileSync(
+      join(root, ".autokit", "config.yaml"),
+      'version: 1\npermissions:\n  claude:\n    allowed_tools: ["Read"]\n',
+    );
+    const harness = makeCliHarness(root, { execFile: () => "ok" });
+
+    assert.equal(await runCli(["doctor"], harness.deps), 0);
+    assert.match(
+      harness.stdout(),
+      /WARN\tconfig\tpermissions\.claude\.allowed_tools is deprecated/,
+    );
+  });
+
   it("recovers a corrupt queue from tasks.yaml.bak for retry --recover-corruption", async () => {
     const root = makeTempDir();
     writeTasks(root, [task({ issue: 9, state: "paused" })]);

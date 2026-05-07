@@ -673,7 +673,16 @@ function checkConfig(deps: CliDeps): DoctorCheck {
     return { name: "config", status: "WARN", message: ".autokit/config.yaml not found" };
   }
   try {
-    parseConfigYaml(readFileSync(path, "utf8"));
+    const source = readFileSync(path, "utf8");
+    parseConfigYaml(source);
+    if (/^\s*allowed_tools\s*:/m.test(source)) {
+      return {
+        name: "config",
+        status: "WARN",
+        message:
+          "permissions.claude.allowed_tools is deprecated; capability table hard cap applies",
+      };
+    }
     return { name: "config", status: "PASS", message: "valid" };
   } catch (error) {
     return {

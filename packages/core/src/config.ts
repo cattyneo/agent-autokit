@@ -4,6 +4,7 @@ import * as z from "zod";
 import {
   capabilityPhases,
   capabilityProviders,
+  derive_claude_perm,
   type Provider,
   validateCapabilitySelection,
 } from "./capability.js";
@@ -222,6 +223,19 @@ const configSchema = z
           path: ["phases", phase, "provider"],
         });
       }
+    }
+
+    const readOnlyClaudeToolCap = new Set(derive_claude_perm("plan").allowed_tools);
+    const unsupportedClaudeTools = config.permissions.claude.allowed_tools.filter(
+      (tool) => !readOnlyClaudeToolCap.has(tool),
+    );
+    if (unsupportedClaudeTools.length > 0) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "permissions.claude.allowed_tools is deprecated and must stay within the read-only hard cap",
+        path: ["permissions", "claude", "allowed_tools"],
+      });
     }
   });
 

@@ -41,6 +41,7 @@ export type AgentRunInput = {
     allowNetwork: boolean;
     workspaceScope?: "repo" | "worktree";
     workspaceRoot?: string;
+    homeIsolation?: "shared" | "isolated";
   };
   timeoutMs: number;
 };

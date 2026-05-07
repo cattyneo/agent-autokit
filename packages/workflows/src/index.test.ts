@@ -100,6 +100,27 @@ describe("planning workflow", () => {
     assert.equal(result.task.provider_sessions.plan_verify.codex_session_id, "verify-session-2");
   });
 
+  it("applies deprecated Claude allowed_tools as a read-only shrink cap", async () => {
+    const calls: AgentRunInput[] = [];
+
+    await runPlanningWorkflow(baseTask(), {
+      runner: queueRunner(calls, [
+        completed("claude", { plan_markdown: "## Plan", assumptions: [], risks: [] }),
+        completed("codex", { result: "ok", findings: [] }),
+      ]),
+      repoRoot: "/repo",
+      config: parseConfig({
+        permissions: { claude: { allowed_tools: ["Read"] } },
+      }),
+    });
+
+    assert.deepEqual(calls[0].effective_permission?.claude, {
+      allowed_tools: ["Read"],
+      denied_tools: ["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Grep", "Glob"],
+      hook: "readonly_path_guard",
+    });
+  });
+
   it("pauses on need_input/rate_limited and fails when completed data is missing", async () => {
     const needInput = await runPlanningWorkflow(baseTask(), {
       runner: queueRunner(

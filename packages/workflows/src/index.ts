@@ -15,6 +15,7 @@ import {
   failureCodes,
   makeFailure,
   type OperationalAuditKind,
+  type PermissionProfile,
   type Phase,
   type PromptContractData,
   type Provider,
@@ -909,7 +910,7 @@ function buildAgentRunInput(
   const config = options.config ?? DEFAULT_CONFIG;
   const provider = effectiveProviderForPhase(task, phase, config);
   const capability = validateCapabilitySelection({ phase, provider });
-  const effectivePermission = effectivePermissionFor(capability.phase, provider);
+  const effectivePermission = effectivePermissionFor(capability.phase, provider, config);
   const workspaceScope =
     phase === "review" || phase === "supervise" || phase === "implement" || phase === "fix"
       ? "worktree"
@@ -938,6 +939,10 @@ function buildAgentRunInput(
         workspaceScope === "worktree"
           ? (options.worktreeRoot ?? options.repoRoot)
           : options.repoRoot,
+      homeIsolation:
+        provider === "claude"
+          ? config.permissions.claude.home_isolation
+          : config.permissions.codex.home_isolation,
     },
     timeoutMs: options.timeoutMs ?? resolvedEffort.timeout_ms,
   };
@@ -987,17 +992,42 @@ function effectiveEffortForPhase(
   return config.phases[phase].effort ?? config.effort.default;
 }
 
-function effectivePermissionFor(phase: Phase, provider: Provider): EffectivePermission {
+function effectivePermissionFor(
+  phase: Phase,
+  provider: Provider,
+  config: AutokitConfig,
+): EffectivePermission {
   const row = validateCapabilitySelection({ phase, provider });
   return provider === "claude"
     ? {
         permission_profile: row.permission_profile,
-        claude: derive_claude_perm(phase),
+        claude: claudePermissionForConfig(phase, row.permission_profile, config),
       }
     : {
         permission_profile: row.permission_profile,
         codex: derive_codex_perm(phase),
       };
+}
+
+function claudePermissionForConfig(
+  phase: Phase,
+  profile: PermissionProfile,
+  config: AutokitConfig,
+) {
+  const permission = derive_claude_perm(phase);
+  if (profile === "write_worktree") {
+    return permission;
+  }
+  const allowed = permission.allowed_tools.filter((tool) =>
+    config.permissions.claude.allowed_tools.includes(tool),
+  );
+  const denied = Array.from(
+    new Set([
+      ...permission.denied_tools,
+      ...permission.allowed_tools.filter((tool) => !allowed.includes(tool)),
+    ]),
+  );
+  return { ...permission, allowed_tools: allowed, denied_tools: denied };
 }
 
 function requireResolvedEffort(

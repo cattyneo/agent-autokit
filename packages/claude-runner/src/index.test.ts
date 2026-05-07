@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,7 +7,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, it } from "node:test";
 
-import { derive_claude_perm } from "@cattyneo/autokit-core";
+import { buildRunnerEnv, derive_claude_perm } from "@cattyneo/autokit-core";
 
 import {
   buildClaudeArgs,
@@ -24,6 +25,7 @@ import {
 } from "./index.ts";
 
 const workspaceRoot = realpathSync.native(process.cwd());
+const testChildEnv = buildRunnerEnv({ PATH: process.env.PATH ?? "/usr/bin:/bin" });
 const baseInput = {
   provider: "claude" as const,
   phase: "plan" as const,
@@ -196,6 +198,24 @@ describe("claude-runner", () => {
       workspaceRoot,
     });
     assert.equal(deniedGlob.ok, false);
+    assert.equal(
+      validateClaudeToolUseInput({
+        hook: "readonly_path_guard",
+        tool_name: "Grep",
+        tool_input: { glob: ".env*", pattern: "SECRET" },
+        workspaceRoot,
+      }).ok,
+      false,
+    );
+    assert.equal(
+      validateClaudeToolUseInput({
+        hook: "readonly_path_guard",
+        tool_name: "Glob",
+        tool_input: { pattern: ".codex/**" },
+        workspaceRoot,
+      }).ok,
+      false,
+    );
 
     assert.deepEqual(
       validateClaudeToolUseInput({
@@ -246,6 +266,53 @@ describe("claude-runner", () => {
     assert.match(String(allowedBash.updatedInput?.command ?? ""), /node -e/);
   });
 
+  it("builds an executable PreToolUse hook command for deny and Bash rewrite", () => {
+    const settings = buildClaudePathGuardSettings(workspaceRoot, "write_path_guard");
+    const hooks = (settings.hooks as { PreToolUse: { hooks: { command: string }[] }[] }).PreToolUse;
+    const command = hooks[0]?.hooks[0]?.command;
+    assert.equal(typeof command, "string");
+
+    const deniedOutput = execFileSync("sh", ["-c", command], {
+      cwd: workspaceRoot,
+      env: testChildEnv,
+      encoding: "utf8",
+      input: JSON.stringify({
+        tool_name: "Write",
+        tool_input: { file_path: ".env", content: "secret" },
+      }),
+    });
+
+    assert.match(deniedOutput, /permissionDecision":"deny"/);
+    assert.match(deniedOutput, /sandbox_violation/);
+
+    const allowedOutput = execFileSync("sh", ["-c", command], {
+      cwd: workspaceRoot,
+      env: testChildEnv,
+      encoding: "utf8",
+      input: JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: "git status --short" },
+      }),
+    });
+    const parsed = JSON.parse(allowedOutput) as {
+      hookSpecificOutput?: { permissionDecision?: string; updatedInput?: { command?: string } };
+    };
+
+    assert.equal(parsed.hookSpecificOutput?.permissionDecision, "allow");
+    assert.match(parsed.hookSpecificOutput?.updatedInput?.command ?? "", /node -e/);
+
+    const deniedGhOutput = execFileSync("sh", ["-c", command], {
+      cwd: workspaceRoot,
+      env: testChildEnv,
+      encoding: "utf8",
+      input: JSON.stringify({
+        tool_name: "Bash",
+        tool_input: { command: "gh api --method GET /tmp/outside" },
+      }),
+    });
+    assert.match(deniedGhOutput, /permissionDecision":"deny"/);
+  });
+
   it("denies package scripts that bypass guarded command policy", () => {
     const root = mkdtempSync(join(tmpdir(), "autokit-claude-package-"));
     writeFileSync(
@@ -261,6 +328,46 @@ describe("claude-runner", () => {
     });
 
     assert.equal(denied.ok, false);
+  });
+
+  it("sanitizes guarded command output before returning it to Claude Bash", () => {
+    const root = mkdtempSync(join(tmpdir(), "autokit-guarded-output-"));
+    const realRoot = realpathSync.native(root);
+    execFileSync("git", ["init"], { cwd: root, env: testChildEnv, stdio: "ignore" });
+    const marker = `ghp_${"a".repeat(24)}`;
+    const privateKey = "-----BEGIN PRIVATE KEY-----abc-----END PRIVATE KEY-----";
+    writeFileSync(join(root, "visible.txt"), "visible\n");
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({
+        scripts: {
+          test: `node -e "console.log('${marker} Bearer sk-${"b".repeat(24)} ${privateKey} ${realRoot}/visible.txt /Users/example/.config/gh/hosts.yml')"`,
+        },
+      }),
+    );
+
+    const allowed = validateClaudeToolUseInput({
+      hook: "write_path_guard",
+      tool_name: "Bash",
+      tool_input: { command: "npm run test" },
+      workspaceRoot: root,
+    });
+
+    assert.equal(allowed.ok, true);
+    if (!allowed.ok) {
+      assert.fail("expected package test command to pass guard");
+    }
+    const output = execFileSync("sh", ["-c", String(allowed.updatedInput?.command ?? "")], {
+      cwd: root,
+      encoding: "utf8",
+      env: testChildEnv,
+    });
+    assert.equal(output.includes(marker), false);
+    assert.equal(output.includes("sk-"), false);
+    assert.equal(output.includes("BEGIN PRIVATE KEY"), false);
+    assert.equal(output.includes(realRoot), false);
+    assert.equal(output.includes("/Users/example"), false);
+    assert.match(output, /<REDACTED>|<repo>|~/);
   });
 
   it("rejects API key env and scrubs runner child env", () => {
@@ -330,6 +437,25 @@ describe("claude-runner", () => {
     );
   });
 
+  it("sanitizes Claude JSON error results", () => {
+    assert.throws(
+      () =>
+        parseClaudeCliJson(
+          JSON.stringify({
+            is_error: true,
+            result: `Bearer ghp_${"a".repeat(24)} at /Users/example/.claude/credentials`,
+          }),
+        ),
+      (error) => {
+        assert.ok(error instanceof ClaudeRunnerError);
+        assert.equal(error.message.includes("ghp_"), false);
+        assert.equal(error.message.includes("/Users/example"), false);
+        assert.match(error.message, /<REDACTED>|~/);
+        return true;
+      },
+    );
+  });
+
   it("runs Claude through a mock subprocess and isolated runtime env", async () => {
     const root = mkdtempSync(join(tmpdir(), "autokit-claude-runner-"));
     let observedEnv: Record<string, string> | undefined;
@@ -361,6 +487,7 @@ describe("claude-runner", () => {
           ...baseInput.permissions,
           workspaceScope: "worktree",
           workspaceRoot: root,
+          homeIsolation: "isolated",
         },
       },
       {
@@ -390,6 +517,35 @@ describe("claude-runner", () => {
     assert.equal(observedEnv?.GIT_CONFIG_NOSYSTEM, "1");
     assert.equal(observedEnv?.GH_TOKEN, undefined);
     assert.equal(observedEnv?.RANDOM_USER_ENV, undefined);
+  });
+
+  it("keeps shared HOME for read-only Claude phases by default", async () => {
+    let observedEnv: Record<string, string> | undefined;
+    const spawn: SpawnClaudeProcess = (_command, _args, options) => {
+      observedEnv = options.env;
+      const child = new FakeChild();
+      queueMicrotask(() => {
+        child.stdout.end(
+          JSON.stringify({
+            structured_output: {
+              status: "completed",
+              summary: "plan ok",
+              data: { plan_markdown: "## Plan", assumptions: [], risks: [] },
+            },
+          }),
+        );
+        child.emit("close", 0);
+      });
+      return child.asChildProcess();
+    };
+
+    await runClaude(baseInput, {
+      parentEnv: { PATH: "/bin", HOME: "/Users/example", GH_TOKEN: "github" },
+      spawn,
+    });
+
+    assert.equal(observedEnv?.HOME, "/Users/example");
+    assert.equal(observedEnv?.GH_TOKEN, undefined);
   });
 
   it("kills and reports runner_timeout when the subprocess stalls", async () => {

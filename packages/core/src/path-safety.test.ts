@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -39,6 +42,32 @@ describe("core path safety", () => {
     });
     assert.equal(gitState.ok, false);
     assert.match(gitState.reason, /\.git/);
+  });
+
+  it("denies symlink escapes for reads, writes, and write parents", () => {
+    const root = mkdtempSync(join(tmpdir(), "autokit-path-safe-root-"));
+    const outside = mkdtempSync(join(tmpdir(), "autokit-path-safe-outside-"));
+    writeFileSync(join(outside, "credential.txt"), "secret");
+    mkdirSync(join(outside, ".git"));
+    symlinkSync(join(outside, "credential.txt"), join(root, "read-link"));
+    symlinkSync(outside, join(root, "outside-dir"));
+
+    assert.equal(
+      validatePathAccess({ workspaceRoot: root, candidate: "read-link", access: "read" }).ok,
+      false,
+    );
+    assert.equal(
+      validatePathAccess({ workspaceRoot: root, candidate: "read-link", access: "write" }).ok,
+      false,
+    );
+    assert.equal(
+      validatePathAccess({
+        workspaceRoot: root,
+        candidate: "outside-dir/new-file.txt",
+        access: "write",
+      }).ok,
+      false,
+    );
   });
 
   it("allows only guarded read-only git and gh commands and blocks secret path args", () => {

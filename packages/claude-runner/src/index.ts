@@ -193,7 +193,7 @@ export function parseClaudeCliJson(
   const resolvedModel = typeof parsed.model === "string" ? parsed.model : undefined;
 
   if (parsed.is_error === true) {
-    const message = String(parsed.result ?? "");
+    const message = sanitizeProviderMessage(String(parsed.result ?? ""));
     if (isRateLimitMessage(message)) {
       return {
         status: "rate_limited",
@@ -413,6 +413,10 @@ function validateToolPaths(
     if (isUnsafeRelativePattern(candidate)) {
       return { ok: false, reason: `Tool pattern escapes workspace scope: ${candidate}` };
     }
+    const decision = validatePathAccess({ workspaceRoot, candidate, access: "read" });
+    if (!decision.ok) {
+      return decision;
+    }
   }
   return { ok: true };
 }
@@ -616,6 +620,10 @@ function buildClaudeExecutionEnv(
   parentEnv: ParentEnv,
   input: AgentRunInput,
 ): Record<string, string> {
+  const permission = claudePermissionForInput(input);
+  if (permission.hook !== "write_path_guard" && input.permissions.homeIsolation !== "isolated") {
+    return buildClaudeRunnerEnv(parentEnv);
+  }
   const runtimeRoot = join(input.cwd, ".autokit", "runner-home", input.phase);
   const home = join(runtimeRoot, "home");
   const xdgConfigHome = join(runtimeRoot, "xdg-config");
@@ -689,27 +697,42 @@ function validatePaths(toolName, toolInput, access) {
     const patterns = [];
     if (toolName === "Glob" && typeof toolInput.pattern === "string") patterns.push(toolInput.pattern);
     if (toolName === "Grep" && typeof toolInput.glob === "string") patterns.push(toolInput.glob);
-    for (const pattern of patterns) {
-      if (pattern.startsWith("/") || pattern.startsWith("~") || pattern.includes("../") || pattern === "..") {
-        deny(pattern);
-        return;
-      }
-    }
-  return { ok: true };
-}
-function validatePath(candidate, access) {
-  if (candidate.startsWith("~") || candidate.includes("\\\\0")) return { ok: false, reason: "path escapes workspace scope" };
-  const rootReal = fs.realpathSync.native(root);
-  const resolved = path.resolve(rootReal, candidate);
-  if (resolved !== rootReal && !resolved.startsWith(rootReal + path.sep)) return { ok: false, reason: "path escapes workspace scope" };
-  const relative = path.relative(rootReal, resolved).replaceAll(path.sep, "/");
-  const name = path.basename(relative);
-  const segments = relative.split("/");
-  const secret = name === ".env" || name.startsWith(".env.") || segments.includes(".codex") || (segments[0] === ".claude" && (segments[1] || "").startsWith("credentials")) || name.startsWith("id_rsa") || name.endsWith(".pem") || name.endsWith(".key") || relative === ".autokit/audit-hmac-key";
-  if (secret) return { ok: false, reason: "secret path denied" };
-  if (access === "write" && segments.includes(".git")) return { ok: false, reason: ".git state writes are denied" };
-  return { ok: true };
-}
+	    for (const pattern of patterns) {
+	      if (pattern.startsWith("/") || pattern.startsWith("~") || pattern.includes("../") || pattern === "..") {
+	        return { ok: false, reason: "Tool pattern escapes workspace scope: " + pattern };
+	      }
+	      const decision = validatePath(pattern, "read");
+	      if (!decision.ok) return decision;
+	    }
+	  return { ok: true };
+	}
+	function validatePath(candidate, access) {
+	  if (candidate.startsWith("~") || candidate.includes("\\\\0")) return { ok: false, reason: "path escapes workspace scope" };
+	  const rootReal = fs.realpathSync.native(root);
+	  const resolved = path.resolve(rootReal, candidate);
+	  if (resolved !== rootReal && !resolved.startsWith(rootReal + path.sep)) return { ok: false, reason: "path escapes workspace scope" };
+	  let real = resolved;
+	  try { real = fs.realpathSync.native(resolved); } catch {
+	    if (access === "write") {
+	      let parent = path.dirname(resolved);
+	      while (parent !== rootReal && parent.startsWith(rootReal + path.sep) && !fs.existsSync(parent)) parent = path.dirname(parent);
+	      try { real = fs.realpathSync.native(parent); } catch {}
+	      if (real !== rootReal && !real.startsWith(rootReal + path.sep)) return { ok: false, reason: "path escapes workspace scope" };
+	    }
+	  }
+	  if (real !== rootReal && !real.startsWith(rootReal + path.sep)) return { ok: false, reason: "path escapes workspace scope" };
+	  const relative = path.relative(rootReal, resolved).replaceAll(path.sep, "/");
+	  const realRelative = path.relative(rootReal, real).replaceAll(path.sep, "/");
+	  const secret = isSecret(relative) || isSecret(realRelative);
+	  if (secret) return { ok: false, reason: "secret path denied" };
+	  if (access === "write" && (relative.split("/").includes(".git") || realRelative.split("/").includes(".git"))) return { ok: false, reason: ".git state writes are denied" };
+	  return { ok: true };
+	}
+	function isSecret(relative) {
+	  const name = path.basename(relative);
+	  const segments = relative.split("/");
+	  return name.startsWith(".env") || segments.includes(".codex") || segments.includes(".claude") || name.startsWith("id_rsa") || name.endsWith(".pem") || name.endsWith(".key") || relative === ".autokit/audit-hmac-key";
+	}
 function validateCommand(command) {
   if (/[;&|<>\\x60$()\\n\\r]/.test(command)) return { ok: false, reason: "shell operators are denied" };
   const tokens = command.trim().split(/\\s+/).filter(Boolean);
@@ -717,23 +740,28 @@ function validateCommand(command) {
   const bin = path.basename(tokens[0]);
   const sub = tokens[1];
   const tail = tokens.slice(2).join(" ");
-  if (tail.includes(".env") || tail.includes(".codex") || tail.includes(".claude") || tail.includes("id_rsa") || tail.includes(".pem") || tail.includes(".key")) return { ok: false, reason: "secret path denied" };
-  if (bin === "git") {
-    if (!["status", "diff", "show", "log", "blame"].includes(sub)) return { ok: false, reason: "git " + sub + " is not allowed" };
-    if (tokens.some((token) => token.includes(":.env") || token === ".env")) return { ok: false, reason: "secret path denied" };
-    return { ok: true };
-  }
+	  if (tail.includes(".env") || tail.includes(".codex") || tail.includes(".claude") || tail.includes("id_rsa") || tail.includes(".pem") || tail.includes(".key")) return { ok: false, reason: "secret path denied" };
+	  if (bin === "git") {
+	    if (!["status", "diff", "show", "log", "blame"].includes(sub)) return { ok: false, reason: "git " + sub + " is not allowed" };
+	    const pathDecision = validateCommandPaths(tokens.slice(2), "read");
+	    if (!pathDecision.ok) return pathDecision;
+	    if (tokens.some((token) => token.includes(":.env") || token === ".env")) return { ok: false, reason: "secret path denied" };
+	    return { ok: true };
+	  }
   if (bin === "gh") {
-    if ((sub === "issue" || sub === "pr") && ["view", "list"].includes(tokens[2])) return { ok: true };
-    if (sub === "api") {
-      const methodIndex = tokens.findIndex((token) => token === "--method" || token === "-X");
-      const method = methodIndex >= 0 ? (tokens[methodIndex + 1] || "GET").toUpperCase() : (tokens.find((token) => token.startsWith("--method=")) || "--method=GET").slice("--method=".length).toUpperCase();
-      return method === "GET" ? { ok: true } : { ok: false, reason: "gh api " + method + " is not allowed" };
-    }
-    return { ok: false, reason: "gh " + sub + " is not allowed" };
-  }
-  if (["bun", "npm", "pnpm", "yarn"].includes(bin)) {
-    const script = tokens[1] === "run" ? tokens[2] : tokens[1];
+	    if ((sub === "issue" || sub === "pr") && ["view", "list"].includes(tokens[2])) return { ok: true };
+	    if (sub === "api") {
+	      const methodIndex = tokens.findIndex((token) => token === "--method" || token === "-X");
+	      const method = methodIndex >= 0 ? (tokens[methodIndex + 1] || "GET").toUpperCase() : (tokens.find((token) => token.startsWith("--method=")) || "--method=GET").slice("--method=".length).toUpperCase();
+	      if (method !== "GET") return { ok: false, reason: "gh api " + method + " is not allowed" };
+	      return validateCommandPaths(tokens.slice(2), "read");
+	    }
+	    return { ok: false, reason: "gh " + sub + " is not allowed" };
+	  }
+	  if (["bun", "npm", "pnpm", "yarn"].includes(bin)) {
+	    const pathDecision = validateCommandPaths(tokens.slice(1), "read");
+	    if (!pathDecision.ok) return pathDecision;
+	    const script = tokens[1] === "run" ? tokens[2] : tokens[1];
     if (!/^(build|test|lint|format)(:[A-Za-z0-9_.-]+)?$/.test(script || "")) return { ok: false, reason: "package script is not in the guarded allowlist" };
     try {
       const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
@@ -744,8 +772,26 @@ function validateCommand(command) {
     } catch {}
     return { ok: true };
   }
-  return { ok: false, reason: "command is not allowed: " + bin };
-}
+	  return { ok: false, reason: "command is not allowed: " + bin };
+	}
+	function validateCommandPaths(tokens, access) {
+	  for (const token of tokens) {
+	    if (token.length === 0 || token.startsWith("-")) continue;
+	    const candidates = [token];
+	    const colonIndex = token.indexOf(":");
+	    if (colonIndex >= 0 && colonIndex < token.length - 1) candidates.push(token.slice(colonIndex + 1));
+	    for (const candidate of candidates) {
+	      if (looksPathSensitive(candidate)) {
+	        const decision = validatePath(candidate, access);
+	        if (!decision.ok) return decision;
+	      }
+	    }
+	  }
+	  return { ok: true };
+	}
+	function looksPathSensitive(value) {
+	  return value.startsWith(".") || value.startsWith("/") || value.startsWith("~") || value.includes("/") || value.includes("\\\\") || value.includes(".env") || value.includes(".codex") || value.includes(".claude") || value.includes("id_rsa") || value.endsWith(".pem") || value.endsWith(".key");
+	}
 function buildRunnerCommand(command) {
   return ${JSON.stringify(buildGuardedCommandRunnerScriptCommandPrefix(workspaceRoot))} + Buffer.from(command, "utf8").toString("base64");
 }
@@ -753,7 +799,7 @@ function deny(reason) {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" }, systemMessage: "sandbox_violation: " + reason }));
 }
 `;
-  return `node -e ${JSON.stringify(script)}`;
+  return nodeEvalCommand(script);
 }
 
 function buildGuardedCommandRunnerCommand(workspaceRoot: string, command: string): string {
@@ -764,8 +810,10 @@ function buildGuardedCommandRunnerScriptCommandPrefix(workspaceRoot: string): st
   const script = `
 const cp = require("node:child_process");
 const path = require("node:path");
-const command = Buffer.from(process.argv.at(-1) || "", "base64").toString("utf8");
-const root = ${JSON.stringify(workspaceRoot)};
+	const command = Buffer.from(process.argv.at(-1) || "", "base64").toString("utf8");
+	const root = ${JSON.stringify(workspaceRoot)};
+	const rootAliases = [root, root.startsWith("/private/var/") ? root.replace(/^\\/private/, "") : ""].filter(Boolean);
+	const extraRedactPatterns = ${JSON.stringify(DEFAULT_CONFIG.logging.redact_patterns)};
 const tokens = command.trim().split(/\\s+/).filter(Boolean);
 const runtimeRoot = path.join(root, ".autokit", "runner-home", "guarded-command");
 const env = { PATH: process.env.PATH || "/usr/bin:/bin", HOME: path.join(runtimeRoot, "home"), XDG_CONFIG_HOME: path.join(runtimeRoot, "xdg-config"), XDG_CACHE_HOME: path.join(runtimeRoot, "xdg-cache"), GH_CONFIG_DIR: path.join(runtimeRoot, "gh"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", LANG: process.env.LANG || "C.UTF-8", TERM: process.env.TERM || "dumb" };
@@ -775,10 +823,34 @@ process.stdout.write(sanitize(result.stdout || ""));
 process.stderr.write(sanitize(result.stderr || ""));
 process.exit(typeof result.status === "number" ? result.status : 1);
 function sanitize(value) {
-  return String(value).replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, "<REDACTED>").replace(/github_pat_[A-Za-z0-9_]{20,}/g, "<REDACTED>").replace(/sk-[A-Za-z0-9]{20,}/g, "<REDACTED>");
+  let sanitized = String(value)
+    .replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, "<REDACTED>")
+    .replace(/github_pat_[A-Za-z0-9_]{20,}/g, "<REDACTED>")
+    .replace(/sk-[A-Za-z0-9]{20,}/g, "<REDACTED>")
+    .replace(/Bearer\\s+[^\\s]+/gi, "Bearer <REDACTED>")
+    .replace(/Authorization:\\s*\\S+(?:\\s+\\S+)?/gi, "Authorization: <REDACTED>")
+    .replace(/"private_key"\\s*:\\s*"[^"]+"/g, "\\"private_key\\":\\"<REDACTED>\\"")
+    .replace(/(refreshToken|oauthAccessToken|access_token|refresh_token|id_token|token)["']?\\s*[:=]\\s*["'][^"']+["']/gi, "$1=<REDACTED>")
+    .replace(/ssh-rsa\\s+[A-Za-z0-9+/=]+/g, "<REDACTED>")
+    .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, "<REDACTED>")
+    .replace(/xox[baprs]-[A-Za-z0-9-]+/g, "<REDACTED>")
+    .replace(/aws_access_key_id\\s*=\\s*\\S+/gi, "aws_access_key_id=<REDACTED>")
+    .replace(/aws_secret_access_key\\s*=\\s*\\S+/gi, "aws_secret_access_key=<REDACTED>")
+    .replace(/(aws[_-]?(secret|access)[_-]?key)["']?\\s*[:=]\\s*["']?[^"'\\s]+["']?/gi, "$1=<REDACTED>")
+    .replace(/((?:^|[\\s"'(])\\.env[^\\s:=]*:?\\d*\\s+[A-Za-z_][A-Za-z0-9_]*=)([^\\s"'()]+)/g, "$1<REDACTED>")
+    .replace(/\\/Users\\/[^\\/\\s]+/g, "~");
+  for (const alias of rootAliases) sanitized = sanitized.replaceAll(alias, "<repo>");
+  for (const pattern of extraRedactPatterns) sanitized = sanitized.replace(new RegExp(pattern, "g"), "<REDACTED>");
+  return sanitized;
 }
-`;
-  return `node -e ${JSON.stringify(script)} -- `;
+	`;
+  return `${nodeEvalCommand(script)} -- `;
+}
+
+function nodeEvalCommand(script: string): string {
+  const encoded = Buffer.from(script, "utf8").toString("base64");
+  const loader = `eval(Buffer.from(${JSON.stringify(encoded)},"base64").toString("utf8"))`;
+  return `node -e ${JSON.stringify(loader)}`;
 }
 
 function readPackageScripts(workspaceRoot: string): Record<string, string> {

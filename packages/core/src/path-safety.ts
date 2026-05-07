@@ -1,4 +1,5 @@
-import { basename, isAbsolute, relative, resolve, sep } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import { DEFAULT_CONFIG } from "./config.js";
 import type { RedactionPathContext } from "./redaction.js";
@@ -41,20 +42,37 @@ export function validatePathAccess(input: {
     return { ok: false, reason: "path escapes workspace scope" };
   }
 
-  const normalizedRoot = normalizePath(resolve(input.workspaceRoot));
-  const resolved = resolveCandidate(normalizedRoot, candidate);
-  if (resolved === null || !isInside(normalizedRoot, resolved)) {
+  const lexicalRoot = normalizePath(resolve(input.workspaceRoot));
+  const normalizedRoot = safeRealpath(lexicalRoot) ?? lexicalRoot;
+  const resolved = resolveCandidate(lexicalRoot, candidate);
+  if (resolved === null || !isInside(lexicalRoot, resolved)) {
     return { ok: false, reason: "path escapes workspace scope" };
   }
+  const realDecision = validateRealPathScope({
+    lexicalRoot,
+    normalizedRoot,
+    resolved,
+    access: input.access,
+  });
+  if (!realDecision.ok) {
+    return realDecision;
+  }
 
-  const relativePath = normalizePath(relative(normalizedRoot, resolved));
-  if (isSecretPath(relativePath)) {
+  const relativePath = normalizePath(relative(lexicalRoot, resolved));
+  const realRelativePath =
+    realDecision.realPath === undefined
+      ? relativePath
+      : normalizePath(relative(normalizedRoot, realDecision.realPath));
+  if (isSecretPath(relativePath) || isSecretPath(realRelativePath)) {
     return {
       ok: false,
-      reason: `secret or credential path denied: ${categoryForPath(relativePath)}`,
+      reason: `secret or credential path denied: ${categoryForPath(realRelativePath)}`,
     };
   }
-  if (input.access === "write" && hasSegment(relativePath, ".git")) {
+  if (
+    input.access === "write" &&
+    (hasSegment(relativePath, ".git") || hasSegment(realRelativePath, ".git"))
+  ) {
     return { ok: false, reason: ".git state writes are denied" };
   }
   return { ok: true };
@@ -295,15 +313,53 @@ function resolveCandidate(workspaceRoot: string, candidate: string): string | nu
   );
 }
 
+function validateRealPathScope(input: {
+  lexicalRoot: string;
+  normalizedRoot: string;
+  resolved: string;
+  access: PathAccess;
+}): PathSafetyDecision & { realPath?: string } {
+  const targetRealPath = safeRealpath(input.resolved);
+  if (targetRealPath !== undefined) {
+    return isInside(input.normalizedRoot, targetRealPath)
+      ? { ok: true, realPath: targetRealPath }
+      : { ok: false, reason: "path escapes workspace scope" };
+  }
+
+  if (input.access === "read") {
+    return { ok: true };
+  }
+
+  const parent = nearestExistingParent(input.lexicalRoot, input.resolved);
+  const parentRealPath = parent === undefined ? undefined : safeRealpath(parent);
+  if (parentRealPath !== undefined && !isInside(input.normalizedRoot, parentRealPath)) {
+    return { ok: false, reason: "path escapes workspace scope" };
+  }
+  return { ok: true };
+}
+
+function nearestExistingParent(root: string, target: string): string | undefined {
+  let current = dirname(target);
+  while (isInside(root, current)) {
+    if (existsSync(current)) {
+      return current;
+    }
+    const next = dirname(current);
+    if (next === current) {
+      return undefined;
+    }
+    current = next;
+  }
+  return existsSync(root) ? root : undefined;
+}
+
 function isSecretPath(relativePath: string): boolean {
   const normalized = normalizePath(relativePath);
-  const segments = normalized.split("/");
   const name = basename(normalized);
   return (
-    name === ".env" ||
-    name.startsWith(".env.") ||
+    name.startsWith(".env") ||
     hasSegment(normalized, ".codex") ||
-    (segments[0] === ".claude" && (segments[1] ?? "").startsWith("credentials")) ||
+    hasSegment(normalized, ".claude") ||
     name.startsWith("id_rsa") ||
     name.endsWith(".pem") ||
     name.endsWith(".key") ||
@@ -332,4 +388,12 @@ function normalizePath(path: string): string {
 
 function isInside(root: string, path: string): boolean {
   return path === root || path.startsWith(`${root}/`);
+}
+
+function safeRealpath(path: string): string | undefined {
+  try {
+    return normalizePath(realpathSync.native(path));
+  } catch {
+    return undefined;
+  }
 }

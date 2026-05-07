@@ -360,6 +360,20 @@ describe("cli task commands", () => {
     assert.equal(readdirSync(join(root, ".autokit", ".backup")).length, 1);
   });
 
+  it("prunes expired init backup residue before enforcing the force gate", () => {
+    const expiredRoot = makeTempDir();
+    const expired = join(expiredRoot, ".autokit", ".backup", "expired");
+    mkdirSync(expired, { recursive: true });
+    utimesSync(expired, new Date("2026-03-01T00:00:00.000Z"), new Date("2026-03-01T00:00:00.000Z"));
+
+    assert.doesNotThrow(() => runInit(expiredRoot, { now: () => NOW }));
+    assert.equal(existsSync(join(expiredRoot, ".autokit", ".backup")), false);
+
+    const recentRoot = makeTempDir();
+    mkdirSync(join(recentRoot, ".autokit", ".backup", "recent"), { recursive: true });
+    assert.throws(() => runInit(recentRoot, { now: () => NOW }), /existing init backup/);
+  });
+
   it("parses issue ranges with de-duplication and stable ordering", () => {
     assert.deepEqual(parseIssueRange("12,10-11,10"), [10, 11, 12]);
     assert.equal(parseIssueRange("all"), "all");

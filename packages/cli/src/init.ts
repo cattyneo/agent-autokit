@@ -4,8 +4,6 @@ import {
   appendFileSync,
   closeSync,
   constants,
-  copyFileSync,
-  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -21,7 +19,15 @@ import {
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { DEFAULT_CONFIG, serializeConfigYaml } from "@cattyneo/autokit-core";
+import {
+  type AssetsTransaction,
+  type AssetWriteResult,
+  createAssetsTransaction,
+  DEFAULT_CONFIG,
+  pruneBackupRetention,
+  serializeConfigYaml,
+  timestampForBackup,
+} from "@cattyneo/autokit-core";
 
 export const INIT_MARKER_START = "<!-- autokit:init:start -->";
 export const INIT_MARKER_END = "<!-- autokit:init:end -->";
@@ -63,33 +69,28 @@ export type InitResult = {
   audit: string[];
 };
 
-type BackupEntry = {
-  relativePath: string;
-  backupPath: string;
-};
-
 export function runInit(cwd: string, options: InitOptions = {}): InitResult {
   const root = realpathSync(cwd);
   const assetRoot = options.assetRoot ?? defaultAssetRoot();
   const changed: string[] = [];
   const skipped: string[] = [];
-  const backupDir = join(
-    root,
-    ".autokit",
-    ".backup",
-    timestamp(options.now?.() ?? new Date().toISOString()),
-  );
-  const backups: BackupEntry[] = [];
-  const created: string[] = [];
+  const now = options.now?.() ?? new Date().toISOString();
+  const backupRoot = join(root, DEFAULT_CONFIG.init.backup_dir);
+  const backupDir = join(root, DEFAULT_CONFIG.init.backup_dir, timestampForBackup(now));
   const audit: string[] = [];
+  let transaction: AssetsTransaction | null = null;
 
   assertDirectory(assetRoot, "assets source");
   accessSync(root, constants.W_OK);
+  validateWriteParents(root);
+  pruneBackupRetention(backupRoot, {
+    retentionDays: DEFAULT_CONFIG.init.backup.retention_days,
+    now: () => new Date(now),
+  });
   assertNoBackupResidue(root, options.force === true);
   assertBackupBlacklist(root);
   validateExistingProviderLinks(root);
   validateMarkerTargets(root);
-  validateWriteParents(root);
 
   const assetFiles = listAssetFiles(assetRoot);
   const plannedChanges = [
@@ -106,26 +107,44 @@ export function runInit(cwd: string, options: InitOptions = {}): InitResult {
   }
 
   try {
-    mkdirSafe(root, ".autokit");
-    writeAuditHmacKey(root, changed, created);
-    mkdirSafe(root, ".autokit/.backup");
-    mkdirSafe(root, relativePath(root, backupDir));
+    transaction = createAssetsTransaction({ repoRoot: root, backupDir });
     mkdirSafe(root, relativePath(root, join(backupDir, "staging")));
-    writeNewFile(root, ".autokit/config.yaml", DEFAULT_CONFIG_YAML, changed, skipped, created);
-    writeNewFile(root, ".autokit/tasks.yaml", DEFAULT_TASKS_YAML, changed, skipped, created);
-    writeNewFile(root, ".autokit/.gitignore", AUTOKIT_GITIGNORE, changed, skipped, created);
+    writeAuditHmacKey(root, changed, transaction);
+    recordWriteResult(
+      transaction.writeFileIfAbsent(".autokit/config.yaml", DEFAULT_CONFIG_YAML),
+      ".autokit/config.yaml",
+      changed,
+      skipped,
+    );
+    recordWriteResult(
+      transaction.writeFileIfAbsent(".autokit/tasks.yaml", DEFAULT_TASKS_YAML),
+      ".autokit/tasks.yaml",
+      changed,
+      skipped,
+    );
+    recordWriteResult(
+      transaction.writeFileIfAbsent(".autokit/.gitignore", AUTOKIT_GITIGNORE),
+      ".autokit/.gitignore",
+      changed,
+      skipped,
+    );
 
     for (const file of assetFiles) {
       const relativeTarget = join(".agents", file);
-      writeCopiedAsset(root, assetRoot, file, relativeTarget, changed, skipped, created);
+      recordWriteResult(
+        transaction.copyFileIfAbsent(join(assetRoot, file), relativeTarget),
+        relativeTarget,
+        changed,
+        skipped,
+      );
     }
 
     for (const link of PROVIDER_LINKS) {
-      createProviderLink(root, link.path, link.target, changed, skipped, created);
+      createProviderLink(root, link.path, link.target, changed, skipped, transaction);
     }
 
     if (options.failDuringRollback === true) {
-      created.push("__inject_rollback_failure__");
+      transaction.recordCreated("__inject_rollback_failure__");
     }
 
     if (options.failAfterAssets === true) {
@@ -133,18 +152,30 @@ export function runInit(cwd: string, options: InitOptions = {}): InitResult {
     }
 
     for (const markerFile of MARKER_FILES) {
-      appendMarker(root, markerFile, backupDir, backups, changed, skipped, created);
+      appendMarker(root, markerFile, transaction, changed, skipped);
     }
 
-    rmSync(backupDir, { recursive: true, force: true });
+    transaction.cleanupBackup();
     removeEmptyDir(dirname(backupDir));
     return { dryRun: false, changed, skipped, backupDir: null, audit };
   } catch (error) {
+    if (transaction === null) {
+      throw error;
+    }
     try {
-      rollback(root, backups, created);
+      transaction.rollback({
+        beforeRemove: (relativePath) => {
+          if (relativePath === "__inject_rollback_failure__") {
+            throw new Error("injected rollback failure");
+          }
+        },
+      });
+      pruneEmptyDirs(join(root, ".claude"));
+      pruneEmptyDirs(join(root, ".codex"));
+      pruneEmptyDirs(join(root, ".agents"));
       appendInitAudit(root, "init_rollback", { backupDir: safeRelative(root, backupDir) });
       audit.push("init_rollback");
-      rmSync(backupDir, { recursive: true, force: true });
+      transaction.cleanupBackup();
       rmSync(join(root, INIT_AUDIT_LOG), { force: true });
       removeEmptyDir(dirname(backupDir));
       pruneEmptyDirs(join(root, ".autokit"));
@@ -314,43 +345,17 @@ function listAssetFiles(assetRoot: string): string[] {
   return files.sort();
 }
 
-function writeNewFile(
-  root: string,
+function recordWriteResult(
+  result: AssetWriteResult,
   relativePath: string,
-  content: string,
   changed: string[],
   skipped: string[],
-  created: string[],
 ): void {
-  const target = join(root, relativePath);
-  if (pathExists(target)) {
-    skipped.push(relativePath);
-    return;
+  if (result === "changed") {
+    changed.push(relativePath.split(sep).join("/"));
+  } else {
+    skipped.push(relativePath.split(sep).join("/"));
   }
-  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  writeFileSync(target, content, { mode: 0o600, flag: "wx" });
-  changed.push(relativePath);
-  created.push(relativePath);
-}
-
-function writeCopiedAsset(
-  root: string,
-  assetRoot: string,
-  sourceRelative: string,
-  targetRelative: string,
-  changed: string[],
-  skipped: string[],
-  created: string[],
-): void {
-  const target = join(root, targetRelative);
-  if (pathExists(target)) {
-    skipped.push(targetRelative);
-    return;
-  }
-  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  copyFileSync(join(assetRoot, sourceRelative), target, constants.COPYFILE_EXCL);
-  changed.push(targetRelative);
-  created.push(targetRelative);
 }
 
 function createProviderLink(
@@ -359,7 +364,7 @@ function createProviderLink(
   target: string,
   changed: string[],
   skipped: string[],
-  created: string[],
+  transaction: AssetsTransaction,
 ): void {
   const path = join(root, relativePath);
   if (pathExists(path)) {
@@ -369,17 +374,15 @@ function createProviderLink(
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   symlinkSync(target, path, "dir");
   changed.push(relativePath);
-  created.push(relativePath);
+  transaction.recordCreated(relativePath);
 }
 
 function appendMarker(
   root: string,
   relativePath: string,
-  backupDir: string,
-  backups: BackupEntry[],
+  transaction: AssetsTransaction,
   changed: string[],
   skipped: string[],
-  created: string[],
 ): void {
   const path = join(root, relativePath);
   const existing = pathExists(path) ? readFileSync(path, "utf8") : "";
@@ -388,12 +391,9 @@ function appendMarker(
     return;
   }
   if (pathExists(path)) {
-    const backupPath = join(backupDir, relativePath);
-    mkdirSync(dirname(backupPath), { recursive: true, mode: 0o700 });
-    copyFileSync(path, backupPath);
-    backups.push({ relativePath, backupPath });
+    transaction.backupExisting(relativePath);
   } else {
-    created.push(relativePath);
+    transaction.recordCreated(relativePath);
   }
   appendFileSync(
     path,
@@ -405,7 +405,7 @@ function appendMarker(
   changed.push(relativePath);
 }
 
-function writeAuditHmacKey(root: string, changed: string[], created: string[]): void {
+function writeAuditHmacKey(root: string, changed: string[], transaction: AssetsTransaction): void {
   const path = join(root, AUDIT_HMAC_KEY);
   if (pathExists(path)) {
     return;
@@ -418,7 +418,7 @@ function writeAuditHmacKey(root: string, changed: string[], created: string[]): 
     closeSync(fd);
   }
   changed.push(AUDIT_HMAC_KEY);
-  created.push(AUDIT_HMAC_KEY);
+  transaction.recordCreated(AUDIT_HMAC_KEY);
 }
 
 function appendInitAudit(
@@ -439,24 +439,6 @@ Autokit manages .autokit runtime state and .agents assets in this repository.
 Do not edit files inside the marker block by hand; update autokit assets instead.
 ${INIT_MARKER_END}
 `;
-}
-
-function rollback(root: string, backups: BackupEntry[], created: string[]): void {
-  for (const relativePath of [...created].reverse()) {
-    if (relativePath === "__inject_rollback_failure__") {
-      throw new Error("injected rollback failure");
-    }
-    rmSync(join(root, relativePath), { recursive: true, force: true });
-  }
-  for (const backup of backups.reverse()) {
-    mkdirSync(dirname(join(root, backup.relativePath)), { recursive: true, mode: 0o700 });
-    cpSync(backup.backupPath, join(root, backup.relativePath), { recursive: true, force: true });
-  }
-  pruneEmptyDirs(join(root, ".claude"));
-  pruneEmptyDirs(join(root, ".codex"));
-  pruneEmptyDirs(join(root, ".agents"));
-  rmSync(join(root, INIT_AUDIT_LOG), { force: true });
-  pruneEmptyDirs(join(root, ".autokit"));
 }
 
 function listResidue(root: string): string[] {
@@ -491,10 +473,6 @@ function pathExists(path: string): boolean {
   } catch {
     return false;
   }
-}
-
-function timestamp(value: string): string {
-  return value.replace(/[^0-9A-Za-z.-]/g, "-");
 }
 
 function relativePath(root: string, path: string): string {

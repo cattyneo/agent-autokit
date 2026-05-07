@@ -32,10 +32,13 @@ import {
 } from "../../packages/workflows/src/index.ts";
 
 const NOW = "2026-05-08T12:00:00.000Z";
+const ANTHROPIC_KEY = "anthropic-provider-secret-114";
+const CODEX_KEY = "codex-provider-secret-114";
 const OPENAI_KEY = `sk-${"4".repeat(24)}`;
 const GITHUB_TOKEN = `ghp_${"5".repeat(24)}`;
 const PRIVATE_KEY_BEGIN = "-----BEGIN OPENSSH PRIVATE KEY-----";
 const AUTH_PATH = "/Users/security/.codex/auth.json";
+const CODEX_CREDENTIALS_PATH = "/Users/security/.codex/credentials.json";
 const CLAUDE_CREDENTIALS_PATH = "/Users/security/.claude/credentials.json";
 const ATTACKER_FILENAME = "attacker-secret-name.pem";
 
@@ -152,6 +155,12 @@ describe("Issue #114 security E2E gate", () => {
           "    - prompt-contract-secret",
         ].join("\n"),
       ),
+      env: {
+        HOME: "/Users/security",
+        ANTHROPIC_API_KEY: ANTHROPIC_KEY,
+        OPENAI_API_KEY: OPENAI_KEY,
+        CODEX_API_KEY: CODEX_KEY,
+      },
       port: 0,
       stateHome: makeTempDir(),
       now: () => NOW,
@@ -168,7 +177,13 @@ describe("Issue #114 security E2E gate", () => {
           OPENAI_KEY,
           GITHUB_TOKEN,
           AUTH_PATH,
+          CODEX_CREDENTIALS_PATH,
           CLAUDE_CREDENTIALS_PATH,
+          `ANTHROPIC_API_KEY=${ANTHROPIC_KEY}`,
+          `OPENAI_API_KEY=${OPENAI_KEY}`,
+          `CODEX_API_KEY=${CODEX_KEY}`,
+          ANTHROPIC_KEY,
+          CODEX_KEY,
           '{"prompt_contract":{"data":{"answer":"prompt-contract-secret"}}}',
           '{"token":"codex-subscription-secret"}',
         ].join(" "),
@@ -183,8 +198,11 @@ describe("Issue #114 security E2E gate", () => {
     assertNoLiteralLeak(payload, [
       server.token,
       OPENAI_KEY,
+      ANTHROPIC_KEY,
+      CODEX_KEY,
       GITHUB_TOKEN,
       AUTH_PATH,
+      CODEX_CREDENTIALS_PATH,
       CLAUDE_CREDENTIALS_PATH,
       "prompt-contract-secret",
       "codex-subscription-secret",
@@ -218,6 +236,7 @@ describe("Issue #114 security E2E gate", () => {
           "--- a/docs/security.md",
           "+++ b/docs/security.md",
           `+token ${GITHUB_TOKEN}`,
+          `+openai ${OPENAI_KEY}`,
           `+${PRIVATE_KEY_BEGIN}`,
           "+cHJpdmF0ZWtleWJvZHk=",
         ].join("\n");
@@ -274,11 +293,16 @@ describe("Issue #114 security E2E gate", () => {
     assertNoLiteralLeak(traversal.stderr(), ["outside-agents", "safe/prompts/ok.md"]);
     assert.equal(readTasksYaml(repo), tasksBefore);
 
-    const audits = JSON.stringify(readAuditEvents(repo));
-    assert.match(
-      audits,
-      /<blacklist:env>|<blacklist:credentials>|<content-signature:openssh-private-key>|<symlink>/,
+    const auditEvents = readAuditEvents(repo);
+    assertAuditCategory(auditEvents, "preset_blacklist_hit", "<blacklist:env>");
+    assertAuditCategory(auditEvents, "preset_blacklist_hit", "<blacklist:credentials>");
+    assertAuditCategory(
+      auditEvents,
+      "preset_blacklist_hit",
+      "<content-signature:openssh-private-key>",
     );
+    assertAuditCategory(auditEvents, "preset_path_traversal", "<symlink>");
+    const audits = JSON.stringify(auditEvents);
     assertNoLiteralLeak(audits, [
       ".env.production",
       "auth.json",
@@ -315,6 +339,7 @@ describe("Issue #114 security E2E gate", () => {
       effort: { unsupported_policy: "fail" },
       phases: { implement: { provider: "codex", effort: "high", model: "gpt-5.4-mini" } },
     });
+    const effortAudits: unknown[] = [];
     const failed = await runImplementWorkflow(implementReadyTask(), {
       runner: queueRunner(),
       git: mockGitDeps(),
@@ -322,6 +347,7 @@ describe("Issue #114 security E2E gate", () => {
       worktreeRoot: "/repo/root/.autokit/worktrees/issue-114",
       homeDir: "/Users/security",
       config: unsupportedConfig,
+      auditFailure: (input) => effortAudits.push(input),
       now: () => NOW,
     });
     assert.equal(failed.task.state, "failed");
@@ -331,6 +357,11 @@ describe("Issue #114 security E2E gate", () => {
       /effort=high provider=codex model=gpt-5\.4-mini/,
     );
     assertNoLiteralLeak(failed.task.failure?.message ?? "", ["/Users/security", "/repo/root"]);
+    assert.equal(effortAudits.length, 1);
+    const effortAudit = JSON.stringify(effortAudits[0]);
+    assert.match(effortAudit, /effort_unsupported/);
+    assert.match(effortAudit, /effort=high provider=codex model=gpt-5\.4-mini/);
+    assertNoLiteralLeak(effortAudit, ["/Users/security", "/repo/root"]);
 
     const repo = makeRepo();
     const stateHome = makeTempDir();
@@ -573,6 +604,22 @@ function assertNoLiteralLeak(value: string, literals: string[]): void {
   for (const literal of literals) {
     assert.equal(value.includes(literal), false, `leaked literal: ${literal}`);
   }
+}
+
+function assertAuditCategory(
+  events: Array<Record<string, unknown> & { kind: string }>,
+  kind: string,
+  category: string,
+): void {
+  assert.equal(
+    events.some(
+      (event) =>
+        event.kind === kind &&
+        (event.payload as { category?: unknown } | undefined)?.category === category,
+    ),
+    true,
+    `missing audit category: ${kind} ${category}`,
+  );
 }
 
 function equalLengthWrongToken(token: string): string {

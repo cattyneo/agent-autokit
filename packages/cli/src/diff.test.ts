@@ -76,6 +76,8 @@ describe("cli diff redaction", () => {
   it("redacts all configured sensitive path classes", () => {
     const rawDiff = [
       diffForPath(".codex/auth.json", "+raw codex auth"),
+      diffForPath(".codex/credentials.json", "+raw codex credentials"),
+      diffForPath(".codex/auth.json.bak", "+raw codex auth backup"),
       diffForPath(".claude/credentials.json", "+raw claude credentials"),
       diffForPath(".autokit/audit-hmac-key", "+0123456789abcdef0123456789abcdef"),
       diffForPath(".env~", "+DATABASE_PASSWORD=plain-secret"),
@@ -90,7 +92,10 @@ describe("cli diff redaction", () => {
     const redacted = redactGitDiff(rawDiff, DEFAULT_CONFIG);
 
     assert.match(redacted, /\[REDACTED hunk: <REDACTED>\]/);
-    assert.doesNotMatch(redacted, /\.codex\/auth\.json|\.claude\/credentials\.json/i);
+    assert.doesNotMatch(
+      redacted,
+      /\.codex\/auth\.json|\.codex\/credentials\.json|auth\.json\.bak|\.claude\/credentials\.json/i,
+    );
     for (const path of [
       ".autokit/audit-hmac-key",
       ".env~",
@@ -102,6 +107,8 @@ describe("cli diff redaction", () => {
       assert.match(redacted, new RegExp(`\\[REDACTED hunk: ${escapeRegExp(path)}\\]`));
     }
     assert.doesNotMatch(redacted, /raw codex auth/);
+    assert.doesNotMatch(redacted, /raw codex credentials/);
+    assert.doesNotMatch(redacted, /raw codex auth backup/);
     assert.doesNotMatch(redacted, /raw claude credentials/);
     assert.doesNotMatch(redacted, /0123456789abcdef0123456789abcdef/);
     assert.doesNotMatch(redacted, /plain-secret/);

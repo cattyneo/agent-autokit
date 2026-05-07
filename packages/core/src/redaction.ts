@@ -43,7 +43,7 @@ function redactEnvLineValues(value: string): string {
 
 function builtInRedactPatterns(config: AutokitConfig): RegExp[] {
   return [
-    /(?:~|<repo>|\/Users\/[^/\s]+|\/home\/[^/\s]+|C:\\Users\\[^\\\s]+)?\/?\.codex\/auth(?:\.json)?/gi,
+    /(?:~|<repo>|\/Users\/[^/\s]+|\/home\/[^/\s]+|C:\\Users\\[^\\\s]+)?\/?\.codex\/(?:auth|credentials)[^/\s\\]*/gi,
     /(?:~|<repo>|\/Users\/[^/\s]+|\/home\/[^/\s]+|C:\\Users\\[^\\\s]+)?\/?\.claude\/credentials[^/\s]*/gi,
     /ghp_[A-Za-z0-9]{20,}/g,
     /github_pat_[A-Za-z0-9_]{20,}/g,

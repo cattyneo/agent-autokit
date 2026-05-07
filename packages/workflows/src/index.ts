@@ -416,6 +416,14 @@ export async function runReviewSuperviseWorkflow(
   }
   task = reviewCompleted.task;
   findings = assignFindingIds(sanitizeReviewFindings(reviewCompleted.data.findings, options));
+  if (findings.length > 0) {
+    emitLoopAudit(options, "review_finding_seen", {
+      issue: task.issue,
+      phase: "review",
+      count: findings.length,
+      finding_ids: findings.map((finding) => finding.finding_id),
+    });
+  }
   task = transitionTask(task, { type: "review_completed" }, config);
 
   if (findings.length === 0 || everyFindingAlreadyRejected(task, findings)) {
@@ -620,6 +628,11 @@ export async function runFixWorkflow(
   const prNumber = task.pr.number;
 
   if (task.git.checkpoints.fix.before_sha === null) {
+    emitLoopAudit(options, "fix_started", {
+      issue: task.issue,
+      phase: "fix",
+      origin: task.fix.origin,
+    });
     task.git.checkpoints.fix.before_sha = await options.git.getHeadSha();
     phaseStartedInThisInvocation = true;
     await persistTask(task, options);
@@ -686,13 +699,41 @@ export async function runFixWorkflow(
 
   if (task.git.checkpoints.fix.after_sha === null) {
     task.git.checkpoints.fix.after_sha = requirePrHead(task);
+    const origin = task.fix.origin;
     task = transitionTask(task, { type: "fix_pushed" });
     task.git.checkpoints.fix.after_sha = requirePrHead(task);
     await persistTask(task, options);
+    emitLoopAudit(options, "fix_finished", {
+      issue: task.issue,
+      phase: "fix",
+      origin,
+      head_sha: task.git.checkpoints.fix.after_sha,
+    });
+    emitLoopAudit(options, "review_started", {
+      issue: task.issue,
+      phase: "review",
+      origin,
+      review_round: task.review_round,
+      ci_fix_round: task.ci_fix_round,
+    });
   } else if (task.state === "fixing") {
+    const origin = task.fix.origin;
     task = transitionTask(task, { type: "fix_pushed" });
     task.git.checkpoints.fix.after_sha = requirePrHead(task);
     await persistTask(task, options);
+    emitLoopAudit(options, "fix_finished", {
+      issue: task.issue,
+      phase: "fix",
+      origin,
+      head_sha: task.git.checkpoints.fix.after_sha,
+    });
+    emitLoopAudit(options, "review_started", {
+      issue: task.issue,
+      phase: "review",
+      origin,
+      review_round: task.review_round,
+      ci_fix_round: task.ci_fix_round,
+    });
   }
 
   return { task, changedFiles, testsRun };
@@ -1143,6 +1184,14 @@ async function runPhase(
         }
         currentTask = prepared.task;
       }
+      if (phase === "review") {
+        emitLoopAudit(options, "phase_started", {
+          issue: currentTask.issue,
+          phase,
+          state: currentTask.state,
+          review_round: currentTask.review_round,
+        });
+      }
       const output = await options.runner(
         buildAgentRunInput(
           currentTask,
@@ -1364,6 +1413,20 @@ function emitEffortDowngradeAudit(
     from: audit.from,
     to: audit.to,
   });
+}
+
+function emitLoopAudit(
+  options: WorkflowOptions,
+  kind: "phase_started" | "review_finding_seen" | "fix_started" | "fix_finished" | "review_started",
+  fields: Record<string, unknown>,
+): void {
+  const sanitized = Object.fromEntries(
+    Object.entries(fields).map(([key, value]) => [
+      key,
+      typeof value === "string" ? sanitizeWorkflowString(value, options) : value,
+    ]),
+  );
+  options.auditOperation?.(kind, sanitized);
 }
 
 function resolvedEffortEquals(

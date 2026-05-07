@@ -29,13 +29,13 @@
 
 ### 1.2 修正案
 
-| 同梱 skill | コピー元 (commit hash で pin) | 調整方針 |
+| 同梱 skill | コピー元 (commit hash / approved source fingerprint で pin) | 調整方針 |
 |---|---|---|
 | `autokit-implement` | 既存 `tdd-workflow` | 本ツールに合わせて調整 (TDD step + autokit prompt_contract への適合) |
 | `autokit-review` | 既存 `general-review` | 本ツールに合わせて調整 (review 軸 + supervisor 連携) |
 | `autokit-question` | (コピー元なし、autokit 固有) | v0.2.0 では `status=need_input` プロトコル定義のみで構造維持。改修対象外 (理由: SPEC §1.4 / §13.1 で AC 既存、prompt_contract と 1:1 結合済) |
 
-> **コピー元バージョン**: PR 内で commit hash を明記し、上流更新時の同期義務を `CONTRIBUTING` に記載
+> **コピー元バージョン**: PR 内で commit hash を明記し、上流更新時の同期義務を `CONTRIBUTING` に記載。local copy に verifiable upstream commit が存在しない場合のみ、operator decision を明記した source fingerprint pin を許可する。
 
 ### 1.3 不変条件 (CI 検証)
 

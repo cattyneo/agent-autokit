@@ -1578,6 +1578,15 @@ autokit 同梱 skill (`autokit-implement` / `autokit-review` / `autokit-question
 
 skill 内容実装 PR は本表に従って SPEC + PLAN を根拠 SoT として参照する。独立した normative 章 (skill 内容の完全 normative SPEC 化) は v0.2 以降の課題 (本 v0.1.0 では PLAN 重要原則 + AC §13.5 で SoT 確定済)。
 
+コピー元 pin:
+
+| 同梱 skill | コピー元 | pin |
+|---|---|---|
+| `autokit-implement` | `tdd-workflow` | commit `866d9ebb5364a579ac7d2a8fb79bb421bf9d7052` |
+| `autokit-review` | local `general-review` | `sha256:b95eddbaa3e3c671c657084d8919a0a34d031dec60a6228d08158514a742d7f5` |
+
+`autokit-review` のコピー元は本 PR 時点の local source に upstream git commit が存在しないため、operator decision A により local `SKILL.md` content fingerprint で pin する。上流同期時は `CONTRIBUTING.md` の Skill Source Sync に従い、本節と同 PR で更新する。
+
 Preset 由来の skill override は `autokit preset apply` で `.agents/skills/` に配置される場合のみ許可する。override 後も `autokit-implement` / `autokit-review` / `autokit-question` の skill 名、prompt からの参照契約、`status=need_input` 規約、sanitize / runner 権限境界は本節の SoT に従う。
 
 ---

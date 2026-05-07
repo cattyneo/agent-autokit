@@ -32,6 +32,11 @@ type PromptAssetVisibilityGateOptions = {
   mappingUrl?: URL;
 };
 
+type SkillAssetQualityGateOptions = {
+  assetsRootUrl?: URL;
+  repoRootUrl?: URL;
+};
+
 type PromptAssetVisibilityGateResult = {
   total: number;
   passed: number;
@@ -39,6 +44,16 @@ type PromptAssetVisibilityGateResult = {
   promptFiles: string[];
   presetEffectivePrompts: string[];
   markerSections: string[];
+  checks: VisibilityCheck[];
+};
+
+type SkillAssetQualityGateResult = {
+  total: number;
+  passed: number;
+  failures: string[];
+  skills: string[];
+  checkedSkillAssets: string[];
+  sourcePins: Record<"autokit-implement" | "autokit-review", string>;
   checks: VisibilityCheck[];
 };
 
@@ -66,6 +81,47 @@ const QUESTION_REF = "Use the bundled autokit-question skill for status=need_inp
 const IMPLEMENT_REF = "Use the bundled autokit-implement skill.";
 const REVIEW_REF = "Use the bundled autokit-review skill.";
 const MARKER_SECTIONS = ["## Result", "## Evidence", "## Changes", "## Test results"];
+const IMPLEMENT_SOURCE_COMMIT = "866d9ebb5364a579ac7d2a8fb79bb421bf9d7052";
+const REVIEW_SOURCE_SHA256 = "b95eddbaa3e3c671c657084d8919a0a34d031dec60a6228d08158514a742d7f5";
+const IMPLEMENT_SKILL_TOKENS = [
+  "Source alignment",
+  "tdd-workflow",
+  IMPLEMENT_SOURCE_COMMIT,
+  "prompt_contract",
+  "`implement`",
+  "`fix`",
+  "`changed_files`",
+  "`tests_run`",
+  "`docs_updated`",
+  "`notes`",
+  "RED",
+  "GREEN",
+  "REFACTOR",
+  "doc-updater",
+  "autokit-question",
+];
+const REVIEW_SKILL_TOKENS = [
+  "Source alignment",
+  "general-review",
+  REVIEW_SOURCE_SHA256,
+  "prompt_contract",
+  "`review`",
+  "`data.findings`",
+  "`severity`",
+  "`file`",
+  "`line`",
+  "`title`",
+  "`rationale`",
+  "`suggested_fix`",
+  "P0",
+  "P1",
+  "P2",
+  "P3",
+  "supervisor",
+  "read-only",
+  "autokit-question",
+];
+const REVIEW_SKILL_FORBIDDEN_TOKENS = [" / `findings`", "`findings` must"];
 
 export async function runPromptAssetVisibilityGate(
   options: PromptAssetVisibilityGateOptions = {},
@@ -158,7 +214,7 @@ export async function runPromptAssetVisibilityGate(
 export async function runRunnerVisibilitySelfTest(
   fixtureRootUrl = new URL("../fixtures/runner-visibility/", import.meta.url),
 ): Promise<VisibilitySelfTestResult> {
-  const root = fileURLToPath(fixtureRootUrl);
+  const root = await realpath(fileURLToPath(fixtureRootUrl));
   const checks: VisibilityCheck[] = [];
 
   await check(checks, "manifest file exists", () => requireFile(root, "manifest.json"));
@@ -227,6 +283,97 @@ export async function runRunnerVisibilitySelfTest(
     promptContracts: PROMPT_CONTRACTS,
     checks,
   };
+}
+
+export async function runSkillAssetQualityGate(
+  options: SkillAssetQualityGateOptions = {},
+): Promise<SkillAssetQualityGateResult> {
+  const assetsRoot = fileURLToPath(
+    options.assetsRootUrl ?? new URL("../../packages/cli/assets/", import.meta.url),
+  );
+  const repoRoot = fileURLToPath(options.repoRootUrl ?? new URL("../../", import.meta.url));
+  const checks: VisibilityCheck[] = [];
+  const checkedSkillAssets: string[] = [];
+
+  for (const skill of await collectSkillAssets(assetsRoot, "autokit-implement")) {
+    checkedSkillAssets.push(skill.label);
+    await check(checks, `${skill.label} aligns with prompt_contract`, async () =>
+      requireTokens(skill.label, skill.text, IMPLEMENT_SKILL_TOKENS),
+    );
+  }
+
+  for (const skill of await collectSkillAssets(assetsRoot, "autokit-review")) {
+    checkedSkillAssets.push(skill.label);
+    await check(checks, `${skill.label} aligns with prompt_contract`, async () => {
+      requireTokens(skill.label, skill.text, REVIEW_SKILL_TOKENS);
+      rejectTokens(skill.label, skill.text, REVIEW_SKILL_FORBIDDEN_TOKENS);
+    });
+  }
+
+  await check(checks, "SPEC records skill source pins", async () =>
+    requireTokens("docs/SPEC.md", await readText(repoRoot, "docs", "SPEC.md"), [
+      "コピー元 pin",
+      "tdd-workflow",
+      IMPLEMENT_SOURCE_COMMIT,
+      "general-review",
+      REVIEW_SOURCE_SHA256,
+    ]),
+  );
+
+  await check(checks, "CONTRIBUTING records skill upstream sync duties", async () =>
+    requireTokens("CONTRIBUTING.md", await readText(repoRoot, "CONTRIBUTING.md"), [
+      "Skill Source Sync",
+      "tdd-workflow",
+      IMPLEMENT_SOURCE_COMMIT,
+      "general-review",
+      REVIEW_SOURCE_SHA256,
+      "runner-visibility",
+      "prompt_contract",
+    ]),
+  );
+
+  const failures = checks
+    .filter((result) => !result.ok)
+    .map((result) => `${result.name}: ${result.message ?? "failed"}`);
+
+  return {
+    total: checks.length,
+    passed: checks.length - failures.length,
+    failures,
+    skills: ["autokit-implement", "autokit-review"],
+    checkedSkillAssets,
+    sourcePins: {
+      "autokit-implement": IMPLEMENT_SOURCE_COMMIT,
+      "autokit-review": REVIEW_SOURCE_SHA256,
+    },
+    checks,
+  };
+}
+
+async function collectSkillAssets(
+  assetsRoot: string,
+  skillName: "autokit-implement" | "autokit-review",
+): Promise<Array<{ label: string; text: string }>> {
+  const skills = [
+    {
+      label: `base:skills/${skillName}/SKILL.md`,
+      text: await readText(assetsRoot, "skills", skillName, "SKILL.md"),
+    },
+  ];
+
+  for (const preset of await listPresetNames(join(assetsRoot, "presets"))) {
+    const text = await readOptionalText(
+      join(assetsRoot, "presets", preset, "skills", skillName, "SKILL.md"),
+    );
+    if (text !== null) {
+      skills.push({
+        label: `preset:${preset}/skills/${skillName}/SKILL.md`,
+        text,
+      });
+    }
+  }
+
+  return skills;
 }
 
 async function check(
@@ -386,6 +533,20 @@ function requireMappingCoverage(
     if (!found) {
       throw new Error(`mapping missing for ${input.presetEffectivePrompt} ${section}`);
     }
+  }
+}
+
+function requireTokens(label: string, text: string, tokens: string[]): void {
+  const missing = tokens.filter((token) => !text.includes(token));
+  if (missing.length > 0) {
+    throw new Error(`${label} missing ${missing.join(", ")}`);
+  }
+}
+
+function rejectTokens(label: string, text: string, tokens: string[]): void {
+  const found = tokens.filter((token) => text.includes(token));
+  if (found.length > 0) {
+    throw new Error(`${label} must not contain ${found.join(", ")}`);
   }
 }
 

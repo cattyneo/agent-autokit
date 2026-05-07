@@ -77,6 +77,9 @@ describe("cli exit code contract", () => {
   it("starts the local serve API through the CLI seam", async () => {
     const root = makeTempDir();
     const calls: unknown[] = [];
+    let closed = false;
+    const signals = new Map<string, () => void>();
+    const exits: number[] = [];
     const harness = makeCliHarness(root, {
       startServe: async (input) => {
         calls.push({
@@ -89,8 +92,20 @@ describe("cli exit code contract", () => {
           host: input.host ?? "127.0.0.1",
           port: 49152,
           tokenPath: "/tmp/token",
-          close: async () => {},
+          close: async () => {
+            closed = true;
+          },
         };
+      },
+      proc: {
+        once: (event: string | symbol, listener: (...args: unknown[]) => void) => {
+          signals.set(String(event), listener as () => void);
+          return process;
+        },
+        exit: (code) => {
+          exits.push(Number(code ?? 0));
+          return undefined as never;
+        },
       },
     });
 
@@ -98,6 +113,10 @@ describe("cli exit code contract", () => {
     assert.deepEqual(calls, [{ repoRoot: root, host: "127.0.0.1", port: 0, hasWorkflow: true }]);
     assert.match(harness.stdout(), /serve listening\thttp:\/\/127\.0\.0\.1:49152/);
     assert.match(harness.stdout(), /token file\t\/tmp\/token/);
+    signals.get("SIGTERM")?.();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(closed, true);
+    assert.deepEqual(exits, [0]);
   });
 
   it("routes serve workflow operations through CLI command semantics", async () => {

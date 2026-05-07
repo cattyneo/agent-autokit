@@ -111,7 +111,7 @@ const LOG_DIFF_HARD_MAX_BYTES = 65_536;
 const BODY_MAX_BYTES = 65_536;
 const DIFF_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const mutatingPaths = new Set(["/api/run", "/api/resume", "/api/retry", "/api/cleanup"]);
-const allowedBindHosts = new Set(["127.0.0.1", "localhost", "::1"]);
+const allowedBindHosts = new Set(["127.0.0.1", "localhost"]);
 
 export async function startAutokitServe(options: AutokitServeOptions): Promise<AutokitServeServer> {
   const repoRoot = realpathSync(options.repoRoot);
@@ -151,13 +151,25 @@ export async function startAutokitServe(options: AutokitServeOptions): Promise<A
     });
   });
 
-  await listen(server, options.port ?? DEFAULT_PORT, host);
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("autokit serve did not bind to a TCP port");
+  try {
+    await listen(server, options.port ?? DEFAULT_PORT, host);
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("autokit serve did not bind to a TCP port");
+    }
+    actualPort = address.port;
+    tokenPath = writeServeToken(stateHome(env, options.stateHome), repoId, actualPort, token);
+  } catch (error) {
+    for (const client of sseClients) {
+      client.end();
+    }
+    await closeServer(server).catch(() => {});
+    if (tokenPath !== "") {
+      unlinkIfExists(tokenPath);
+    }
+    logger.close();
+    throw error;
   }
-  actualPort = address.port;
-  tokenPath = writeServeToken(stateHome(env, options.stateHome), repoId, actualPort, token);
 
   return {
     host,
@@ -275,16 +287,27 @@ function authorize(
   if (!safeTokenEqual(suppliedToken, expectedToken)) {
     return { ok: false, status: 401, code: "unauthorized", message: "bearer token required" };
   }
-  const host = request.headers.host;
-  const allowed = new Set([`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`]);
-  if (host === undefined || !allowed.has(host)) {
+  if (!isAllowedHostHeader(request.headers.host, port)) {
     return { ok: false, status: 403, code: "forbidden", message: "host not allowed" };
+  }
+  const origin = request.headers.origin;
+  if (!isAllowedOriginHeader(origin, port)) {
+    return { ok: false, status: 403, code: "forbidden", message: "origin not allowed" };
   }
   return { ok: true };
 }
 
 async function handleMutation(context: RequestContext, path: string): Promise<void> {
   const operation = path.slice("/api/".length) as ServeOperation;
+  if (!isJsonContentType(context.request.headers["content-type"])) {
+    sendError(
+      context.response,
+      415,
+      "unsupported_media_type",
+      "content-type must be application/json",
+    );
+    return;
+  }
   let body: Record<string, unknown>;
   try {
     assertProductionApiKeyEnvUnset(context.env);
@@ -1033,6 +1056,41 @@ function safeTokenEqual(supplied: string, expected: string): boolean {
     suppliedBuffer.length === expectedBuffer.length &&
     timingSafeEqual(suppliedBuffer, expectedBuffer)
   );
+}
+
+function isAllowedHostHeader(host: string | undefined, port: number): boolean {
+  if (host === undefined) {
+    return false;
+  }
+  const normalized = host.toLowerCase();
+  return (
+    normalized === `127.0.0.1:${port}` ||
+    normalized === `localhost:${port}` ||
+    normalized === `localhost.:${port}` ||
+    normalized === `[::1]:${port}`
+  );
+}
+
+function isAllowedOriginHeader(origin: string | undefined, port: number): boolean {
+  if (origin === undefined) {
+    return true;
+  }
+  if (origin === "null") {
+    return false;
+  }
+  try {
+    const parsed = new URL(origin);
+    return parsed.protocol === "http:" && isAllowedHostHeader(parsed.host, port);
+  } catch {
+    return false;
+  }
+}
+
+function isJsonContentType(contentType: string | undefined): boolean {
+  if (contentType === undefined) {
+    return false;
+  }
+  return contentType.split(";")[0]?.trim().toLowerCase() === "application/json";
 }
 
 async function listen(server: Server, port: number, host: string): Promise<void> {

@@ -35,6 +35,7 @@ describe("core config schema", () => {
     assert.equal(config.runner_timeout.default_idle_ms, 300_000);
     assert.equal(resolveRunnerTimeout(config, "plan"), 600_000);
     assert.equal(resolveRunnerTimeout(config, "plan_verify"), 600_000);
+    assert.equal(config.init.backup.retention_days, 30);
     assert.equal(config.init.backup_blacklist.includes(".autokit/audit-hmac-key"), true);
     assert.equal(config.serve.lock.host_redact, false);
     assert.equal(config.serve.sse.max_connections, 8);
@@ -138,6 +139,8 @@ serve:
 init:
   backup_dir: ".autokit/custom-backup"
   backup_mode: "0750"
+  backup:
+    retention_days: 9
   backup_blacklist:
     - ".custom-secret"
 `);
@@ -159,6 +162,7 @@ init:
     assert.equal(config.serve.lock.host_redact, true);
     assert.equal(config.serve.sse.max_connections, 3);
     assert.equal(config.serve.sse.heartbeat_ms, 5_000);
+    assert.equal(config.init.backup.retention_days, 9);
     assert.deepEqual(config.init.backup_blacklist, [".custom-secret"]);
   });
 

@@ -98,7 +98,7 @@ apply 時に以下の操作系 audit kind を発火 (`cross-cutting.md` §2.1):
 
 `preset apply` の rollback backup は `.agents` を byte 単位復元するため、backup source-side exclude を行わない。かわりに apply 開始前の preflight で `.agents/` 配下に blacklist path / content signature が存在する場合は `failure.code=preset_blacklist_hit` で fail-fast し、backup / staging / rename を開始しない。これにより backup に secret を含めず、かつ失敗時 restore が byte-identical である契約を両立する。
 
-**`init.backup.retention_days` は本 Phase で新規追加** (現 `config.ts:171-180` `init` block には未定義、`logging.retention_days` (config.ts:165) とは別フィールド)。両経路で共通適用、default `30`。SPEC §4.1 への追加は実装 PR (`cross-cutting.md` §5 step 12 の preset 実装と同 PR) で行う責務。
+**`init.backup.retention_days` は本 Phase で新規追加** (`logging.retention_days` とは別フィールド)。両経路で共通適用、default `30`。SPEC §4.1 / §11.5 と `packages/core/src/config.ts` を同 PR で同期する。
 
 実装メモ: 既存 `init` の copy / backup / rollback ロジック (`packages/cli/src/init.ts:73-163` / rollback `init.ts:443-459`) から、repo path を受け取る純粋な file operation primitive を `assets-writer.ts` に切り出す。`applyPreset(name)` のような preset name 解決 API は core に置かず、CLI が preset source root を解決して core primitive に path / manifest / policy を渡す。
 

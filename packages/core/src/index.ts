@@ -1,6 +1,22 @@
 export const CORE_PACKAGE = "@cattyneo/autokit-core";
 
 export type {
+  AssetBackupEntry,
+  AssetsTransaction,
+  AssetWriteResult,
+  ManifestEntry,
+  PruneBackupRetentionOptions,
+} from "./assets-writer.js";
+export {
+  createAssetsTransaction,
+  createPresetBackupDir,
+  ensurePrivateDirectoryChain,
+  manifestDirectory,
+  pruneBackupRetention,
+  repoBackupId,
+  timestampForBackup,
+} from "./assets-writer.js";
+export type {
   CapabilityRow,
   ClaudeHook,
   ClaudePermission,

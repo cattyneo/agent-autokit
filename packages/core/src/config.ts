@@ -209,6 +209,11 @@ const configSchema = z
           .string()
           .regex(/^[0-7]{4}$/)
           .default("0700"),
+        backup: z
+          .strictObject({
+            retention_days: positiveInteger.default(30),
+          })
+          .prefault({}),
         backup_blacklist: z.array(z.string().min(1)).default(defaultBackupBlacklist),
       })
       .prefault({}),

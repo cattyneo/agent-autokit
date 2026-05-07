@@ -19,6 +19,7 @@ import { type AutokitConfig, DEFAULT_CONFIG } from "./config.js";
 const LOCK_DIR = join(".autokit", ".lock");
 const HOLDER_FILE = "holder.json";
 const HOLDER_TMP_FILE = "holder.json.tmp";
+const SEIZING_FILE = "holder.json.seizing";
 const DEFAULT_INCOMPLETE_GRACE_MS = 5_000;
 const DEFAULT_POLL_INTERVAL_MS = 50;
 
@@ -41,7 +42,19 @@ export type RunLock = {
 
 export type TryAcquireRunLockResult =
   | { acquired: true; lock: RunLock }
-  | { acquired: false; reason: "busy"; holder: PublicRunLockHolder | null };
+  | {
+      acquired: false;
+      reason: "busy" | "host_mismatch";
+      holder: PublicRunLockHolder | null;
+    };
+
+export type ForceSeizeRunLockResult =
+  | { seized: true; lock: RunLock; prior: PublicRunLockHolder }
+  | {
+      seized: false;
+      reason: "no_holder" | "holder_changed" | "same_host" | "seize_failed";
+      holder: PublicRunLockHolder | null;
+    };
 
 export type WaitAcquireRunLockResult =
   | { acquired: true; lock: RunLock }
@@ -54,6 +67,7 @@ export type RunLockHooks = {
   pid?: number;
   getProcessLstart?: (pid: number) => string | null;
   isProcessAlive?: (pid: number) => boolean;
+  beforeForceSeizeRecheck?: () => void;
   sleep?: (ms: number) => Promise<void>;
 };
 
@@ -101,13 +115,71 @@ export function tryAcquireRunLock(
       }
       return {
         acquired: false,
-        reason: "busy",
+        reason: recovery.status,
         holder: recovery.holder === null ? null : publicHolder(recovery.holder),
       };
     }
   }
 
   return { acquired: false, reason: "busy", holder: null };
+}
+
+export function forceSeizeRunLock(
+  repoRoot: string,
+  options: TryAcquireRunLockOptions = {},
+): ForceSeizeRunLockResult {
+  const context = lockContext(options);
+  const lockDir = lockPath(repoRoot);
+  const holderPath = join(lockDir, HOLDER_FILE);
+  const holder = readHolder(holderPath);
+  if (holder === null || holder === "invalid") {
+    return { seized: false, reason: "no_holder", holder: null };
+  }
+  if (!isHostMismatch(holder, context)) {
+    return { seized: false, reason: "same_host", holder: publicHolder(holder) };
+  }
+  const prior = publicHolder(holder);
+  const seizingPath = join(lockDir, SEIZING_FILE);
+  try {
+    writeFileSync(seizingPath, `${context.pid}\n`, { mode: 0o600, flag: "wx" });
+    chmodSync(seizingPath, 0o600);
+  } catch {
+    return { seized: false, reason: "seize_failed", holder: prior };
+  }
+
+  try {
+    context.beforeForceSeizeRecheck();
+    const reread = readHolder(holderPath);
+    if (
+      reread === null ||
+      reread === "invalid" ||
+      reread.holder_token !== holder.holder_token ||
+      reread.pid !== holder.pid ||
+      reread.started_at_lstart !== holder.started_at_lstart ||
+      reread.host !== holder.host ||
+      reread.acquired_at !== holder.acquired_at
+    ) {
+      return {
+        seized: false,
+        reason: "holder_changed",
+        holder: reread === null || reread === "invalid" ? null : publicHolder(reread),
+      };
+    }
+
+    const newHolder = createHolder(context, options.runId);
+    publishHolder(lockDir, newHolder);
+    return {
+      seized: true,
+      lock: {
+        holder: newHolder,
+        holderToken: newHolder.holder_token,
+        release: () => releaseRunLock(repoRoot, newHolder.holder_token),
+      },
+      prior,
+    };
+  } finally {
+    unlinkIfExists(seizingPath);
+  }
 }
 
 export async function waitAcquireRunLock(
@@ -160,6 +232,7 @@ function lockContext(options: TryAcquireRunLockOptions) {
     pid: hooks.pid ?? process.pid,
     getProcessLstart: hooks.getProcessLstart ?? defaultProcessLstart,
     isProcessAlive: hooks.isProcessAlive ?? defaultProcessAlive,
+    beforeForceSeizeRecheck: hooks.beforeForceSeizeRecheck ?? (() => undefined),
     incompleteGraceMs: options.incompleteGraceMs ?? DEFAULT_INCOMPLETE_GRACE_MS,
   };
 }
@@ -191,12 +264,16 @@ function publishHolder(lockDir: string, holder: RunLockHolder): void {
 function recoverExistingLock(
   repoRoot: string,
   context: ReturnType<typeof lockContext>,
-): { status: "busy"; holder: RunLockHolder | null } | "recovered" {
+): { status: "busy" | "host_mismatch"; holder: RunLockHolder | null } | "recovered" {
   const lockDir = lockPath(repoRoot);
   const holderPath = join(lockDir, HOLDER_FILE);
   const holder = readHolder(holderPath);
   if (holder === null || holder === "invalid") {
     return recoverIncompleteLock(lockDir, context) ? "recovered" : { status: "busy", holder: null };
+  }
+
+  if (isHostMismatch(holder, context)) {
+    return { status: "host_mismatch", holder };
   }
 
   if (context.isProcessAlive(holder.pid)) {
@@ -270,6 +347,10 @@ function readHolder(path: string): RunLockHolder | "invalid" | null {
 function publicHolder(holder: RunLockHolder): PublicRunLockHolder {
   const { holder_token: _holderToken, ...rest } = holder;
   return rest;
+}
+
+function isHostMismatch(holder: RunLockHolder, context: ReturnType<typeof lockContext>): boolean {
+  return holder.host !== formatHost(context.hostname(), context.config.serve.lock.host_redact);
 }
 
 function formatHost(host: string, redact: boolean): string {

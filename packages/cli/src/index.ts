@@ -10,10 +10,12 @@ import {
   buildGitWorktreeRemoveArgs,
   capabilityPhases,
   capabilityProviders,
+  createAutokitLogger,
   createTaskEntry,
   DEFAULT_CONFIG,
   type EffortLevel,
   effortLevels,
+  forceSeizeRunLock,
   type GhPrView,
   loadTasksFile,
   makeFailure,
@@ -23,6 +25,7 @@ import {
   type Provider,
   parseConfigYaml,
   parseGhPrView,
+  type RunLock,
   type RuntimePhase,
   retryCleanupTask,
   sanitizeLogString,
@@ -65,6 +68,10 @@ export const TEMPFAIL_EXIT_CODE = 75;
 export type CliWriter = { write(chunk: string): void };
 
 export type ExecFile = (command: string, args: string[], options?: { cwd?: string }) => string;
+export type ForceUnlockConfirmInput = {
+  isTTY?: boolean;
+  readLineSync: () => string;
+};
 
 export type IssueMetadata = {
   number: number;
@@ -94,6 +101,7 @@ export type CliDeps = {
   proc?: Pick<NodeJS.Process, "once" | "exit">;
   presetAssetRoot?: string;
   presetPostApplyCheck?: (input: { repoRoot: string; presetName: string }) => void;
+  forceUnlock?: boolean;
 };
 
 export type CliQuestionInput = {
@@ -116,9 +124,26 @@ export function getAutokitVersion(): string {
   return AUTOKIT_VERSION;
 }
 
+export function createForceUnlockConfirm(input: ForceUnlockConfirmInput, stderr: CliWriter) {
+  return (message: string): boolean => {
+    if (input.isTTY !== true) {
+      stderr.write("force-unlock requires an interactive terminal\n");
+      return false;
+    }
+    stderr.write(
+      `${message}\nConfirm the owner process has been killed or is unreachable, then type force-unlock: `,
+    );
+    return input.readLineSync().trim() === "force-unlock";
+  };
+}
+
 export async function runCli(argv: string[], deps: CliDeps): Promise<number> {
   let exitCode = 0;
-  const program = createProgram(deps, (code) => {
+  const runtimeDeps: CliDeps = {
+    ...deps,
+    forceUnlock: deps.forceUnlock ?? argv.includes("--force-unlock"),
+  };
+  const program = createProgram(runtimeDeps, (code) => {
     exitCode = code;
   });
 
@@ -607,10 +632,19 @@ function withWriteCommandLock(deps: CliDeps, action: () => number, skip = false)
   if (skip) {
     return action();
   }
-  const lock = tryAcquireRunLock(deps.cwd, { config: loadConfigForLock(deps) });
+  const config = loadConfigForLock(deps);
+  let lock = tryAcquireRunLock(deps.cwd, { config });
   if (!lock.acquired) {
-    deps.stderr.write("autokit lock busy; another autokit command or serve process is active\n");
-    return TEMPFAIL_EXIT_CODE;
+    if (lock.reason === "host_mismatch") {
+      const seized = maybeForceSeizeLock(deps, config, lock.holder);
+      if (!seized.acquired) {
+        return seized.exitCode;
+      }
+      lock = seized;
+    } else {
+      deps.stderr.write("autokit lock busy; another autokit command or serve process is active\n");
+      return TEMPFAIL_EXIT_CODE;
+    }
   }
   let result = 1;
   try {
@@ -630,10 +664,19 @@ async function withWriteCommandLockAsync(
   deps: CliDeps,
   action: () => Promise<number>,
 ): Promise<number> {
-  const lock = tryAcquireRunLock(deps.cwd, { config: loadConfigForLock(deps) });
+  const config = loadConfigForLock(deps);
+  let lock = tryAcquireRunLock(deps.cwd, { config });
   if (!lock.acquired) {
-    deps.stderr.write("autokit lock busy; another autokit command or serve process is active\n");
-    return TEMPFAIL_EXIT_CODE;
+    if (lock.reason === "host_mismatch") {
+      const seized = maybeForceSeizeLock(deps, config, lock.holder);
+      if (!seized.acquired) {
+        return seized.exitCode;
+      }
+      lock = seized;
+    } else {
+      deps.stderr.write("autokit lock busy; another autokit command or serve process is active\n");
+      return TEMPFAIL_EXIT_CODE;
+    }
   }
   let result = 1;
   try {
@@ -647,6 +690,69 @@ async function withWriteCommandLockAsync(
     }
   }
   return result;
+}
+
+function maybeForceSeizeLock(
+  deps: CliDeps,
+  config: AutokitConfig,
+  holder: { pid: number; host: string; started_at_lstart: string; run_id?: string } | null,
+): { acquired: true; lock: RunLock } | { acquired: false; exitCode: number } {
+  if (deps.forceUnlock !== true) {
+    auditLockHostMismatch(deps, config, holder);
+    deps.stderr.write("lock_host_mismatch: autokit lock is held by another host\n");
+    return { acquired: false, exitCode: 1 };
+  }
+  if (deps.confirm?.("force-unlock lock held by another host?") !== true) {
+    auditLockHostMismatch(deps, config, holder);
+    deps.stderr.write("lock_host_mismatch: force-unlock confirmation required\n");
+    return { acquired: false, exitCode: 1 };
+  }
+  const seized = forceSeizeRunLock(deps.cwd, { config });
+  if (!seized.seized) {
+    auditLockHostMismatch(deps, config, seized.holder ?? holder);
+    deps.stderr.write(`lock_host_mismatch: force-unlock failed (${seized.reason})\n`);
+    return { acquired: false, exitCode: 1 };
+  }
+  const logger = createCliLogger(deps, config);
+  logger.auditOperation("lock_seized", {
+    prior: seized.prior,
+    seizing: {
+      pid: seized.lock.holder.pid,
+      host: seized.lock.holder.host,
+      started_at_lstart: seized.lock.holder.started_at_lstart,
+      command: "autokit --force-unlock",
+    },
+  });
+  logger.close();
+  deps.stderr.write("lock_seized: force-unlock acquired autokit lock\n");
+  return { acquired: true, lock: seized.lock };
+}
+
+function auditLockHostMismatch(
+  deps: CliDeps,
+  config: AutokitConfig,
+  holder: { pid: number; host: string; started_at_lstart: string; run_id?: string } | null,
+): void {
+  const logger = createCliLogger(deps, config);
+  logger.auditFailure({
+    failure: {
+      phase: "lock",
+      code: "lock_host_mismatch",
+      message: "autokit lock is held by another host",
+      ts: deps.now?.() ?? new Date().toISOString(),
+    },
+    payload: { holder },
+  });
+  logger.close();
+}
+
+function createCliLogger(deps: CliDeps, config: AutokitConfig) {
+  const now = deps.now;
+  return createAutokitLogger({
+    logDir: join(deps.cwd, ".autokit", "logs"),
+    config,
+    now: now === undefined ? undefined : () => new Date(now()),
+  });
 }
 
 function loadConfigForLock(deps: CliDeps): AutokitConfig {

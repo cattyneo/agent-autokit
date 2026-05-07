@@ -32,6 +32,7 @@ import {
 
 import {
   type CliDeps,
+  createForceUnlockConfirm,
   type ExecFile,
   getRetryExitCode,
   getWorkflowExitCode,
@@ -46,6 +47,31 @@ import { INIT_MARKER_START, runInit } from "./init.ts";
 const NOW = "2026-05-04T19:50:00+09:00";
 
 describe("cli exit code contract", () => {
+  it("requires an explicit interactive phrase for production force-unlock confirmation", () => {
+    let stderr = "";
+    const accepted = createForceUnlockConfirm(
+      { isTTY: true, readLineSync: () => "force-unlock\n" },
+      { write: (chunk) => (stderr += chunk) },
+    );
+    assert.equal(accepted("seize?"), true);
+    assert.match(stderr, /Confirm the owner process has been killed or is unreachable/);
+
+    let rejectedStderr = "";
+    const rejected = createForceUnlockConfirm(
+      { isTTY: true, readLineSync: () => "yes\n" },
+      { write: (chunk) => (rejectedStderr += chunk) },
+    );
+    assert.equal(rejected("seize?"), false);
+
+    let nonTtyStderr = "";
+    const nonTty = createForceUnlockConfirm(
+      { isTTY: false, readLineSync: () => "force-unlock\n" },
+      { write: (chunk) => (nonTtyStderr += chunk) },
+    );
+    assert.equal(nonTty("seize?"), false);
+    assert.match(nonTtyStderr, /interactive terminal/);
+  });
+
   it("prioritizes failed over paused/cleaning and returns tempfail for resumable states", () => {
     assert.equal(getWorkflowExitCode([]), 0);
     assert.equal(getWorkflowExitCode([task({ issue: 1, state: "merged" })]), 0);
@@ -1640,7 +1666,6 @@ function createBusyLock(root: string): void {
     hooks: {
       now: () => new Date("2026-05-07T09:00:00.000Z"),
       randomToken: () => "busy-token",
-      hostname: () => "busy-host",
       pid: process.pid,
       getProcessLstart: () => "BUSY",
       isProcessAlive: () => true,

@@ -15,6 +15,7 @@ import { describe, it } from "node:test";
 
 import { parseConfig } from "./config.ts";
 import {
+  forceSeizeRunLock,
   type RunLockHooks,
   releaseRunLock,
   tryAcquireRunLock,
@@ -73,6 +74,142 @@ describe("core process lock", () => {
     assert.equal(JSON.stringify(second).includes("fixture-a"), false);
   });
 
+  it("reports host mismatch and supports explicit seizure after holder recheck", () => {
+    const root = makeTempDir();
+    const first = tryAcquireRunLock(root, {
+      hooks: hooksFor({ token: "fixture-a", pid: 1234, lstart: "START-A" }),
+    });
+    assert.equal(first.acquired, true);
+
+    const mismatch = tryAcquireRunLock(root, {
+      hooks: hooksFor({
+        token: "token-b",
+        pid: 2345,
+        lstart: "START-B",
+        host: "other-host.internal.example",
+      }),
+    });
+
+    assert.equal(mismatch.acquired, false);
+    assert.equal(mismatch.acquired ? null : mismatch.reason, "host_mismatch");
+    assert.equal(JSON.stringify(mismatch).includes("fixture-a"), false);
+
+    const seized = forceSeizeRunLock(root, {
+      hooks: hooksFor({
+        token: "token-b",
+        pid: 2345,
+        lstart: "START-B",
+        host: "other-host.internal.example",
+      }),
+    });
+    assert.equal(seized.seized, true);
+    if (!seized.seized) {
+      throw new Error("expected seized lock");
+    }
+    assert.equal(seized.prior.pid, 1234);
+    const holder = JSON.parse(readFileSync(join(root, ".autokit", ".lock", "holder.json"), "utf8"));
+    assert.equal(holder.holder_token, "token-b");
+    assert.equal(seized.lock.release(), true);
+  });
+
+  it("keeps foreign-host holders even when the PID is dead locally", () => {
+    const root = makeTempDir();
+    writeHolder(root, {
+      holder_token: "foreign-token",
+      pid: 99_999_999,
+      started_at_lstart: "FOREIGN",
+      host: "foreign-host",
+      acquired_at: NOW.toISOString(),
+    });
+
+    const acquired = tryAcquireRunLock(root, {
+      hooks: hooksFor({
+        token: "local-token",
+        pid: 1234,
+        lstart: "START-A",
+        alive: false,
+      }),
+    });
+
+    assert.equal(acquired.acquired, false);
+    assert.equal(acquired.acquired ? null : acquired.reason, "host_mismatch");
+    const holder = JSON.parse(readFileSync(join(root, ".autokit", ".lock", "holder.json"), "utf8"));
+    assert.equal(holder.holder_token, "foreign-token");
+  });
+
+  it("fails closed without leaking holder tokens when force-unlock sees holder replacement", () => {
+    const root = makeTempDir();
+    writeHolder(root, {
+      holder_token: "foreign-token",
+      pid: 7777,
+      started_at_lstart: "FOREIGN",
+      host: "foreign-host",
+      acquired_at: NOW.toISOString(),
+    });
+
+    const seized = forceSeizeRunLock(root, {
+      hooks: {
+        ...hooksFor({
+          token: "local-token",
+          pid: 1234,
+          lstart: "START-A",
+        }),
+        beforeForceSeizeRecheck: () => {
+          writeHolder(root, {
+            holder_token: "replacement-token",
+            pid: 8888,
+            started_at_lstart: "REPLACED",
+            host: "foreign-host",
+            acquired_at: new Date(NOW.getTime() + 1_000).toISOString(),
+          });
+        },
+      },
+    });
+
+    assert.equal(seized.seized, false);
+    assert.equal(seized.seized ? null : seized.reason, "holder_changed");
+    assert.equal(JSON.stringify(seized).includes("replacement-token"), false);
+    const holder = JSON.parse(readFileSync(join(root, ".autokit", ".lock", "holder.json"), "utf8"));
+    assert.equal(holder.holder_token, "replacement-token");
+  });
+
+  it("keeps the lock continuously held while force-unlock publishes the new holder", () => {
+    const root = makeTempDir();
+    const contenderHolderId = "contender-id";
+    writeHolder(root, {
+      holder_token: "foreign-token",
+      pid: 7777,
+      started_at_lstart: "FOREIGN",
+      host: "foreign-host",
+      acquired_at: NOW.toISOString(),
+    });
+    let contender: ReturnType<typeof tryAcquireRunLock> | null = null;
+
+    const seized = forceSeizeRunLock(root, {
+      hooks: {
+        ...hooksFor({
+          token: "local-token",
+          pid: 1234,
+          lstart: "START-A",
+        }),
+        beforeForceSeizeRecheck: () => {
+          contender = tryAcquireRunLock(root, {
+            hooks: hooksFor({
+              token: contenderHolderId,
+              pid: 2345,
+              lstart: "START-B",
+            }),
+          });
+        },
+      },
+    });
+
+    assert.equal(contender?.acquired, false);
+    assert.equal(seized.seized, true);
+    const holder = JSON.parse(readFileSync(join(root, ".autokit", ".lock", "holder.json"), "utf8"));
+    assert.equal(holder.holder_token, "local-token");
+  });
+
   it("fails closed on wrong-token release and keeps the active lock", () => {
     const root = makeTempDir();
     const acquired = tryAcquireRunLock(root, {
@@ -119,7 +256,7 @@ describe("core process lock", () => {
       holder_token: "stale-token",
       pid: 7777,
       started_at_lstart: "OLD",
-      host: "other-host",
+      host: "build-host",
       acquired_at: NOW.toISOString(),
     });
     const recovered = tryAcquireRunLock(staleRoot, {
@@ -132,7 +269,7 @@ describe("core process lock", () => {
       holder_token: "live-token",
       pid: 8888,
       started_at_lstart: "OLD",
-      host: "other-host",
+      host: "build-host",
       acquired_at: NOW.toISOString(),
     });
     const preserved = tryAcquireRunLock(liveRoot, {
@@ -155,7 +292,7 @@ describe("core process lock", () => {
       holder_token: "stale-token",
       pid: 7777,
       started_at_lstart: "OLD",
-      host: "other-host",
+      host: "build-host",
       acquired_at: NOW.toISOString(),
     });
     let replaced = false;
@@ -170,7 +307,7 @@ describe("core process lock", () => {
               holder_token: "replacement-token",
               pid: 8888,
               started_at_lstart: "NEW",
-              host: "other-host",
+              host: "build-host",
               acquired_at: NOW.toISOString(),
             });
           }
@@ -275,17 +412,20 @@ function hooksFor(input: {
   token: string;
   pid: number;
   lstart: string;
+  host?: string;
   alive?: boolean;
   observedLstart?: string;
+  beforeForceSeizeRecheck?: () => void;
   sleep?: (ms: number) => Promise<void>;
 }): RunLockHooks {
   return {
     now: () => NOW,
     randomToken: () => input.token,
-    hostname: () => "build-host.internal.example",
+    hostname: () => input.host ?? "build-host.internal.example",
     pid: input.pid,
     getProcessLstart: () => input.observedLstart ?? input.lstart,
     isProcessAlive: () => input.alive ?? true,
+    beforeForceSeizeRecheck: input.beforeForceSeizeRecheck,
     sleep: input.sleep ?? (async () => undefined),
   };
 }

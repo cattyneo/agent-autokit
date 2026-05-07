@@ -15,7 +15,7 @@ Codex runner を全 7 agent phase で受理し、resolved effort を `codex exec
 - Context7 `/openai/codex` と local `codex exec --help` で、`-c/--config key=value` と `--sandbox` を確認済み。`--reasoning-effort` は採用しない。
 
 ## Tasks
-- [x] Codex runner tests を先に更新: 7 phase sandbox matrix、4 effort args、schema violation、schema snapshot 不変を追加する。
+- [x] Codex runner tests を先に更新: 7 phase sandbox matrix、4 effort args、schema violation、schema strict surface 不変を追加する。
 - [x] `packages/codex-runner/src/index.ts` の phase whitelist を capability phase SoT に置換し、sandbox を permission profile 由来にする。
 - [x] `buildCodexArgs()` に `-c model_reasoning_effort=<value>` を追加し、`auto` は `medium` に正規化する。
 - [x] final output validation が全 prompt contract を通ることを既存共通 validator で確認し、不足があれば schema helper を最小更新する。

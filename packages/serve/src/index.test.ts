@@ -8,6 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -16,7 +17,7 @@ import { describe, it } from "node:test";
 
 import { createTaskEntry, type TaskEntry, writeTasksFileAtomic } from "@cattyneo/autokit-core";
 
-import { type ServeWorkflowInput, startAutokitServe } from "./index.ts";
+import { type ServeWorkflowInput, serveSseEventKinds, startAutokitServe } from "./index.ts";
 
 const NOW = "2026-05-07T20:00:00.000Z";
 const FAKE_OPENAI_KEY = `sk-${"1".repeat(22)}`;
@@ -603,7 +604,7 @@ describe("serve mutating endpoints", () => {
 });
 
 describe("serve SSE smoke", () => {
-  it("opens an authenticated SSE stream with event-stream headers", async () => {
+  it("opens an authenticated SSE stream with hardened event-stream headers", async () => {
     const server = await startAutokitServe({
       repoRoot: makeRepo(),
       port: 0,
@@ -615,6 +616,378 @@ describe("serve SSE smoke", () => {
 
     assert.equal(response.status, 200);
     assert.match(response.headers["content-type"] ?? "", /text\/event-stream/);
+    assert.equal(response.headers["x-content-type-options"], "nosniff");
+    assert.equal(response.headers["cache-control"], "no-cache, no-transform");
+    await server.close();
+  });
+
+  it("exports the closed SSE event kind list", () => {
+    assert.deepEqual([...serveSseEventKinds].sort(), [
+      "audit",
+      "error",
+      "heartbeat",
+      "phase_finished",
+      "phase_started",
+      "runner_stdout",
+      "task_state",
+    ]);
+  });
+
+  it("rejects connections over the configured SSE connection limit", async () => {
+    const repo = makeRepo();
+    writeFileSync(
+      join(repo, ".autokit", "config.yaml"),
+      "version: 1\nserve:\n  sse:\n    max_connections: 1\n    heartbeat_ms: 1000\n",
+    );
+    const server = await startAutokitServe({
+      repoRoot: repo,
+      port: 0,
+      stateHome: makeTempDir(),
+      now: () => NOW,
+      runWorkflow: async () => ({ status: "completed" }),
+    });
+    const first = await openSse(server, "/api/events");
+
+    const overflow = await json(server, "/api/events");
+
+    assert.equal(overflow.status, 503);
+    assert.equal(overflow.body.code, "sse_connection_limit");
+    first.response.destroy();
+    await server.close();
+  });
+
+  it("redacts sensitive values and emits runner_stdout only at debug level", async () => {
+    const repo = makeRepo();
+    writeFileSync(
+      join(repo, ".autokit", "config.yaml"),
+      [
+        "version: 1",
+        "logging:",
+        "  level: debug",
+        "  redact_patterns:",
+        "    - custom-sensitive",
+      ].join("\n"),
+    );
+    const env = {
+      ...process.env,
+      HOME: "/Users/tester",
+      OPENAI_API_KEY: FAKE_OPENAI_KEY,
+      ANTHROPIC_API_KEY: "anthropic-secret-value",
+      CODEX_API_KEY: "codex-secret-value",
+    };
+    const server = await startAutokitServe({
+      repoRoot: repo,
+      port: 0,
+      stateHome: makeTempDir(),
+      env,
+      now: () => NOW,
+      runWorkflow: async () => ({ status: "completed" }),
+    });
+    const stream = await openSse(server, "/api/events");
+
+    const id = server.publishEvent({
+      kind: "runner_stdout",
+      data: {
+        issue: 99,
+        phase: "implement",
+        chunk: [
+          `Bearer ${server.token}`,
+          FAKE_OPENAI_KEY,
+          "anthropic-secret-value",
+          "codex-secret-value",
+          "/Users/tester/.codex/auth.json",
+          '{"api_key":"credential-json-literal"}',
+          '{"prompt_contract":{"data":{"answer":"custom-sensitive"}}}',
+          '{"status":"completed","data":{"summary":"plain-prompt-secret"}}',
+          "diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n@@\n+OPENAI_API_KEY=custom-sensitive",
+        ].join(" "),
+        at: NOW,
+      },
+    });
+    assert.notEqual(id, null);
+
+    const frame = await waitForSseFrame(
+      stream.response,
+      (entry) => entry.event === "runner_stdout",
+    );
+
+    assert.equal(frame.id, id);
+    assert.equal(frame.event, "runner_stdout");
+    const raw = JSON.stringify(frame.data);
+    assert.doesNotMatch(raw, new RegExp(server.token));
+    assert.doesNotMatch(raw, /sk-111|anthropic-secret-value|codex-secret-value|custom-sensitive/);
+    assert.doesNotMatch(raw, /credential-json-literal|plain-prompt-secret/);
+    assert.doesNotMatch(raw, /OPENAI_API_KEY=/);
+    assert.match(raw, /<REDACTED>|\[REDACTED hunk:/);
+    stream.response.destroy();
+    await server.close();
+
+    const infoRepo = makeRepo();
+    const infoServer = await startAutokitServe({
+      repoRoot: infoRepo,
+      port: 0,
+      stateHome: makeTempDir(),
+      now: () => NOW,
+      runWorkflow: async () => ({ status: "completed" }),
+    });
+    assert.equal(
+      infoServer.publishEvent({
+        kind: "runner_stdout",
+        data: { issue: 99, phase: "implement", chunk: "debug only", at: NOW },
+      }),
+      null,
+    );
+    await infoServer.close();
+  });
+
+  it("caps oversized SSE frames before buffering runner stdout", async () => {
+    const repo = makeRepo();
+    writeFileSync(join(repo, ".autokit", "config.yaml"), "version: 1\nlogging:\n  level: debug\n");
+    const server = await startAutokitServe({
+      repoRoot: repo,
+      port: 0,
+      stateHome: makeTempDir(),
+      now: () => NOW,
+      runWorkflow: async () => ({ status: "completed" }),
+    });
+    const stream = await openSse(server, "/api/events");
+
+    server.publishEvent({
+      kind: "runner_stdout",
+      data: { issue: 99, phase: "implement", chunk: "x".repeat(100_000), at: NOW },
+    });
+    const frame = await waitForSseFrame(
+      stream.response,
+      (entry) => entry.event === "runner_stdout",
+    );
+
+    assert.equal(frame.data.truncated, true);
+    assert.match(String(frame.data.chunk), /\.\.\.\[truncated\]$/);
+    assert.ok(Buffer.byteLength(JSON.stringify(frame.data), "utf8") < 65_536);
+    stream.response.destroy();
+    await server.close();
+  });
+
+  it("replays buffered events after Last-Event-ID and reports stale replay IDs", async () => {
+    const server = await startAutokitServe({
+      repoRoot: makeRepo(),
+      port: 0,
+      stateHome: makeTempDir(),
+      now: () => NOW,
+      runWorkflow: async () => ({ status: "completed" }),
+    });
+    const firstId = server.publishEvent({
+      kind: "audit",
+      data: { kind: "resume", issue: 99, message: "first", details: {}, at: NOW },
+    });
+    const secondId = server.publishEvent({
+      kind: "audit",
+      data: { kind: "resumed", issue: 99, message: "second", details: {}, at: NOW },
+    });
+    assert.notEqual(firstId, null);
+    assert.notEqual(secondId, null);
+
+    const replay = await openSse(server, "/api/events", { "last-event-id": firstId ?? "" });
+    const frame = await waitForSseFrame(replay.response, (entry) => entry.id === secondId);
+
+    assert.equal(frame.event, "audit");
+    assert.equal((frame.data as { kind?: string }).kind, "resumed");
+    replay.response.destroy();
+
+    for (let index = 0; index < 64; index += 1) {
+      server.publishEvent({
+        kind: "audit",
+        data: { kind: "resume", issue: 99, message: `overflow-${index}`, details: {}, at: NOW },
+      });
+    }
+    const stale = await openSse(server, "/api/events", { "last-event-id": firstId ?? "" });
+    const staleFrame = await waitForSseFrame(stale.response, (entry) => entry.event === "error");
+
+    assert.equal(staleFrame.data.code, "replay_unavailable");
+    assert.equal(staleFrame.data.message, "SSE replay unavailable; reload required");
+    stale.response.destroy();
+    await server.close();
+  });
+
+  it("publishes workflow task, phase, and audit events through SSE", async () => {
+    const finish = deferred<{ status: "completed" }>();
+    const writtenFrames: string[] = [];
+    const server = await startAutokitServe({
+      repoRoot: makeRepo([task({ issue: 99, state: "queued" })]),
+      port: 0,
+      stateHome: makeTempDir(),
+      now: () => NOW,
+      hooks: {
+        writeSseFrame: (response: ServerResponse, frame: string) => {
+          writtenFrames.push(frame);
+          return response.write(frame);
+        },
+      },
+      runWorkflow: async (input) => {
+        input.emitEvent?.({
+          kind: "phase_started",
+          data: { issue: 99, phase: "implement", provider: "codex", effort: "medium", at: NOW },
+        });
+        const result = await finish.promise;
+        input.auditOperation?.("phase_completed", {
+          issue: 99,
+          phase: "implement",
+          provider: "codex",
+          effort: "medium",
+        });
+        return result;
+      },
+    });
+    const stream = await openSse(server, "/api/events");
+
+    const accepted = await post(server, "/api/run", { issue: 99 });
+    assert.equal(accepted.status, 202);
+    const taskFrame = await waitForSseFrame(
+      stream.response,
+      (entry) => entry.event === "task_state",
+    );
+    assert.equal(taskFrame.data.issue, 99);
+    assert.equal(taskFrame.data.state, "queued");
+
+    const phaseStarted = await waitForSseFrame(
+      stream.response,
+      (entry) => entry.event === "phase_started",
+    );
+    assert.equal(phaseStarted.data.phase, "implement");
+
+    const busy = await post(server, "/api/run", { issue: 99 });
+    assert.equal(busy.status, 409);
+    const audit = await waitForSseFrame(
+      stream.response,
+      (entry) => entry.event === "audit" && entry.data.kind === "serve_lock_busy",
+    );
+    assert.equal(audit.data.kind, "serve_lock_busy");
+
+    finish.resolve({ status: "completed" });
+    const phaseFinished = await waitForSseFrame(
+      stream.response,
+      (entry) => entry.event === "phase_finished",
+    );
+    assert.equal(phaseFinished.data.phase, "implement");
+    assert.doesNotMatch(writtenFrames.join(""), /"kind":"phase_completed"/);
+    await server.waitForIdle();
+    stream.response.destroy();
+    await server.close();
+  });
+
+  it("emits heartbeat using the configured interval", async () => {
+    const repo = makeRepo();
+    writeFileSync(
+      join(repo, ".autokit", "config.yaml"),
+      "version: 1\nserve:\n  sse:\n    heartbeat_ms: 10\n",
+    );
+    const server = await startAutokitServe({
+      repoRoot: repo,
+      port: 0,
+      stateHome: makeTempDir(),
+      now: () => NOW,
+      runWorkflow: async () => ({ status: "completed" }),
+    });
+    const stream = await openSse(server, "/api/events");
+    const frame = await waitForSseFrame(stream.response, (entry) => entry.event === "heartbeat");
+
+    assert.equal(frame.event, "heartbeat");
+    assert.deepEqual(frame.data, {});
+    stream.response.destroy();
+    await server.close();
+  });
+
+  it("emits a backpressure error before closing when writes stop draining", async () => {
+    let writes = 0;
+    const audits: Array<{ kind: string; fields: Record<string, unknown> }> = [];
+    const server = await startAutokitServe({
+      repoRoot: makeRepo(),
+      port: 0,
+      stateHome: makeTempDir(),
+      now: () => NOW,
+      auditOperation: (kind, fields) => audits.push({ kind, fields }),
+      hooks: {
+        writeSseFrame: (response: ServerResponse, frame: string) => {
+          writes += 1;
+          if (frame.includes("event: error")) {
+            response.write(frame);
+            return true;
+          }
+          return false;
+        },
+      },
+      runWorkflow: async () => ({ status: "completed" }),
+    });
+    const stream = await openSse(server, "/api/events");
+
+    server.publishEvent({
+      kind: "audit",
+      data: { kind: "resume", issue: 99, message: "backpressure probe", details: {}, at: NOW },
+    });
+    const frame = await waitForSseFrame(stream.response, (entry) => entry.event === "error");
+
+    assert.equal(frame.data.code, "backpressure");
+    assert.equal(frame.data.message, "SSE backpressure; reconnect required");
+    assert.ok(writes >= 2);
+    assert.deepEqual(audits, [
+      { kind: "sse_write_failed", fields: { reason: "backpressure", event: "audit" } },
+    ]);
+    const reconnect = await openSse(server, "/api/events");
+    assert.equal(reconnect.response.statusCode, 200);
+    reconnect.response.destroy();
+    await server.close();
+  });
+
+  it("isolates SSE write exceptions from workflow completion", async () => {
+    const stateHome = makeTempDir();
+    const audits: Array<{ kind: string; fields: Record<string, unknown> }> = [];
+    let threw = false;
+    const server = await startAutokitServe({
+      repoRoot: makeRepo([task({ issue: 99, state: "queued" })]),
+      port: 0,
+      stateHome,
+      now: () => NOW,
+      runId: () => "run-write-throw",
+      auditOperation: (kind, fields) => audits.push({ kind, fields }),
+      hooks: {
+        writeSseFrame: () => {
+          threw = true;
+          throw new Error("broken stream");
+        },
+      },
+      runWorkflow: async (input) => {
+        input.emitEvent?.({
+          kind: "audit",
+          data: { kind: "resume", issue: 99, message: "write probe", details: {}, at: NOW },
+        });
+        return { status: "completed" };
+      },
+    });
+    const stream = await openSse(server, "/api/events");
+
+    const accepted = await post(server, "/api/run", { issue: 99 });
+    assert.equal(accepted.status, 202);
+    await server.waitForIdle();
+
+    const record = JSON.parse(
+      readFileSync(join(stateHome, "autokit", "runs", server.repoId, "run-write-throw.json"), {
+        encoding: "utf8",
+      }),
+    ) as { status: string };
+    assert.equal(record.status, "completed");
+    assert.equal(threw, true);
+    assert.ok(
+      audits.some(
+        (audit) =>
+          audit.kind === "sse_write_failed" &&
+          audit.fields.reason === "write_exception" &&
+          audit.fields.event === "task_state",
+      ),
+    );
+    const reconnect = await openSse(server, "/api/events");
+    assert.equal(reconnect.response.statusCode, 200);
+    stream.response.destroy();
+    reconnect.response.destroy();
     await server.close();
   });
 
@@ -760,17 +1133,148 @@ async function rawGet(
 async function openSse(
   server: { url(path: string): string; token: string; port: number },
   path: string,
+  headers: Record<string, string> = {},
 ): Promise<{
   request: ReturnType<typeof httpRequest>;
-  response: import("node:http").IncomingMessage;
+  response: IncomingMessage;
 }> {
   return await new Promise((resolve, reject) => {
-    const request = httpRequest(server.url(path), { headers: authHeaders(server) }, (response) => {
-      resolve({ request, response });
-    });
+    const request = httpRequest(
+      server.url(path),
+      { headers: { ...authHeaders(server), ...headers } },
+      (response) => {
+        resolve({ request, response });
+      },
+    );
     request.on("error", reject);
     request.end();
   });
+}
+
+type SseFrame = {
+  id?: string;
+  event?: string;
+  data: Record<string, unknown>;
+};
+
+const sseReaders = new WeakMap<IncomingMessage, SseReader>();
+
+async function waitForSseFrame(
+  response: IncomingMessage,
+  predicate: (frame: SseFrame) => boolean,
+): Promise<SseFrame> {
+  let reader = sseReaders.get(response);
+  if (reader === undefined) {
+    reader = new SseReader(response);
+    sseReaders.set(response, reader);
+  }
+  return await reader.waitFor(predicate);
+}
+
+class SseReader {
+  private buffer = "";
+  private readonly frames: SseFrame[] = [];
+  private readonly waiters: Array<{
+    predicate: (frame: SseFrame) => boolean;
+    resolve: (frame: SseFrame) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }> = [];
+
+  constructor(response: IncomingMessage) {
+    response.setEncoding("utf8");
+    response.on("data", (chunk: string) => this.onData(chunk));
+    response.on("error", (error: Error) => this.rejectAll(error));
+    response.on("close", () =>
+      this.rejectAll(new Error(`SSE stream closed before matching frame; buffer=${this.buffer}`)),
+    );
+  }
+
+  async waitFor(predicate: (frame: SseFrame) => boolean): Promise<SseFrame> {
+    const existing = this.takeFrame(predicate);
+    if (existing !== undefined) {
+      return existing;
+    }
+    return await new Promise((resolve, reject) => {
+      const waiter = {
+        predicate,
+        resolve,
+        reject,
+        timer: setTimeout(() => {
+          this.removeWaiter(waiter);
+          reject(new Error(`timed out waiting for SSE frame; buffer=${this.buffer}`));
+        }, 1000),
+      };
+      this.waiters.push(waiter);
+    });
+  }
+
+  private onData(chunk: string): void {
+    this.buffer += chunk;
+    const parts = this.buffer.split(/\n\n/);
+    this.buffer = parts.pop() ?? "";
+    for (const part of parts) {
+      const frame = parseSseFrame(part);
+      if (frame !== null) {
+        this.frames.push(frame);
+      }
+    }
+    this.drain();
+  }
+
+  private drain(): void {
+    for (const waiter of [...this.waiters]) {
+      const frame = this.takeFrame(waiter.predicate);
+      if (frame !== undefined) {
+        this.removeWaiter(waiter);
+        waiter.resolve(frame);
+      }
+    }
+  }
+
+  private takeFrame(predicate: (frame: SseFrame) => boolean): SseFrame | undefined {
+    const index = this.frames.findIndex(predicate);
+    if (index === -1) {
+      return undefined;
+    }
+    const [frame] = this.frames.splice(index, 1);
+    return frame;
+  }
+
+  private removeWaiter(waiter: (typeof this.waiters)[number]): void {
+    clearTimeout(waiter.timer);
+    const index = this.waiters.indexOf(waiter);
+    if (index !== -1) {
+      this.waiters.splice(index, 1);
+    }
+  }
+
+  private rejectAll(error: Error): void {
+    for (const waiter of [...this.waiters]) {
+      this.removeWaiter(waiter);
+      waiter.reject(error);
+    }
+  }
+}
+
+function parseSseFrame(raw: string): SseFrame | null {
+  const lines = raw.split(/\r?\n/).filter((line) => line.length > 0 && !line.startsWith(":"));
+  if (lines.length === 0) {
+    return null;
+  }
+  let id: string | undefined;
+  let event: string | undefined;
+  const data: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith("id:")) {
+      id = line.slice("id:".length).trimStart();
+    } else if (line.startsWith("event:")) {
+      event = line.slice("event:".length).trimStart();
+    } else if (line.startsWith("data:")) {
+      data.push(line.slice("data:".length).trimStart());
+    }
+  }
+  return { id, event, data: JSON.parse(data.join("")) as Record<string, unknown> };
 }
 
 function deferred<T>(): {

@@ -467,6 +467,31 @@ async function runServeWorkflow(
     runner: deps.workflowRunner,
     maxSteps: deps.workflowMaxSteps,
     now: deps.now,
+    auditOperation: input.auditOperation,
+    workflowEvent: (event) => {
+      if (event.kind === "phase_started") {
+        input.emitEvent?.({
+          kind: "phase_started",
+          data: {
+            issue: event.issue,
+            phase: event.phase,
+            provider: event.provider,
+            effort: event.effort,
+            at: event.at,
+          },
+        });
+        return;
+      }
+      input.emitEvent?.({
+        kind: "runner_stdout",
+        data: {
+          issue: event.issue,
+          phase: event.phase,
+          chunk: event.chunk,
+          at: event.at,
+        },
+      });
+    },
     phaseOverride:
       input.phase === undefined
         ? undefined

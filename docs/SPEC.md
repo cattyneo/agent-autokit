@@ -1888,6 +1888,26 @@ step / prompt_contract id / prompt md ファイル名は完全一致 (rename ル
 - **`.env*` 値は file:line 参照のみ。値出力禁止 (info / warn / debug 全レベル)。**
 - `failure.message` は autokit 要約のみ (provider 生応答禁止)
 
+#### 10.2.1.1 `autokit serve` SSE event schema
+
+Phase 2A の `GET /api/events` は Server-Sent Events で、event kind は以下の closed list のみを配信する:
+
+| event | data JSON |
+|---|---|
+| `task_state` | `{ "issue": number, "state": string, "runtime_phase": string \| null, "updated_at": string }` |
+| `phase_started` | `{ "issue": number, "phase": string, "provider"?: string, "effort"?: string, "at": string }` |
+| `phase_finished` | `{ "issue": number, "phase": string, "provider"?: string, "effort"?: string, "at": string }` |
+| `audit` | `{ "kind": string, "issue"?: number, "message"?: string, "details"?: object, "at": string }` |
+| `runner_stdout` | `{ "issue": number, "phase": string, "chunk": string, "at": string, "truncated"?: boolean }` |
+| `heartbeat` | `{}` |
+| `error` | `{ "code": string, "message": string }` |
+
+各 frame は `id:`, `event:`, 1 行 JSON の `data:` を必ず持つ。`phase_completed` audit kind は SSE schema 上は `phase_finished` event として配信する。未列挙 event の追加は本節と関連 spec の同 PR 更新を必須とする。
+
+SSE 出力前には `sanitizeLogString` と diff 2 段 redactor を通し、bearer token、`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `CODEX_API_KEY` 値、`~/.codex/auth.json` / `~/.claude/credentials*` 由来の credential-shaped payload、prompt_contract `data`、JSON-like な `data` / credential key、diff credentials hunk を raw 表示しない。`runner_stdout` は `logging.level=debug` のときのみ配信する。`error.message` は固定文言のみで stack trace を含めない。
+
+`GET /api/events` response header は `Content-Type: text/event-stream; charset=utf-8`、`X-Content-Type-Options: nosniff`、`Cache-Control: no-cache, no-transform` とする。直近 64 event を in-memory ring buffer に保持し、1 frame は redaction 後 64 KiB 以下に制限する。oversized `runner_stdout` は `chunk` を truncate して `truncated=true` を付与し、なお制限を超える payload は `error` event `{ "code": "event_too_large", "message": "SSE event payload too large; payload omitted" }` に置換する。`Last-Event-ID` 付き reconnect は欠損 event を replay する。replay 不能時は `error` event `{ "code": "replay_unavailable", "message": "SSE replay unavailable; reload required" }` を返す。heartbeat は `serve.sse.heartbeat_ms`、同時接続上限は `serve.sse.max_connections` に従い、上限超過は 503。接続後 backpressure は可能なら `error` event `{ "code": "backpressure", "message": "SSE backpressure; reconnect required" }` を送信して close する。SSE client への write error は対象 client を close し、workflow / mutation の成否には波及させない。
+
 #### 10.2.2 audit イベント
 
 audit イベントは info level で必ず記録する。**`paused` 遷移時の audit event は対応する `failure.code` と同名 kind を発火する** (失敗種別単独で grep / SLO 集計を可能にする)。`paused` 汎用 event は廃止。
@@ -1921,6 +1941,7 @@ audit イベントは info level で必ず記録する。**`paused` 遷移時の
 | `phase_override_started` | `autokit run --phase / --provider / --effort` が per-run phase/provider/effort override を受理 |
 | `phase_override_ended` | phase override が正常完了、期限切れ、または retry/reset で終了 |
 | `serve_lock_busy` | `autokit serve` 経路で cross-process lock (`.autokit/.lock`) 取得失敗時の HTTP 409 fast-path。CLI direct busy は exit 75 + 案内メッセージのみ。`failure.code` 不発火 |
+| `sse_write_failed` | SSE client write が backpressure または write exception で失敗し、対象 client を close した。workflow / mutation の成否には波及させない |
 
 ##### 10.2.2.2 failure 系 audit kind (`failure.code` 1:1)
 
@@ -2398,7 +2419,7 @@ v0.1.0 GA 条件:
 - [ ] **`~/.codex/auth.json` / `$CODEX_HOME/auth.json` / `.codex/auth*` の値が logs / backup / artifacts / Issue body / review artifact / PR comment に混入しない**
 - [ ] **`codex exec --json` event parse / session id 保存 / final JSON schema validation / resume / sandbox / approval / ChatGPT-managed auth 判別は MIG-004 pinned evidence で確認済みの contract のみ AK-010 実装に使われ、未確認 CLI 機能は必須要件として固定されない**
 - [ ] **audit kind が `failure.code` と 1:1 対応: paused/failed 遷移時に同名 audit kind が info で発火し、event 本体に `failure: {phase, code, message, ts}` field を含む** (§10.2.2.2)
-- [ ] **操作系 audit kind (§10.2.2.1 の 25 種: resume / resumed / lock_seized / init_rollback / init_rollback_failed / retry_resumed / runner_idle / audit_hmac_key_rotated / queue_corruption_recovered / sanitize_pass_hmac / auto_merge_disabled / auto_merge_reserved / branch_deleted / retry_pr_closed / effort_downgrade / phase_self_correct / phase_started / phase_completed / review_finding_seen / fix_started / fix_finished / review_started / phase_override_started / phase_override_ended / serve_lock_busy) が info または指定 level で必ず記録**
+- [ ] **操作系 audit kind (§10.2.2.1 の 26 種: resume / resumed / lock_seized / init_rollback / init_rollback_failed / retry_resumed / runner_idle / audit_hmac_key_rotated / queue_corruption_recovered / sanitize_pass_hmac / auto_merge_disabled / auto_merge_reserved / branch_deleted / retry_pr_closed / effort_downgrade / phase_self_correct / phase_started / phase_completed / review_finding_seen / fix_started / fix_finished / review_started / phase_override_started / phase_override_ended / serve_lock_busy / sse_write_failed) が info または指定 level で必ず記録**
 - [ ] **log rotation 中も audit event を silent drop しない: ローテ手順 (flush → fsync → close → rename → open) の境界で event drop なし、rename 失敗時は旧 file 継続 + WARN 記録** (§10.3.1)
 - [ ] **log size (`max_file_size_mb` / `max_total_size_mb`) 超過でローテ / 削除**
 

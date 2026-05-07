@@ -36,6 +36,7 @@ export type AgentRunInput = {
   questionResponse?: PromptContractQuestion & {
     answer: string;
   };
+  onStdout?: (chunk: string) => void;
   permissions: {
     mode: "auto" | "readonly" | "workspace-write";
     allowNetwork: boolean;

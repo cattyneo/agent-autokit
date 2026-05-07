@@ -296,6 +296,7 @@ export async function runClaude(
     child,
     input.timeoutMs,
     deps.killGraceMs ?? DEFAULT_KILL_GRACE_MS,
+    input.onStdout,
   );
   const { exitCode, stdout, stderr } = result;
   if (exitCode !== 0) {
@@ -636,13 +637,16 @@ async function collectClaudeProcess(
   child: ClaudeChildProcess,
   timeoutMs: number,
   killGraceMs: number,
+  onStdout?: (chunk: string) => void,
 ): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
   let stdout = "";
   let stderr = "";
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk) => {
-    stdout += String(chunk);
+    const text = String(chunk);
+    stdout += text;
+    onStdout?.(text);
   });
   child.stderr.on("data", (chunk) => {
     stderr += String(chunk);

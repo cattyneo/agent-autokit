@@ -20,6 +20,11 @@ import {
   failureCodes,
   operationalAuditKinds,
 } from "./logger.ts";
+import {
+  extractSpecFailureAuditKinds,
+  extractSpecFailureCodes,
+  extractSpecOperationalAuditKinds,
+} from "./spec-trace.ts";
 
 describe("core logger audit tables", () => {
   it("keeps exported failure and operational audit kind sets aligned with SPEC", () => {
@@ -243,32 +248,4 @@ function readLogLines(path: string): LogLine[] {
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line));
-}
-
-function extractSpecFailureCodes(spec: string): string[] {
-  return [...extractSection(spec, "##### 4.2.1.1", "### 4.3").matchAll(/\| `([a-z_]+)` \|/g)]
-    .map((match) => match[1])
-    .sort();
-}
-
-function extractSpecFailureAuditKinds(spec: string): string[] {
-  return [...extractSection(spec, "##### 10.2.2.2", "### 10.3").matchAll(/^- `([a-z_]+)`/gm)]
-    .map((match) => match[1])
-    .sort();
-}
-
-function extractSpecOperationalAuditKinds(spec: string): string[] {
-  return [
-    ...extractSection(spec, "##### 10.2.2.1", "##### 10.2.2.2").matchAll(/^\| `([a-z_]+)` \|/gm),
-  ]
-    .map((match) => match[1])
-    .sort();
-}
-
-function extractSection(spec: string, start: string, end: string): string {
-  const startIndex = spec.indexOf(start);
-  const endIndex = spec.indexOf(end, startIndex + start.length);
-  assert.notEqual(startIndex, -1, `missing section start: ${start}`);
-  assert.notEqual(endIndex, -1, `missing section end: ${end}`);
-  return spec.slice(startIndex, endIndex);
 }

@@ -21,7 +21,7 @@ Add an active E2E trace gate that proves SPEC failure codes, failure audit kinds
 - [x] Add `e2e/trace/spec-trace.test.ts` with SPEC parsers and implementation imports.
 - [x] Run the targeted trace test and `bash scripts/check-trace.sh`.
 - [x] Run full required gates before PR handoff.
-- [ ] Create PR with `Closes #117` and CI/check evidence.
+- [x] Create PR with `Closes #117` and CI/check evidence.
 
 ## Verification
 - `npx --yes bun@1.3.13 test ./e2e/trace/spec-trace.test.ts`

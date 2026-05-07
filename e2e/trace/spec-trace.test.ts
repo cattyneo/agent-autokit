@@ -8,6 +8,13 @@ import {
   failureCodes,
   operationalAuditKinds,
 } from "../../packages/core/src/logger.ts";
+import {
+  extractSpecE34Rows,
+  extractSpecFailureAuditKinds,
+  extractSpecFailureCodes,
+  extractSpecOperationalAuditKinds,
+  sortStrings,
+} from "../../packages/core/src/spec-trace.ts";
 
 const SPEC = readFileSync("docs/SPEC.md", "utf8");
 
@@ -72,48 +79,10 @@ describe("Issue #117 SPEC trace gate", () => {
   });
 
   it("keeps the E34 prompt-contract condition tied to self-correction state", () => {
-    const e34Rows = [...extractSection(SPEC, "### 5.1", "### 5.2").matchAll(/^\| E34 \|.*$/gm)].map(
-      (match) => match[0],
-    );
+    const e34Rows = extractSpecE34Rows(SPEC);
 
     assert.equal(e34Rows.length, 1);
     assert.match(e34Rows[0] ?? "", /runtime\.phase_self_correct_done=true/);
     assert.match(e34Rows[0] ?? "", /failure\.code=prompt_contract_violation/);
   });
 });
-
-function extractSpecFailureCodes(spec: string): string[] {
-  return sortStrings(
-    [...extractSection(spec, "##### 4.2.1.1", "### 4.3").matchAll(/\| `([a-z_]+)` \|/g)].map(
-      (match) => match[1],
-    ),
-  );
-}
-
-function extractSpecFailureAuditKinds(spec: string): string[] {
-  return sortStrings(
-    [...extractSection(spec, "##### 10.2.2.2", "### 10.3").matchAll(/^- `([a-z_]+)`/gm)].map(
-      (match) => match[1],
-    ),
-  );
-}
-
-function extractSpecOperationalAuditKinds(spec: string): string[] {
-  return sortStrings(
-    [
-      ...extractSection(spec, "##### 10.2.2.1", "##### 10.2.2.2").matchAll(/^\| `([a-z_]+)` \|/gm),
-    ].map((match) => match[1]),
-  );
-}
-
-function extractSection(spec: string, start: string, end: string): string {
-  const startIndex = spec.indexOf(start);
-  const endIndex = spec.indexOf(end, startIndex + start.length);
-  assert.notEqual(startIndex, -1, `missing section start: ${start}`);
-  assert.notEqual(endIndex, -1, `missing section end: ${end}`);
-  return spec.slice(startIndex, endIndex);
-}
-
-function sortStrings(values: string[]): string[] {
-  return values.sort((left, right) => left.localeCompare(right));
-}

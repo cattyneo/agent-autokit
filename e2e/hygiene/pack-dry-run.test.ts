@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, it } from "node:test";
+import { afterEach, describe, it } from "node:test";
 import { buildRunnerEnv } from "../../packages/core/src/env-allowlist.ts";
 
 const ROOT = process.cwd();
 const BUN = process.execPath;
 const BUN_DIR = dirname(BUN);
+const RUN_HYGIENE_GATE = process.env.AUTOKIT_RUN_HYGIENE_E2E === "1";
 
 const REQUIRED_PRESET_ENTRIES = [
   "assets/presets/default/config.yaml",
@@ -35,17 +36,26 @@ const FORBIDDEN_PACK_PATTERNS = [
   "id_rsa",
 ];
 
-describe("Issue #116 assets hygiene E2E gate", () => {
-  it("keeps pack contents, CLI bundle, and installed serve smoke release-safe", async () => {
-    run(BUN, ["run", "build"]);
+const tempDirs: string[] = [];
 
+describe("Issue #116 assets hygiene E2E gate", () => {
+  afterEach(() => {
+    cleanupTempDirs();
+  });
+
+  it("keeps pack contents, CLI bundle, and installed serve smoke release-safe", async () => {
+    if (!RUN_HYGIENE_GATE) {
+      assert.equal(RUN_HYGIENE_GATE, false);
+      return;
+    }
+    assertPrebuiltDistExists();
     const hygiene = run("/bin/bash", ["scripts/check-assets-hygiene.sh"], {
       parentEnv: process.env,
     });
     const hygieneOutput = `${hygiene.stdout}\n${hygiene.stderr}`;
     assert.match(hygieneOutput, /assets hygiene passed/);
     for (const entry of REQUIRED_PRESET_ENTRIES) {
-      assert.match(hygieneOutput, new RegExp(escapeRegExp(entry)), entry);
+      assert.match(extractBunPackOutput(hygieneOutput), new RegExp(escapeRegExp(entry)), entry);
     }
     for (const pattern of FORBIDDEN_PACK_PATTERNS) {
       assert.doesNotMatch(hygieneOutput, new RegExp(escapeRegExp(pattern)), pattern);
@@ -69,7 +79,7 @@ describe("Issue #116 assets hygiene E2E gate", () => {
     assert.doesNotMatch(bundle, /packages\/dashboard|@cattyneo\/autokit-dashboard/);
 
     const tarball = packCliTarball();
-    const installRoot = mkdtempSync(join(tmpdir(), "autokit-hygiene-install-"));
+    const installRoot = makeTempDir("autokit-hygiene-install-");
     run("npm", [
       "--cache",
       join(installRoot, "npm-cache"),
@@ -82,10 +92,36 @@ describe("Issue #116 assets hygiene E2E gate", () => {
     chmodSync(autokitBin, 0o755);
     await assertInstalledServeStarts(autokitBin);
   });
+
+  it("fails closed when forbidden entries appear in pack output", () => {
+    if (!RUN_HYGIENE_GATE) {
+      assert.equal(RUN_HYGIENE_GATE, false);
+      return;
+    }
+    assertPrebuiltDistExists();
+    const fixtureRoot = makeTempDir("autokit-hygiene-forbidden-");
+    const bunOutputPath = join(fixtureRoot, "bun-pack.txt");
+    const npmOutputPath = join(fixtureRoot, "npm-pack.txt");
+    const packOutput = [...REQUIRED_PRESET_ENTRIES, "packed 12B .env"].join("\n");
+    writeFileSync(bunOutputPath, packOutput, { mode: 0o600 });
+    writeFileSync(npmOutputPath, REQUIRED_PRESET_ENTRIES.join("\n"), { mode: 0o600 });
+
+    const result = runExpectFailure("/bin/bash", ["scripts/check-assets-hygiene.sh"], {
+      parentEnv: process.env,
+      extraEnv: {
+        AUTOKIT_ASSETS_HYGIENE_BUN_PACK_OUTPUT_FILE: bunOutputPath,
+        AUTOKIT_ASSETS_HYGIENE_NPM_PACK_OUTPUT_FILE: npmOutputPath,
+      },
+    });
+    assert.match(
+      `${result.stdout}\n${result.stderr}`,
+      /forbidden publish candidate entry: .*\.env/,
+    );
+  });
 });
 
 function packCliTarball(): string {
-  const packRoot = mkdtempSync(join(tmpdir(), "autokit-hygiene-pack-"));
+  const packRoot = makeTempDir("autokit-hygiene-pack-");
   const result = run("npm", [
     "--cache",
     join(packRoot, "npm-cache"),
@@ -104,8 +140,8 @@ function packCliTarball(): string {
 }
 
 async function assertInstalledServeStarts(autokitBin: string): Promise<void> {
-  const repo = mkdtempSync(join(tmpdir(), "autokit-hygiene-serve-repo-"));
-  const home = mkdtempSync(join(tmpdir(), "autokit-hygiene-home-"));
+  const repo = makeTempDir("autokit-hygiene-serve-repo-");
+  const home = makeTempDir("autokit-hygiene-home-");
   const childEnv = buildRunnerEnv(parentEnvWithToolPath(process.env), { home });
   const child = spawn(autokitBin, ["serve", "--port", "0"], {
     cwd: repo,
@@ -122,16 +158,38 @@ async function assertInstalledServeStarts(autokitBin: string): Promise<void> {
   child.stderr?.on("data", (chunk) => {
     stderr += chunk;
   });
+  const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolveExit) => {
+      child.once("exit", (code, signal) => resolveExit({ code, signal }));
+    },
+  );
 
   try {
-    await waitFor(() => stdout.includes("serve listening"), 5_000);
+    await waitForServeReady(
+      () => stdout,
+      () => stderr,
+      exitPromise,
+      5_000,
+    );
     assert.match(stdout, /token file\t/);
+    const port = parseServePort(stdout);
+    const response = await fetch(`http://127.0.0.1:${port}/api/tasks`, {
+      headers: { authorization: `Bearer ${readTokenFromServeOutput(stdout)}` },
+    });
+    assert.equal(response.status, 200);
+    assert.equal(child.exitCode, null);
   } finally {
     child.kill("SIGTERM");
-    await new Promise<void>((resolveDone) => {
-      child.once("exit", () => resolveDone());
-      setTimeout(resolveDone, 1_000).unref();
-    });
+    const exit = await Promise.race([
+      exitPromise,
+      new Promise<{ code: null; signal: null }>((resolveDone) => {
+        setTimeout(() => resolveDone({ code: null, signal: null }), 1_000).unref();
+      }),
+    ]);
+    assert.ok(
+      exit.signal === "SIGTERM" || exit.code === 0,
+      `serve exited unexpectedly\nexit:${JSON.stringify(exit)}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+    );
   }
 
   assert.doesNotMatch(stderr, /Cannot find module|ERR_MODULE_NOT_FOUND/);
@@ -140,11 +198,13 @@ async function assertInstalledServeStarts(autokitBin: string): Promise<void> {
 function run(
   command: string,
   args: string[],
-  options: { parentEnv?: NodeJS.ProcessEnv; cwd?: string } = {},
+  options: { parentEnv?: NodeJS.ProcessEnv; extraEnv?: Record<string, string>; cwd?: string } = {},
 ): { stdout: string; stderr: string } {
+  const runnerEnv = buildRunnerEnv(parentEnvWithToolPath(options.parentEnv ?? process.env));
+  Object.assign(runnerEnv, options.extraEnv ?? {});
   const result = spawnSync(command, args, {
     cwd: options.cwd ?? ROOT,
-    env: buildRunnerEnv(parentEnvWithToolPath(options.parentEnv ?? process.env)),
+    env: runnerEnv,
     encoding: "utf8",
     timeout: 60_000,
   });
@@ -161,17 +221,95 @@ function run(
   return { stdout: result.stdout, stderr: result.stderr };
 }
 
+function runExpectFailure(
+  command: string,
+  args: string[],
+  options: { parentEnv?: NodeJS.ProcessEnv; extraEnv?: Record<string, string>; cwd?: string } = {},
+): { stdout: string; stderr: string; status: number | null } {
+  const runnerEnv = buildRunnerEnv(parentEnvWithToolPath(options.parentEnv ?? process.env));
+  Object.assign(runnerEnv, options.extraEnv ?? {});
+  const result = spawnSync(command, args, {
+    cwd: options.cwd ?? ROOT,
+    env: runnerEnv,
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+  assert.notEqual(
+    result.status,
+    0,
+    [
+      `$ ${[command, ...args].join(" ")}`,
+      "expected command to fail",
+      result.stdout,
+      result.stderr,
+    ].join("\n"),
+  );
+  return { stdout: result.stdout, stderr: result.stderr, status: result.status };
+}
+
 function parentEnvWithToolPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...env, PATH: `${BUN_DIR}:${env.PATH ?? ""}` };
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+async function waitForServeReady(
+  stdout: () => string,
+  stderr: () => string,
+  exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null }>,
+  timeoutMs: number,
+): Promise<void> {
   const started = Date.now();
-  while (!predicate()) {
+  let exited: { code: number | null; signal: NodeJS.Signals | null } | null = null;
+  void exitPromise.then((exit) => {
+    exited = exit;
+  });
+  while (!stdout().includes("serve listening")) {
+    if (exited !== null) {
+      throw new Error(
+        `installed autokit serve exited before listening: ${JSON.stringify(exited)}\nstdout:\n${stdout()}\nstderr:\n${stderr()}`,
+      );
+    }
     if (Date.now() - started > timeoutMs) {
-      throw new Error("timed out waiting for installed autokit serve to start");
+      throw new Error(
+        `timed out waiting for installed autokit serve to start\nstdout:\n${stdout()}\nstderr:\n${stderr()}`,
+      );
     }
     await new Promise((resolveWait) => setTimeout(resolveWait, 50));
+  }
+}
+
+function parseServePort(stdout: string): number {
+  const portText = stdout.match(/serve listening\thttp:\/\/127\.0\.0\.1:(\d+)/)?.[1];
+  assert.ok(portText, stdout);
+  return Number(portText);
+}
+
+function readTokenFromServeOutput(stdout: string): string {
+  const tokenPath = stdout.match(/token file\t(.+)/)?.[1]?.trim();
+  assert.ok(tokenPath, stdout);
+  return readFileSync(tokenPath, "utf8").trim();
+}
+
+function assertPrebuiltDistExists(): void {
+  assert.ok(
+    existsSync(join(ROOT, "packages/cli/dist/bin.js")),
+    "packages/cli/dist/bin.js is required; run bun run build before the hygiene E2E gate",
+  );
+}
+
+function extractBunPackOutput(output: string): string {
+  const end = output.indexOf("npm notice");
+  return end === -1 ? output : output.slice(0, end);
+}
+
+function makeTempDir(prefix: string): string {
+  const path = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(path);
+  return path;
+}
+
+function cleanupTempDirs(): void {
+  for (const path of tempDirs.splice(0).reverse()) {
+    rmSync(path, { recursive: true, force: true });
   }
 }
 

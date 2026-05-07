@@ -16,5 +16,7 @@ jobs:
       - run: bun run build
       - name: Check traceability tables
         run: bash scripts/check-trace.sh
+      - name: Check assets hygiene E2E
+        run: AUTOKIT_RUN_HYGIENE_E2E=1 bun test ./e2e/hygiene/pack-dry-run.test.ts
       - name: Check assets for forbidden files
         run: bash scripts/check-assets-hygiene.sh

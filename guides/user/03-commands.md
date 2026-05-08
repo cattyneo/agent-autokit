@@ -12,7 +12,9 @@
 --force-unlock         他ホスト保持 lock を interactive 確認後に奪取
 ```
 
-`--config` はオプション登録だけ存在し参照されない。`--force-unlock` は `lock_host_mismatch` (他ホストが `.autokit/.lock/` を保持して exit 1 になる状況) からの唯一の文書化された復旧経路。state-changing command (`run` / `resume` / `retry` / `cleanup` / `init` / `preset apply` / `serve`) で `lock_host_mismatch` を踏むと、interactive prompt で `force-unlock lock held by another host?` を確認し、`yes` 確定で `forceSeizeRunLock` が lock を奪取し audit `lock_seized` を残す。確認拒否や `forceSeizeRunLock` 失敗時は `lock_host_mismatch` のまま exit 1。同一ホストの lock busy は exit `75` (`autokit lock busy; another autokit command or serve process is active`) で fast-fail し、`--force-unlock` の対象外。
+`--config` はオプション登録だけ存在し参照されない。`--force-unlock` は `lock_host_mismatch` (他ホストが `.autokit/.lock/` を保持して exit 1 になる状況) からの唯一の文書化された復旧経路。CLI write command (`run` / `resume` / `retry` / `add` / `cleanup` / `init` / `preset apply`) で `lock_host_mismatch` を踏むと、interactive prompt で `force-unlock lock held by another host?` を確認し、`yes` 確定で `forceSeizeRunLock` が lock を奪取し audit `lock_seized` を残す。確認拒否や `forceSeizeRunLock` 失敗時は `lock_host_mismatch` のまま exit 1。同一ホストの lock busy は exit `75` (`autokit lock busy; another autokit command or serve process is active`) で fast-fail し、`--force-unlock` の対象外。
+
+`autokit serve` は HTTP server で interactive prompt が出せないため、`lock_host_mismatch` でも HTTP 409 `serve_lock_busy` を返し、`--force-unlock` の対象外。serve から復旧する場合は CLI write command を `--force-unlock` で実行して lock 奪取後、serve を再起動する。
 
 環境変数 `AUTOKIT_ASSUME_YES=1` でも `--yes` 相当が有効になる。
 

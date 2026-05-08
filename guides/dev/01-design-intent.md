@@ -39,3 +39,5 @@
 ## サポートを狭く保っている理由
 
 `README.md` の Support Matrix に列挙した制約（Apple Silicon / fixture-like repo / parallel 1 等）はすべて **「未検証だから許可しない」** で統一されている。サポート拡大は仕様確認 + テストの追加とセットでしか進めない方針。
+
+特に表 row 11 (`parallel: 1` 固定) と row 14 (private MVP / registry 公開無し) は SUPPORT 拡大時に再評価する **運用判断** で、それ以外の row は恒久設計として扱う。

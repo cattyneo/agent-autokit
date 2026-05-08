@@ -209,7 +209,7 @@ A. 可能。`gh auth status` が `repo` 権限を持っていればよい。
 
 ### Q. 現行版でサポートされていない / 将来課題のものは？
 
-A. capability / effort / preset / `autokit serve` / prompt-skill-agent gate は現行版に含まれる。SDK runner matrix、public registry publish、branch protection 設計の汎用化は引き続き将来課題。`docs/PLAN.md` を参照。
+A. capability / effort / preset / `autokit serve` / prompt-skill-agent asset gate は現行版に含まれる。SDK runner matrix、public registry publish、branch protection 設計の汎用化は引き続き将来課題。`docs/PLAN.md` を参照。
 
 ### Q. `autokit serve` の token はどこ？
 

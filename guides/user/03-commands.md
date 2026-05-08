@@ -9,10 +9,10 @@
 -y, --yes              非対話デフォルト回答（一部コマンドで参照）
 -v, --verbose          デバッグログ
 --config <path>        config.yaml 上書き（CLI 登録のみ。実体は未参照）
---force-unlock         lock seizure を要求（CLI 登録のみ。実体は未参照）
+--force-unlock         他ホスト保持 lock を interactive 確認後に奪取
 ```
 
-`--config` と `--force-unlock` はオプション登録だけ存在する。lock busy からの復旧は `--force-unlock` ではなく、holder / PID を確認してからの手動復旧または recovery command で扱う。
+`--config` はオプション登録だけ存在し参照されない。`--force-unlock` は `lock_host_mismatch` (他ホストが `.autokit/.lock/` を保持して exit 1 になる状況) からの唯一の文書化された復旧経路。state-changing command (`run` / `resume` / `retry` / `cleanup` / `init` / `preset apply` / `serve`) で `lock_host_mismatch` を踏むと、interactive prompt で `force-unlock lock held by another host?` を確認し、`yes` 確定で `forceSeizeRunLock` が lock を奪取し audit `lock_seized` を残す。確認拒否や `forceSeizeRunLock` 失敗時は `lock_host_mismatch` のまま exit 1。同一ホストの lock busy は exit `75` (`autokit lock busy; another autokit command or serve process is active`) で fast-fail し、`--force-unlock` の対象外。
 
 環境変数 `AUTOKIT_ASSUME_YES=1` でも `--yes` 相当が有効になる。
 

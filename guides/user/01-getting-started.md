@@ -51,7 +51,8 @@ cd /path/to/agent-autokit
 bun run build
 cd packages/cli
 bun pm pack
-npm i -g ./cattyneo-autokit-<version>.tgz   # <version> は packages/cli/package.json の version
+version=$(node -p "require('./package.json').version")
+npm i -g "./cattyneo-autokit-${version}.tgz"
 autokit --version
 # => autokit <version>
 ```
@@ -137,10 +138,10 @@ autokit init --force
 - capability table: 7 agent phase × 2 provider の組合せ可否と permission profile を core SoT として保持
 - effort 制御: `auto` / `low` / `medium` / `high` の 4 値。unsupported 時は `fail` (`failure.code=effort_unsupported`) または `downgrade` (1 段下降 + audit `effort_downgrade`)
 - CLI override: `autokit run --phase ... --provider ... --effort ...` で 1 run のみ phase 設定を上書き
-- diagnostics: `autokit doctor` 拡張、`autokit config show` / `config validate`、`autokit logs`、`autokit diff` (2 段 redact)
+- diagnostics: `autokit doctor` 拡張、`autokit config show` (effective config / `--matrix`)、`autokit logs`、`autokit diff` (2 段 redact)
 - preset: `default` / `laravel-filament` / `next-shadcn` / `docs-create` を同梱し `.autokit/presets/` で上書き可。path traversal / blacklist / protected array gate を通す
-- `autokit serve`: `127.0.0.1` 固定 bind の HTTP API + SSE。bearer token / Host / Origin / Content-Type を必ず通す
+- `autokit serve`: 既定 bind は `127.0.0.1` (`localhost` も受理)、HTTP API + SSE。bearer token / Host / Origin / Content-Type を必ず通す
 - 二重起動 gate: `.autokit/.lock/` directory で CLI / serve / preset apply を直列化。lock busy は exit `75` で fast-fail
-- prompt / skill / agent gate: asset gate により `.agents/prompts/<contract>.md` の本文注入と provider-visible root の整合を強制
+- prompt-skill-agent asset gate: `.agents/prompts/<contract>.md` の本文注入と provider-visible root の整合を強制
 
 各機能の操作手順は [03-commands.md](./03-commands.md) / [04-configuration.md](./04-configuration.md) / [07-troubleshooting-faq.md](./07-troubleshooting-faq.md) を参照。

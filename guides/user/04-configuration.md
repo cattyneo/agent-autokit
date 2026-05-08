@@ -50,7 +50,7 @@ auto_merge: true
 | キー | デフォルト | 意味 |
 |------|-----------|------|
 | `version` | `1` | スキーマ版。`1` 固定 |
-| `parallel` | `1` | 並列数。実質 `1` のみ受理する |
+| `parallel` | `1` | 並列数。schema は positive integer を受理するが、`run` のメインループは直列処理する |
 | `base_branch` | `""` | 空なら `main` を使う |
 | `branch_prefix` | `"autokit/"` | 自動 branch 名 prefix |
 | `auto_merge` | `true` | GitHub auto-merge 予約を使う |

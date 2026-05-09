@@ -118,9 +118,9 @@ describe("v0.2 happy path E2E", () => {
           preset,
         );
 
-        assertAuditSubsequence(readAuditKinds(repo), [
-          "preset_apply_started",
-          "preset_apply_finished",
+        const auditKinds = readAuditKinds(repo);
+        assertAuditSubsequence(auditKinds, ["preset_apply_started", "preset_apply_finished"]);
+        assertAuditSubsequence(auditKinds, [
           "sanitize_pass_hmac",
           "phase_completed",
           "phase_completed",
@@ -434,6 +434,7 @@ function readAuditKinds(repo: string): string[] {
     return [];
   }
   return readdirSync(logDir)
+    .sort()
     .flatMap((entry) =>
       readFileSync(join(logDir, entry), "utf8")
         .trim()

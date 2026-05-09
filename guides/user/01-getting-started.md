@@ -44,20 +44,28 @@ unset ANTHROPIC_API_KEY OPENAI_API_KEY CODEX_API_KEY
 
 `agent-autokit` は private MVP。次の 2 経路のみサポート。
 
-### 経路 A: Release Tarball
+### 経路 A: GitHub Release（通常利用）
+
+`gh` 認証で GitHub Release の tarball asset を取得し、global install する。
 
 ```bash
-cd /path/to/agent-autokit
-bun run build
-cd packages/cli
-bun pm pack
-version=$(node -p "require('./package.json').version")
-npm i -g "./cattyneo-autokit-${version}.tgz"
+curl -fsSL https://raw.githubusercontent.com/cattyneo/agent-autokit/main/scripts/install-autokit.sh | bash
 autokit --version
 # => autokit <version>
 ```
 
+version を固定する場合:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cattyneo/agent-autokit/main/scripts/install-autokit.sh \
+  | AUTOKIT_VERSION=0.1.0 bash
+```
+
+private repository で raw URL を直接取得できない環境では、`agent-autokit` を checkout して `bash scripts/install-autokit.sh` を実行する。
+
 ### 経路 B: Checkout Link（開発時）
+
+ローカル修正中の `autokit` を対象 repository で検証したい場合だけ使う。
 
 ```bash
 cd /path/to/agent-autokit
@@ -78,6 +86,7 @@ autokit --version
 対象 repository に `cd` し、まず環境チェック:
 
 ```bash
+unset ANTHROPIC_API_KEY OPENAI_API_KEY CODEX_API_KEY
 autokit doctor
 ```
 
@@ -96,6 +105,14 @@ WARN	prompt contracts	.agents/prompts not found
 
 ## 初回 init
 
+まず dry-run で生成・追記予定を確認する:
+
+```bash
+autokit init --dry-run
+```
+
+問題なければ初期化する:
+
 ```bash
 autokit init
 ```
@@ -113,10 +130,13 @@ autokit init
 
 `.autokit/init-audit.jsonl` は **init が rollback されたときのみ** 残る監査ログ。正常完了時は削除される。
 
-dry-run で内容確認のみ:
+任意で対象 repository に合う preset を適用し、effective config を確認する:
 
 ```bash
-autokit init --dry-run
+autokit preset list
+autokit preset apply default
+autokit config show --matrix
+autokit doctor
 ```
 
 過去の中途失敗 backup（`.autokit/.backup/<timestamp>/` 残留）がある場合のみ:

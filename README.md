@@ -27,17 +27,37 @@ v0.2.0 の主な追加 surface:
 
 package は `private: true` のままです。`npm publish` は実行しません。v0.1.0 は private install path として次の 2 経路だけをサポートします。
 
-### Release Tarball
+### 最短導入（GitHub Release）
+
+GitHub Release の tarball asset を `gh` 認証で取得し、global install します。private repository 前提のため、先に `gh auth status -h github.com` が PASS することを確認してください。
 
 ```bash
-bun run build
-cd packages/cli
-bun pm pack
-npm i -g ./cattyneo-autokit-0.1.0.tgz
+curl -fsSL https://raw.githubusercontent.com/cattyneo/agent-autokit/main/scripts/install-autokit.sh | bash
 autokit --version
 ```
 
-### Checkout Link
+特定 version に固定する場合:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cattyneo/agent-autokit/main/scripts/install-autokit.sh \
+  | AUTOKIT_VERSION=0.1.0 bash
+```
+
+private repository で raw URL を直接取得できない環境では、この repository を checkout して次を実行します。
+
+```bash
+bash scripts/install-autokit.sh
+```
+
+### Release Tarball（作成側）
+
+```bash
+scripts/create-release-tarball.sh
+npm i -g ./dist/release/cattyneo-autokit-0.1.0.tgz
+autokit --version
+```
+
+### Checkout Link（開発時）
 
 ```bash
 bun install
@@ -67,12 +87,15 @@ codex --version
 `autokit` をインストールしたあと、対象 repository で実行します。
 
 ```bash
-autokit init -y
+unset ANTHROPIC_API_KEY OPENAI_API_KEY CODEX_API_KEY
+autokit doctor
+autokit init --dry-run
+autokit init
 autokit preset list
 autokit preset apply default
 autokit config show --matrix
-autokit add 1 --label agent-ready -y
 autokit doctor
+autokit add 1 --label agent-ready -y
 autokit run
 autokit list --json
 ```
@@ -121,6 +144,7 @@ release 前に次を実行します。
 
 ```bash
 PATH="$HOME/.bun/bin:$PATH" scripts/check-release-verification-env.sh
+scripts/create-release-tarball.sh
 ```
 
 その後、clean HOME または別マシンで 2 つの private install path を検証します。v0.1.0 の release evidence は `docs/artifacts/` に記録します。

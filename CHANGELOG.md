@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.2.0 - 2026-05-10
+
+Private v0.2 release with the completed issue-train runtime surface and easier GitHub Release installation.
+
+### Added
+
+- Capability table, effort resolution, phase override, and expanded runner permission gates.
+- Bundled presets (`default`, `laravel-filament`, `next-shadcn`, `docs-create`) with `autokit preset`.
+- Local `autokit serve` API with bearer, Host, Origin, Content-Type, lock, and SSE gates.
+- `autokit logs`, `autokit diff`, and `autokit config show --matrix` diagnostics.
+- Release install script and release tarball creation script for private GitHub Release distribution.
+
+### Changed
+
+- Workspace package versions are synchronized at `0.2.0`.
+- Release artifact generation keeps `private:true`, registry publish out of scope, and packaged CLI assets hygiene-gated.
+
 ## 0.1.0 - 2026-05-05
 
 Initial private MVP release.

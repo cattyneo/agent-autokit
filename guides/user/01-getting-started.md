@@ -58,7 +58,7 @@ version を固定する場合:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cattyneo/agent-autokit/main/scripts/install-autokit.sh \
-  | AUTOKIT_VERSION=0.1.0 bash
+  | AUTOKIT_VERSION=0.2.0 bash
 ```
 
 private repository で raw URL を直接取得できない環境では、`agent-autokit` を checkout して `bash scripts/install-autokit.sh` を実行する。

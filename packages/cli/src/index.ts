@@ -62,7 +62,7 @@ import {
   type PresetCliDeps,
 } from "./preset.js";
 
-export const AUTOKIT_VERSION = "0.1.0";
+export const AUTOKIT_VERSION = "0.2.0";
 export const TEMPFAIL_EXIT_CODE = 75;
 
 export type CliWriter = { write(chunk: string): void };

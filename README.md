@@ -40,7 +40,7 @@ autokit --version
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cattyneo/agent-autokit/main/scripts/install-autokit.sh \
-  | AUTOKIT_VERSION=0.1.0 bash
+  | AUTOKIT_VERSION=0.2.0 bash
 ```
 
 private repository で raw URL を直接取得できない環境では、この repository を checkout して次を実行します。
@@ -53,7 +53,7 @@ bash scripts/install-autokit.sh
 
 ```bash
 scripts/create-release-tarball.sh
-npm i -g ./dist/release/cattyneo-autokit-0.1.0.tgz
+npm i -g ./dist/release/cattyneo-autokit-0.2.0.tgz
 autokit --version
 ```
 
